@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,8 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/server"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
@@ -23,13 +23,20 @@ const (
 	testPRNumber       = 42
 )
 
+// testAssociation is the standing the fixtures' commenters have. A private
+// repository accepts a command from anybody who can see it, which is what the
+// operator of a self-hosted App usually has; the public-repository guard has
+// tests of its own.
+const testAssociation = "MEMBER"
+
 func basePayload(action string) map[string]any {
 	return map[string]any{
 		"action":       action,
 		"installation": map[string]any{"id": testInstallationID},
 		"repository": map[string]any{
-			"name":  testRepo,
-			"owner": map[string]any{"login": testOrg},
+			"name":    testRepo,
+			"owner":   map[string]any{"login": testOrg},
+			"private": true,
 		},
 	}
 }
@@ -41,13 +48,14 @@ func reviewCommentPayload(action, login, userType, body string, commentID, inRep
 	payload := basePayload(action)
 	payload["pull_request"] = map[string]any{"number": testPRNumber}
 	payload["comment"] = map[string]any{
-		"id":             commentID,
-		"body":           body,
-		"path":           "main.go",
-		"diff_hunk":      "@@ -10,4 +10,6 @@ func main() {",
-		"in_reply_to_id": inReplyTo,
-		"html_url":       fmt.Sprintf("https://github.com/acme/payments/pull/42#discussion_r%d", commentID),
-		"user":           map[string]any{"login": login, "type": userType},
+		"id":                 commentID,
+		"body":               body,
+		"path":               "main.go",
+		"diff_hunk":          "@@ -10,4 +10,6 @@ func main() {",
+		"in_reply_to_id":     inReplyTo,
+		"author_association": testAssociation,
+		"html_url":           fmt.Sprintf("https://github.com/acme/payments/pull/42#discussion_r%d", commentID),
+		"user":               map[string]any{"login": login, "type": userType},
 	}
 	return mustJSON(payload)
 }
@@ -61,10 +69,11 @@ func issueCommentPayload(action, login, userType, body string, commentID int64) 
 		"pull_request": map[string]any{"url": "https://api.github.com/repos/acme/payments/pulls/42"},
 	}
 	payload["comment"] = map[string]any{
-		"id":       commentID,
-		"body":     body,
-		"html_url": fmt.Sprintf("https://github.com/acme/payments/pull/42#issuecomment-%d", commentID),
-		"user":     map[string]any{"login": login, "type": userType},
+		"id":                 commentID,
+		"body":               body,
+		"author_association": testAssociation,
+		"html_url":           fmt.Sprintf("https://github.com/acme/payments/pull/42#issuecomment-%d", commentID),
+		"user":               map[string]any{"login": login, "type": userType},
 	}
 	return mustJSON(payload)
 }
@@ -128,7 +137,7 @@ func TestT020_01_RememberCommandRecordsARuleAndAnswers(t *testing.T) {
 	llm.QueueText("Recorded.")
 
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	body := reviewCommentPayload("created", "octocat", "User", "@rumil remember we retry around the settlement call", 202, 101)
 	response := h.deliver(t, handler, "pull_request_review_comment", "d-remember", body, sign(webhookSecret, body))
@@ -138,7 +147,7 @@ func TestT020_01_RememberCommandRecordsARuleAndAnswers(t *testing.T) {
 
 	runPool(t, h, gh, jobCompleted(t, h, "d-remember"))
 
-	rules := storedRules(t, h.dsn)
+	rules := storedMemories(t, h.dsn)
 	if len(rules) != 1 {
 		t.Fatalf("stored %d rules, want 1: %+v", len(rules), rules)
 	}
@@ -181,13 +190,214 @@ func TestT020_01_RememberCommandRecordsARuleAndAnswers(t *testing.T) {
 	}
 }
 
+// T-030-01: with the gate on, a rule a command records waits, and the next
+// review of the same pull request does not retrieve it.
+func TestT030_01_PendingRuleStaysOutOfTheNextReview(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		testutil.ReviewComment(101, 0, "rumil[bot]", "This line wraps the call without a timeout."),
+	}
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueToolCall("propose_memory", map[string]any{
+		"rule_text": "Clock skew up to 60 seconds is intentional in the JWT validator",
+		"rationale": "the author confirmed it in review",
+	})
+	llm.QueueText("Recorded.")
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	body := reviewCommentPayload("created", "octocat", "User", "@rumil remember we allow 60s of clock skew", 202, 101)
+	if response := h.deliver(t, handler, "pull_request_review_comment", "d-gate", body, sign(webhookSecret, body)); response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+	}
+	runPool(t, h, gh, jobCompleted(t, h, "d-gate"))
+
+	rules := storedMemories(t, h.dsn)
+	if len(rules) != 1 || rules[0].Status != store.MemoryPending {
+		t.Fatalf("stored %+v, want one %s rule", rules, store.MemoryPending)
+	}
+
+	// The same repository now gets reviewed. The rule is on record, and the
+	// prompt does not carry it.
+	if _, err := h.engine(t, gh).Review(context.Background(), reviewer.Request{
+		Owner: testOrg, Repo: testRepo, Number: testPRNumber,
+	}); err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+
+	prompt := ""
+	for _, request := range llm.Requests() {
+		if strings.Contains(request.SystemPrompt, "Principal Code Reviewer") {
+			prompt = request.SystemPrompt
+			break
+		}
+	}
+	if prompt == "" {
+		t.Fatal("the review session sent no system prompt")
+	}
+	if strings.Contains(prompt, "Clock skew") {
+		t.Errorf("an unapproved rule reached the review prompt:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<project_memories>\n") {
+		t.Errorf("the prompt carries an empty or unapproved memory block:\n%s", prompt)
+	}
+}
+
+// T-030-05: an operator who turned the gate off gets the rule straight away,
+// and one who listed an association gets it for the people who hold that
+// standing and not for anyone else.
+func TestT030_05_AcceptAllAndListedAssociationsSkipTheGate(t *testing.T) {
+	cases := []struct {
+		name       string
+		moderation string
+		login      string
+		want       string
+	}{
+		{
+			name:       "accept_all approves everybody",
+			moderation: "moderation:\n  accept_all: true\n",
+			login:      "octocat",
+			want:       store.MemoryApproved,
+		},
+		{
+			name:       "a listed association approves its holder",
+			moderation: "moderation:\n  auto_approve_associations: [\"MEMBER\"]\n",
+			login:      "octocat",
+			want:       store.MemoryApproved,
+		},
+		{
+			name:       "an association nobody listed waits",
+			moderation: "moderation:\n  auto_approve_associations: [\"OWNER\"]\n",
+			login:      "octocat",
+			want:       store.MemoryPending,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := testutil.NewFakeGitHub(t)
+			llm := testutil.NewFakeLLM(t)
+			llm.QueueToolCall("propose_memory", map[string]any{
+				"rule_text": "Clock skew up to 60 seconds is intentional",
+				"rationale": "the author confirmed it in review",
+			})
+			llm.QueueText("Recorded.")
+
+			h := newHarness(t, gh, llm, harnessOpts{embedding: true, moderation: tc.moderation})
+			handler := server.Handler(h.webhook(), h.db, nil)
+
+			// testAssociation is MEMBER, and the fixture's repository is
+			// private, so the command is accepted either way.
+			body := reviewCommentPayload("created", tc.login, "User", "@rumil remember we allow clock skew", 303, 0)
+			if response := h.deliver(t, handler, "pull_request_review_comment", "d-gate-"+tc.name, body, sign(webhookSecret, body)); response.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+			}
+			runPool(t, h, gh, jobCompleted(t, h, "d-gate-"+tc.name))
+
+			rules := storedMemories(t, h.dsn)
+			if len(rules) != 1 {
+				t.Fatalf("stored %d rules, want 1", len(rules))
+			}
+			if rules[0].Status != tc.want {
+				t.Errorf("status = %s, want %s", rules[0].Status, tc.want)
+			}
+		})
+	}
+}
+
+// T-030-06 (second half): a commenter with no standing in a public repository
+// cannot record a rule, and their command costs the operator nothing — no row,
+// no model call, no embedding.
+func TestT030_06_UntrustedCommenterIsDroppedBeforeAnyWork(t *testing.T) {
+	cases := []struct {
+		name        string
+		private     bool
+		association string
+		wantStatus  int
+		wantJobs    int
+	}{
+		{"a stranger on a public repository", false, "NONE", http.StatusOK, 0},
+		{"a first-time contributor on a public repository", false, "FIRST_TIME_CONTRIBUTOR", http.StatusOK, 0},
+		{"a stranger on a private repository", true, "NONE", http.StatusAccepted, 1},
+		{"a member of a public repository", false, "MEMBER", http.StatusAccepted, 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := testutil.NewFakeGitHub(t)
+			llm := testutil.NewFakeLLM(t)
+			llm.QueueToolCall("propose_memory", map[string]any{
+				"rule_text": "Clock skew up to 60 seconds is intentional",
+				"rationale": "the author confirmed it in review",
+			})
+			llm.QueueText("Recorded.")
+
+			h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+			handler := server.Handler(h.webhook(), h.db, nil)
+
+			body := rawCommentPayload(tc.private, tc.association, "@rumil remember we allow clock skew")
+			response := h.deliver(t, handler, "pull_request_review_comment", "d-untrusted", body, sign(webhookSecret, body))
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", response.Code, tc.wantStatus, response.Body.String())
+			}
+
+			if tc.wantStatus == http.StatusOK {
+				if !bytes.Contains(response.Body.Bytes(), []byte("ignored")) {
+					t.Errorf("body = %s, want an ignored notice", response.Body.String())
+				}
+				runPool(t, h, gh, func() bool { return true })
+				if calls := llm.Count(); calls != 0 {
+					t.Errorf("the model was called %d times for a dropped command", calls)
+				}
+				if embeddings := llm.EmbeddedTexts(); len(embeddings) != 0 {
+					t.Errorf("a dropped command embedded %v", embeddings)
+				}
+				if rules := storedMemories(t, h.dsn); len(rules) != 0 {
+					t.Errorf("a dropped command stored %+v", rules)
+				}
+			}
+
+			queued, err := h.db.CountJobs(context.Background(), store.StatusQueued)
+			if err != nil {
+				t.Fatalf("CountJobs returned error: %v", err)
+			}
+			if queued != int(tc.wantJobs) {
+				t.Errorf("queued jobs = %d, want %d", queued, tc.wantJobs)
+			}
+		})
+	}
+}
+
+// rawCommentPayload is a comment delivery whose repository visibility and
+// commenter standing the test chooses.
+func rawCommentPayload(private bool, association, body string) []byte {
+	payload := basePayload("created")
+	payload["repository"] = map[string]any{
+		"name":    testRepo,
+		"owner":   map[string]any{"login": testOrg},
+		"private": private,
+	}
+	payload["pull_request"] = map[string]any{"number": testPRNumber}
+	payload["comment"] = map[string]any{
+		"id":                 404,
+		"body":               body,
+		"path":               "main.go",
+		"diff_hunk":          "@@ -10,4 +10,6 @@ func main() {",
+		"author_association": association,
+		"user":               map[string]any{"login": "stranger", "type": "User"},
+	}
+	return mustJSON(payload)
+}
+
 // T-020-03: a comment Rumil itself wrote never starts a command, whatever it
 // quotes, because the webhook drops bot authors first.
 func TestT020_03_BotCommentsNeverTriggerCommands(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	for _, tc := range []struct {
 		name  string
@@ -227,7 +437,7 @@ func TestCommandsAreTheOnlyCommentsQueued(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	for _, tc := range []struct {
 		name string
@@ -269,7 +479,7 @@ func TestRememberCommandFromAConversationComment(t *testing.T) {
 	llm.QueueText("Recorded.")
 
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	body := issueCommentPayload("created", "octocat", "User", "@rumil remember retries live at the call site", 303)
 	response := h.deliver(t, handler, "issue_comment", "d-conversation", body, sign(webhookSecret, body))
@@ -312,7 +522,7 @@ func TestRememberCommandIsAnsweredOnce(t *testing.T) {
 	llm.QueueText("Recorded.")
 
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	for _, id := range []string{"d-once", "d-once-retry"} {
 		body := reviewCommentPayload("created", "octocat", "User", "@rumil remember we retry", 202, 101)
@@ -344,7 +554,7 @@ func TestRememberCommandWithoutMemoryCostsNoModelCall(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	body := issueCommentPayload("created", "octocat", "User", "@rumil remember we retry", 404)
 	if response := h.deliver(t, handler, "issue_comment", "d-nomemory", body, sign(webhookSecret, body)); response.Code != http.StatusAccepted {
@@ -367,34 +577,21 @@ func TestRememberCommandWithoutMemoryCostsNoModelCall(t *testing.T) {
 // storedRules reads the repository's rules through the review path, approving
 // them first: only APPROVED rows are retrievable, and the moderation surface
 // that makes that transition arrives in v0.0.5.
-func storedRules(t *testing.T, dsn string) []store.MemoryMatch {
+// storedMemories reads the rows as they are, with the status the gate gave
+// them, which is what a test of the approval gate asserts on.
+func storedMemories(t *testing.T, dsn string) []store.Memory {
 	t.Helper()
 
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connecting to approve the proposals: %v", err)
-	}
-	defer pool.Close()
-	if _, err := pool.Exec(ctx, `UPDATE memories SET status = 'APPROVED' WHERE status = 'PENDING'`); err != nil {
-		t.Fatalf("approving the proposals: %v", err)
-	}
-
 	db, err := store.Open(ctx, dsn, true)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
 	defer db.Close()
 
-	matches, err := db.SearchMemories(ctx, store.MemoryQuery{
-		InstallationID: testInstallationID,
-		OrgName:        testOrg,
-		RepoName:       testRepo,
-		Embedding:      testutil.BasisVector(0),
-		Limit:          store.MemoryLimitMax,
-	})
+	memories, err := db.ListMemories(ctx, store.MemoryFilter{InstallationID: testInstallationID})
 	if err != nil {
-		t.Fatalf("searching the stored rules: %v", err)
+		t.Fatalf("listing the stored rules: %v", err)
 	}
-	return matches
+	return memories
 }
