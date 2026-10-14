@@ -83,6 +83,43 @@ models:
 	if cfg.Review.GuidelinesRef != DefaultGuidelinesRef {
 		t.Errorf("review.guidelines_ref = %q, want %q", cfg.Review.GuidelinesRef, DefaultGuidelinesRef)
 	}
+	if cfg.Worker.Concurrency != DefaultWorkerConcurrency {
+		t.Errorf("worker.concurrency = %d, want %d", cfg.Worker.Concurrency, DefaultWorkerConcurrency)
+	}
+	if cfg.Server.Listen != DefaultListen {
+		t.Errorf("server.listen = %q, want %q", cfg.Server.Listen, DefaultListen)
+	}
+}
+
+// worker.concurrency must be positive when it is set at all.
+func TestWorkerConcurrencyValidation(t *testing.T) {
+	doc := []byte(`
+worker:
+  concurrency: 0
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+
+	cfg, err := Parse(doc, "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse rejected an omitted concurrency: %v", err)
+	}
+	if cfg.Worker.Concurrency != DefaultWorkerConcurrency {
+		t.Errorf("concurrency = %d, want the default for an omitted value", cfg.Worker.Concurrency)
+	}
+
+	if _, err := Parse([]byte(strings.Replace(string(doc), "concurrency: 0", "concurrency: -1", 1)), "test.yaml"); err == nil {
+		t.Error("Parse accepted worker.concurrency -1, want a validation error")
+	}
 }
 
 // review.guidelines_ref accepts the two named sources and rejects anything else.

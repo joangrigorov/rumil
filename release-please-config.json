@@ -6,8 +6,7 @@
       "initial-version": "0.0.1",
       "changelog-path": "CHANGELOG.md",
       "include-component-in-tag": false,
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": false
+      "versioning": "always-bump-patch"
     }
   }
 }

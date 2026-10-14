@@ -6,7 +6,7 @@ import "fmt"
 // §7.1, without repository guidelines.
 //
 // The plan's rule covering <project_memories> with search_memory (added in
-// Phase 4 / v0.2.0) arrives in that phase together with the tool it references,
+// Phase 4 / v0.0.4) arrives in that phase together with the tool it references,
 // so the model is never told to use a tool or an input block that does not
 // exist yet.
 const PRReviewerSystemPrompt = `You are Rumil, an automated, read-only Principal Code Reviewer for GitHub Pull Requests.

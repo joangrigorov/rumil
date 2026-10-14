@@ -59,6 +59,12 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force
 
+      # goreleaser attaches an SBOM attestation to the image, which only the
+      # docker-container driver can produce. The runner's default docker driver
+      # fails with "Attestation is not supported for the docker driver".
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
       # goreleaser attaches binaries, Linux packages, and checksums to the GitHub
       # Release that release-please just created (release.mode: keep-existing).
       - name: Run GoReleaser

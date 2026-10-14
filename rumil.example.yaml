@@ -16,16 +16,23 @@ github:
   app_id: 123456
   installation_id: 98765432       # Installation of your App on the target account
   private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use the GITHUB_PRIVATE_KEY environment variable instead
-  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.1.0 for webhook verification
+  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.0.3 for webhook verification
 
 # Repository review guidelines are read before the first agent turn, from
 # RUMIL.md at the repository root, and capped at 32 KB.
 review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
 
+# `rumil serve` drains this queue.
+worker:
+  concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms
+
+server:
+  listen: ":8080"                 # HTTP address for the webhook endpoint, overridden by --listen
+
 models:
   default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider
-  default_embedding: "text-embedding-3-small" # Required from v0.2.0
+  default_embedding: "text-embedding-3-small" # Required from v0.0.4
   providers:
     - id: "deepseek-v4-flash"
       provider: "openai-compatible"
@@ -41,11 +48,11 @@ models:
       api_key: "${OPENAI_API_KEY}"
       dimensions: 1536            # A provider with dimensions is an embedding provider; it must match the memories.embedding column
 
-database:                         # Required from v0.1.0
+database:                         # Required from v0.0.3
   dsn: "${DATABASE_URL}"          # postgres://user:pass@db:5432/rumil?sslmode=disable
   auto_migrate: true
 
-moderation:                       # Used from v0.2.0
-  accept_all: false               # MUST stay false from v0.3.0 on
+moderation:                       # Used from v0.0.4
+  accept_all: false               # MUST stay false from v0.0.5 on
   auto_approve_associations: []   # Optional, for example ["OWNER"]
   admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer token for the moderation UI and API

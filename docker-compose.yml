@@ -1,0 +1,46 @@
+# Local stack for `rumil serve`: the bot and its Postgres with pgvector.
+#
+#   export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/your-app.pem
+#   docker compose up
+#
+# Copy rumil.example.yaml to rumil.yaml first, and point github.webhook_secret
+# at the same secret you configure on the GitHub App.
+services:
+  rumil:
+    build: .
+    image: ghcr.io/joangrigorov/rumil:latest
+    command: ["serve", "--config", "/etc/rumil/rumil.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://rumil:rumil@postgres:5432/rumil?sslmode=disable
+      GITHUB_APP_PRIVATE_KEY_PATH: /run/secrets/github_app.pem
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+    volumes:
+      - ./rumil.yaml:/etc/rumil/rumil.yaml:ro
+      - ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH}:/run/secrets/github_app.pem:ro
+    ports:
+      - "8080:8080"
+    stop_grace_period: 35s
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: rumil
+      POSTGRES_PASSWORD: rumil
+      POSTGRES_DB: rumil
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rumil -d rumil"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:

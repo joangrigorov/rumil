@@ -57,7 +57,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      # v0.1.0+ database tests use this when set and fall back to testcontainers locally.
+      # The v0.0.3+ database tests use this URL and skip when it is unset.
       TEST_DATABASE_URL: postgres://rumil:rumil@localhost:5432/rumil?sslmode=disable
     steps:
       - name: Checkout
