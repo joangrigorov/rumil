@@ -354,7 +354,8 @@ func TestT001_04_CommentOutsideDiffMovesIntoSummary(t *testing.T) {
 }
 
 // T-001-05: a finding that already exists on the pull request is never posted
-// twice, and the existing comment is visible to the session.
+// twice. submit_pr_review reads the existing comments itself, so the session
+// does not need a tool for it.
 func TestT001_05_DuplicateFindingIsNotReposted(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
@@ -365,7 +366,6 @@ func TestT001_05_DuplicateFindingIsNotReposted(t *testing.T) {
 	existing.User.Type = "Bot"
 	gh.Comments = []testutil.CommentEntry{existing}
 
-	llm.QueueToolCall("list_existing_review_comments", nil)
 	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "Retry logic looks fine.",
