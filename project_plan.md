@@ -78,6 +78,7 @@ rumil/
 │       ├── mod_ui.go             # HTMX + html/template moderation UI & REST API (v0.3.0+)
 │       └── server_test.go
 ├── Dockerfile
+├── Dockerfile.release
 ├── docker-compose.yml
 ├── rumil.example.yaml
 └── go.mod
@@ -504,6 +505,7 @@ Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: wri
 * macOS artifacts are unsigned and un-notarized, and packages are unsigned: an accepted limitation of a free signing setup. Homebrew tap publishing is not used.
 * Every GitHub Action in `.github/workflows/` is pinned to a full commit SHA with a trailing `# vX.Y.Z` comment.
 * Added in Phase 1 (`v0.0.1`) once the `Dockerfile` existed: a GHCR image build in the same workflow (`packages: write`), `rumil.example.yaml` bundled into the archives and installed by nfpm to `/etc/rumil/rumil.example.yaml` as `config|noreplace`. The image is `linux/amd64` only until a QEMU step is added. The package `license` field and the archive `LICENSE` file stay unset because the repository has no `LICENSE` file yet; both are wired up when one lands.
+* Two Dockerfiles, because goreleaser's `dockers_v2` builds from a temporary context that holds the binaries it compiled for each platform and no source files. `Dockerfile` stays the multi-stage from-source build that `docker compose up` and a developer use by hand; `Dockerfile.release` copies `${TARGETPLATFORM}/rumil` into the same distroless base. Both share the runtime layout (distroless static, uid 65532, same entrypoint), so the two images are interchangeable at run time. The release workflow also sets up a `docker-container` buildx driver, which the SBOM attestation `dockers_v2` attaches by default requires; the runner's stock `docker` driver cannot produce it.
 
 ---
 
