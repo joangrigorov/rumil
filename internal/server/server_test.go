@@ -127,7 +127,7 @@ func (h *harness) webhook() *server.Webhook {
 func (h *harness) engine(t *testing.T, gh *testutil.FakeGitHub) *reviewer.Engine {
 	t.Helper()
 
-	engine, err := reviewer.NewEngine(h.cfg, h.logger, gh.URL())
+	engine, err := reviewer.NewEngine(h.cfg, h.logger, gh.URL(), h.db)
 	if err != nil {
 		t.Fatalf("building the engine: %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/mcpservers"
+	"github.com/joangrigorov/rumil/internal/store"
 )
 
 // providerWireOpenAICompat selects chat completions on the configured
@@ -53,11 +54,16 @@ type Engine struct {
 	cfg    *config.Config
 	logger *slog.Logger
 	auth   *ghapp.AppAuth
+	// memory is nil when the operator configured no embedding provider, which
+	// is what makes memory opt-in (project_plan.md §3 rule 6).
+	memory *memory
 }
 
-// NewEngine validates the GitHub App credentials and prepares the engine.
-// baseURL overrides the GitHub API endpoint and is empty outside tests.
-func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string) (*Engine, error) {
+// NewEngine validates the GitHub App credentials and prepares the engine. db is
+// the store pre-retrieval reads recorded rules from; it may be nil, and an
+// engine built without it reviews on the prompt alone. baseURL overrides the
+// GitHub API endpoint and is empty outside tests.
+func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string, db *store.DB) (*Engine, error) {
 	keyPEM, err := cfg.GitHub.ResolvePrivateKey()
 	if err != nil {
 		return nil, err
@@ -70,7 +76,12 @@ func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string) (*Engine
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Engine{cfg: cfg, logger: logger, auth: auth}, nil
+	memory, err := newMemory(cfg, db, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Engine{cfg: cfg, logger: logger, auth: auth, memory: memory}, nil
 }
 
 // Review runs the review. The installation is verified before the session is
@@ -128,7 +139,22 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		result.SkippedDuplicates = len(outcome.SkippedDuplicates)
 	}
 
-	sessionTools, err := kitTools(githubTools.Specs(), func(string) {
+	specs := githubTools.Specs()
+	memoryBlock := ""
+	if e.memory != nil {
+		// Pre-retrieval is best effort: an embedding provider that is down costs
+		// this review its recorded rules, which is the state an operator who
+		// never turned memory on is in, and is not worth failing a review over.
+		block, retrieveErr := e.memory.retrieve(ctx, req, meta)
+		if retrieveErr != nil {
+			e.logger.Warn("pre-retrieval of recorded rules failed, the review runs without them", "error", retrieveErr)
+		} else {
+			memoryBlock = block
+			specs = append(specs, e.memory.tools(req)...)
+		}
+	}
+
+	sessionTools, err := kitTools(specs, func(string) {
 		mu.Lock()
 		defer mu.Unlock()
 		result.ToolCalls++
@@ -137,7 +163,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines), sessionTools))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock), sessionTools))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}

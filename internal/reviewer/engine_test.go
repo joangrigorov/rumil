@@ -13,6 +13,7 @@ import (
 
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
@@ -54,6 +55,7 @@ type harness struct {
 	gh     *testutil.FakeGitHub
 	llm    *testutil.FakeLLM
 	engine *Engine
+	db     *store.DB
 	logs   *bytes.Buffer
 }
 
@@ -63,6 +65,11 @@ type harnessOpts struct {
 	// guidelinesRef sets review.guidelines_ref. Empty means the block is
 	// omitted and the loader default applies.
 	guidelinesRef string
+	// dsn points database.dsn at a test database, which is half of what turns
+	// memory on.
+	dsn string
+	// embedding adds models.default_embedding, the other half.
+	embedding bool
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -82,12 +89,18 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 		defaultChat = fmt.Sprintf("  default_chat: %q\n", opts.defaultChat)
 	}
 
-	review := ""
+	top := ""
 	if opts.guidelinesRef != "" {
-		review = fmt.Sprintf("review:\n  guidelines_ref: %q\n", opts.guidelinesRef)
+		top += fmt.Sprintf("review:\n  guidelines_ref: %q\n", opts.guidelinesRef)
+	}
+	if opts.dsn != "" {
+		top += fmt.Sprintf("database:\n  dsn: %q\n  auto_migrate: true\n", opts.dsn)
+	}
+	if opts.embedding {
+		defaultChat += "  default_embedding: \"embed\"\n"
 	}
 
-	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, review, defaultChat,
+	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
 		llm.URL()+"/v1", llm.URL()+"/v1", llm.URL()+"/v1")
 
 	cfg, err := config.Parse([]byte(doc), "engine_test.yaml")
@@ -98,12 +111,21 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	engine, err := NewEngine(cfg, logger, gh.URL())
+	var db *store.DB
+	if opts.dsn != "" {
+		db, err = store.Open(context.Background(), opts.dsn, true)
+		if err != nil {
+			t.Fatalf("opening the test database: %v", err)
+		}
+		t.Cleanup(db.Close)
+	}
+
+	engine, err := NewEngine(cfg, logger, gh.URL(), db)
 	if err != nil {
 		t.Fatalf("building engine: %v", err)
 	}
 
-	return &harness{gh: gh, llm: llm, engine: engine, logs: logs}
+	return &harness{gh: gh, llm: llm, engine: engine, db: db, logs: logs}
 }
 
 func (h *harness) review(t *testing.T) (*Result, error) {

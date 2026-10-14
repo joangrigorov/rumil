@@ -65,7 +65,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 				logger.Warn("requeued jobs interrupted by a previous run", "jobs", moved)
 			}
 
-			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL)
+			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL, db)
 			if err != nil {
 				return err
 			}

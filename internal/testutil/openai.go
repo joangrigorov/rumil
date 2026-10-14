@@ -49,6 +49,12 @@ type FakeLLM struct {
 	turns     []ScriptedTurn
 	defaultTx string
 	unknown   []string
+
+	// embeddings are the vectors queued for the next embedding calls, and
+	// embedded is every input those calls carried.
+	embeddings    [][]float32
+	embedded      []string
+	embeddingFail int
 }
 
 // NewFakeLLM starts the fake endpoint. When the script runs out it replies with
@@ -135,6 +141,11 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 
 	var body map[string]any
 	_ = json.Unmarshal(raw, &body)
+
+	if strings.HasSuffix(r.URL.Path, "/embeddings") {
+		f.handleEmbeddings(w, raw)
+		return
+	}
 
 	if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
 		f.mu.Lock()
