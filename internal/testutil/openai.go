@@ -32,6 +32,9 @@ type Request struct {
 	Model  string
 	Tools  []string
 	Raw    []byte
+	// SystemPrompt is the concatenated system message, which shows what the
+	// reviewer prompt carried into the session.
+	SystemPrompt string
 	// ToolCallNames lists the tool calls requested by the assistant messages in
 	// this request, which shows whether tool results were fed back.
 	ToolCallNames []string
@@ -148,6 +151,7 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Tools = toolNamesFrom(body)
 	req.ToolCallNames = toolCallNamesFrom(body)
+	req.SystemPrompt = systemPromptFrom(body)
 
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
@@ -199,6 +203,21 @@ func toolCallNamesFrom(body map[string]any) []string {
 		}
 	}
 	return names
+}
+
+func systemPromptFrom(body map[string]any) string {
+	messages, _ := body["messages"].([]any)
+	var parts []string
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		if role, _ := msg["role"].(string); role != "system" {
+			continue
+		}
+		if content, ok := msg["content"].(string); ok {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func completion(turn ScriptedTurn) map[string]any {

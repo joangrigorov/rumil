@@ -27,6 +27,15 @@ const (
 	DefaultMaxAgentTurns = 25
 	DefaultMaxDiffBytes  = 250_000
 	DefaultLogLevel      = "info"
+	// DefaultGuidelinesRef reads RUMIL.md from the pull request base SHA, so
+	// an untrusted branch cannot rewrite the repository's review policy.
+	DefaultGuidelinesRef = "base"
+)
+
+// GuidelinesRef values accepted by review.guidelines_ref.
+const (
+	GuidelinesRefBase = "base"
+	GuidelinesRefHead = "head"
 )
 
 // Errors returned by Validate, wrapped with field context.
@@ -40,6 +49,7 @@ var (
 type Config struct {
 	App        App        `yaml:"app"`
 	GitHub     GitHub     `yaml:"github"`
+	Review     Review     `yaml:"review"`
 	Models     Models     `yaml:"models"`
 	Database   Database   `yaml:"database"`
 	Moderation Moderation `yaml:"moderation"`
@@ -86,6 +96,11 @@ type Provider struct {
 
 // IsEmbedding reports whether the provider produces embeddings.
 func (p Provider) IsEmbedding() bool { return p.Dimensions > 0 }
+
+// Review tunes the repository guidelines injected into the review prompt.
+type Review struct {
+	GuidelinesRef string `yaml:"guidelines_ref"`
+}
 
 // Database is used from v0.1.0 on.
 type Database struct {
@@ -142,6 +157,9 @@ func (c *Config) applyDefaults() {
 	if c.App.LogLevel == "" {
 		c.App.LogLevel = DefaultLogLevel
 	}
+	if c.Review.GuidelinesRef == "" {
+		c.Review.GuidelinesRef = DefaultGuidelinesRef
+	}
 }
 
 // Validate enforces the schema rules that v0.0.1 depends on: app limits, GitHub
@@ -157,6 +175,12 @@ func (c *Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("app.log_level must be one of debug, info, warn, error, got %q", c.App.LogLevel)
+	}
+
+	switch c.Review.GuidelinesRef {
+	case GuidelinesRefBase, GuidelinesRefHead:
+	default:
+		return fmt.Errorf("review.guidelines_ref must be %q or %q, got %q", GuidelinesRefBase, GuidelinesRefHead, c.Review.GuidelinesRef)
 	}
 
 	if err := c.GitHub.validate(); err != nil {

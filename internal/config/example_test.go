@@ -30,6 +30,9 @@ func TestExampleConfigIsValid(t *testing.T) {
 	if cfg.GitHub.InstallationID != 98765432 {
 		t.Errorf("installation_id = %d, want the example value", cfg.GitHub.InstallationID)
 	}
+	if cfg.Review.GuidelinesRef != DefaultGuidelinesRef {
+		t.Errorf("review.guidelines_ref = %q, want the example value %q", cfg.Review.GuidelinesRef, DefaultGuidelinesRef)
+	}
 
 	provider, err := cfg.Models.ChatProvider()
 	if err != nil {

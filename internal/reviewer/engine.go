@@ -90,6 +90,29 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 
 	githubClient := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
 
+	// Repository guidelines are read before the first turn, from the base SHA
+	// unless the operator opted into trusting the branch under review
+	// (project_plan.md §6 Phase 2).
+	meta, err := githubClient.Metadata(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the pull request metadata: %w", err)
+	}
+	guidelinesRef := meta.BaseSHA
+	if e.cfg.Review.GuidelinesRef == config.GuidelinesRefHead {
+		guidelinesRef = meta.HeadSHA
+	}
+	guidelinesPath, guidelines, err := githubClient.ReviewGuidelines(ctx, guidelinesRef)
+	if err != nil {
+		return nil, fmt.Errorf("reading the repository review guidelines: %w", err)
+	}
+	if guidelinesPath != "" {
+		e.logger.Info("loaded repository review guidelines",
+			"path", guidelinesPath,
+			"ref", guidelinesRef,
+			"bytes", len(guidelines),
+		)
+	}
+
 	var (
 		mu     sync.Mutex
 		result Result
@@ -114,7 +137,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, sessionTools))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines), sessionTools))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -151,11 +174,11 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 // sessionOptions builds the kit session configuration: isolated from host
 // state, no core tools (no shell, no file writes), and only the GitHub tool set
 // registered.
-func (e *Engine) sessionOptions(provider *config.Provider, tools []kit.Tool) *kit.Options {
+func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)
 	kit.WithModel(modelString(provider))(options)
-	kit.WithSystemPrompt(PRReviewerSystemPrompt)(options)
+	kit.WithSystemPrompt(systemPrompt)(options)
 	kit.WithStreaming(false)(options)
 	kit.WithProviderURL(provider.BaseURL)(options)
 	kit.WithProviderAPIKey(provider.APIKey)(options)

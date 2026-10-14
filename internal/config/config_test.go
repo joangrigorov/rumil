@@ -80,6 +80,46 @@ models:
 	if cfg.App.LogLevel != DefaultLogLevel {
 		t.Errorf("log_level = %q, want %q", cfg.App.LogLevel, DefaultLogLevel)
 	}
+	if cfg.Review.GuidelinesRef != DefaultGuidelinesRef {
+		t.Errorf("review.guidelines_ref = %q, want %q", cfg.Review.GuidelinesRef, DefaultGuidelinesRef)
+	}
+}
+
+// review.guidelines_ref accepts the two named sources and rejects anything else.
+func TestReviewGuidelinesRef(t *testing.T) {
+	doc := func(ref string) []byte {
+		return []byte(`
+review:
+  guidelines_ref: "` + ref + `"
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	for _, ref := range []string{GuidelinesRefBase, GuidelinesRefHead} {
+		cfg, err := Parse(doc(ref), "test.yaml")
+		if err != nil {
+			t.Fatalf("Parse rejected guidelines_ref %q: %v", ref, err)
+		}
+		if cfg.Review.GuidelinesRef != ref {
+			t.Errorf("guidelines_ref = %q, want %q", cfg.Review.GuidelinesRef, ref)
+		}
+	}
+
+	if _, err := Parse(doc("branch"), "test.yaml"); err == nil {
+		t.Error("Parse accepted guidelines_ref \"branch\", want a validation error")
+	} else if !strings.Contains(err.Error(), "review.guidelines_ref") {
+		t.Errorf("error %q does not name review.guidelines_ref", err)
+	}
 }
 
 // T-001-01 (configuration half): an explicit default_chat selects that provider

@@ -3,11 +3,13 @@ package ghapp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/google/go-github/v69/github"
 )
@@ -15,8 +17,20 @@ import (
 // MaxFileReadLines caps a single get_file_contents read.
 const MaxFileReadLines = 500
 
+// MaxGuidelinesBytes caps the repository review guidelines injected into the
+// system prompt, so a generated file cannot overflow the model's context.
+const MaxGuidelinesBytes = 32 << 10
+
+// GuidelinesPath is the repository review guidelines file (§6 Phase 2), read
+// from the repository root. The name is Rumil's own so that a REVIEW.md kept
+// for another purpose is never picked up.
+const GuidelinesPath = "RUMIL.md"
+
 // maxFileBytes bounds how much of a single file is downloaded.
 const maxFileBytes = 8 << 20
+
+// contentEncodingBase64 is what the contents API reports for an inlined file.
+const contentEncodingBase64 = "base64"
 
 // Review events accepted by submit_pr_review.
 const (
@@ -176,6 +190,99 @@ func (c *Client) diffLocked(ctx context.Context) (*Diff, error) {
 	}
 	c.diff = parsed
 	return c.diff, nil
+}
+
+// ReviewGuidelines fetches the repository's review guidelines, GuidelinesPath
+// at the repository root and nothing else, and returns the path with the text.
+// A repository without the file returns empty strings and a nil error, and the
+// review proceeds on the default prompt.
+//
+// The text is capped at MaxGuidelinesBytes with a truncation marker. Callers
+// pass the pull request base SHA so an untrusted branch cannot rewrite the
+// repository's review policy.
+func (c *Client) ReviewGuidelines(ctx context.Context, ref string) (string, string, error) {
+	if ref == "" {
+		meta, err := c.Metadata(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		ref = meta.BaseSHA
+	}
+
+	file, err := c.fileAt(ctx, GuidelinesPath, ref)
+	if err != nil {
+		return "", "", err
+	}
+	if file == nil {
+		return "", "", nil
+	}
+
+	text, err := c.fileText(ctx, file, GuidelinesPath, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return GuidelinesPath, truncateGuidelines(text), nil
+}
+
+// truncateGuidelines caps the guidelines at MaxGuidelinesBytes, cutting on a
+// rune boundary and appending a marker that names the original size.
+func truncateGuidelines(text string) string {
+	if len(text) <= MaxGuidelinesBytes {
+		return text
+	}
+	cut := text[:MaxGuidelinesBytes]
+	for !utf8.ValidString(cut) && len(cut) > 0 {
+		cut = cut[:len(cut)-1]
+	}
+	return fmt.Sprintf("%s\n\n[truncated at %d bytes: the guidelines file is %d bytes]", cut, MaxGuidelinesBytes, len(text))
+}
+
+// fileText decodes the content of one contents-API entry, reading the blob it
+// points at when the API declines to inline a large file.
+func (c *Client) fileText(ctx context.Context, file *github.RepositoryContent, path, ref string) (string, error) {
+	if file.GetEncoding() != contentEncodingBase64 {
+		// The contents API inlines files up to 1 MB and reports encoding "none"
+		// above that, so read the blob the entry points at.
+		blob, _, err := c.gh.Git.GetBlob(ctx, c.owner, c.repo, file.GetSHA())
+		if err != nil {
+			return "", fmt.Errorf("reading the blob for %s at %s: %w", path, ref, err)
+		}
+		return decodeBlob(blob)
+	}
+
+	decoded, err := file.GetContent()
+	if err != nil {
+		return "", fmt.Errorf("decoding %s at %s: %w", path, ref, err)
+	}
+	return decoded, nil
+}
+
+// decodeBlob returns the text of a blob API entry, which arrives base64
+// encoded and wrapped across lines.
+func decodeBlob(blob *github.Blob) (string, error) {
+	if encoding := blob.GetEncoding(); encoding != contentEncodingBase64 {
+		return "", fmt.Errorf("blob %s is encoded as %q, want base64", blob.GetSHA(), encoding)
+	}
+	compact := strings.NewReplacer("\n", "", "\r", "").Replace(blob.GetContent())
+	decoded, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return "", fmt.Errorf("decoding blob %s: %w", blob.GetSHA(), err)
+	}
+	return string(decoded), nil
+}
+
+// fileAt returns the contents-API entry for path at ref, or nil when the path
+// holds no file at that ref. A missing path is not an error, so callers can
+// walk a fallback list.
+func (c *Client) fileAt(ctx context.Context, path, ref string) (*github.RepositoryContent, error) {
+	file, _, resp, err := c.gh.Repositories.GetContents(ctx, c.owner, c.repo, path, &github.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s at %s in %s/%s: %w", path, ref, c.owner, c.repo, err)
+	}
+	return file, nil
 }
 
 // FileContents reads a line range of a repository file at ref, defaulting to
