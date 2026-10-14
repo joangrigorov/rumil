@@ -27,10 +27,12 @@ type MemorySession struct {
 	// SourceComment points a moderator at the comment the rule came from.
 	SourceComment string
 	RequestedBy   string
-	// AcceptAll stores proposals APPROVED instead of PENDING. It mirrors
-	// moderation.accept_all, which is off by default: with it off, comment text
-	// waits for a human decision before it can reach a review prompt.
-	AcceptAll bool
+	// AutoApprove stores proposals APPROVED instead of PENDING. It is true when
+	// moderation.accept_all is on, or when the commenter's
+	// author_association is one the operator listed in
+	// moderation.auto_approve_associations. With it off, comment text waits for
+	// a human decision before it can reach a review prompt.
+	AutoApprove bool
 }
 
 // MemoryTools holds the dependencies of the memory tool set.
@@ -172,7 +174,7 @@ func (t *MemoryTools) proposeMemory(ctx context.Context, args map[string]any) (s
 		SourcePR:       t.session.PRNumber,
 		SourceComment:  t.session.SourceComment,
 		RequestedBy:    t.session.RequestedBy,
-		Approved:       t.session.AcceptAll,
+		Approved:       t.session.AutoApprove,
 		Embedding:      embedding,
 	})
 	if err != nil {

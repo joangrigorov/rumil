@@ -41,6 +41,10 @@ type RememberRequest struct {
 	Conversation bool
 	Path         string
 	DiffHunk     string
+	// AuthorAssociation is the commenter's GitHub author_association, which
+	// decides whether the rule waits for moderation. The webhook has already
+	// dropped the associations that may not record one at all.
+	AuthorAssociation string
 	// RequestedBy and SourceComment record who asked, and where they asked.
 	RequestedBy   string
 	SourceComment string
@@ -113,7 +117,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 		PRNumber:       req.Number,
 		SourceComment:  req.SourceComment,
 		RequestedBy:    req.RequestedBy,
-		AcceptAll:      e.cfg.Moderation.AcceptAll,
+		AutoApprove:    e.cfg.Moderation.AutoApproves(req.AuthorAssociation),
 	}, e.logger)
 	memoryTools.OnMemoryProposed = func(memory store.Memory, inserted bool) {
 		if result.Proposed {

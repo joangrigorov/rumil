@@ -161,6 +161,60 @@ models:
 	}
 }
 
+// The approval gate is per association as well as global: a team lets its own
+// members record rules while strangers queue for moderation.
+func TestAutoApprovesByAssociation(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		moderation  Moderation
+		association string
+		want        bool
+	}{
+		{
+			name:        "accept_all answers for everybody",
+			moderation:  Moderation{AcceptAll: true},
+			association: "NONE",
+			want:        true,
+		},
+		{
+			name:        "a listed association is approved",
+			moderation:  Moderation{AutoApproveAssociations: []string{"OWNER", "MEMBER"}},
+			association: "MEMBER",
+			want:        true,
+		},
+		{
+			name:        "the match ignores case and padding",
+			moderation:  Moderation{AutoApproveAssociations: []string{" member "}},
+			association: "MEMBER",
+			want:        true,
+		},
+		{
+			name:        "an unlisted association waits",
+			moderation:  Moderation{AutoApproveAssociations: []string{"OWNER"}},
+			association: "CONTRIBUTOR",
+			want:        false,
+		},
+		{
+			name:        "no list and no accept_all waits",
+			moderation:  Moderation{},
+			association: "OWNER",
+			want:        false,
+		},
+		{
+			name:        "an empty association waits",
+			moderation:  Moderation{AutoApproveAssociations: []string{"OWNER"}},
+			association: "",
+			want:        false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.moderation.AutoApproves(tc.association); got != tc.want {
+				t.Errorf("AutoApproves(%q) = %v, want %v", tc.association, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEmbeddingProviderIsOptIn(t *testing.T) {
 	doc := func(defaultEmbedding string) []byte {
 		return []byte(`
