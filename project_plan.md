@@ -105,6 +105,12 @@ github:
 review:                                           # v0.0.2+
   guidelines_ref: "base"                          # "base" reads RUMIL.md from the PR base SHA; "head" trusts the PR branch
 
+worker:                                           # v0.1.0+
+  concurrency: 4                                  # review jobs processed in parallel; an idle worker polls every 250ms
+
+server:                                           # v0.1.0+
+  listen: ":8080"                                 # HTTP address for `rumil serve`, overridden by --listen
+
 models:
   default_chat: "deepseek-v4-flash"
   default_embedding: "text-embedding-3-small"     # Required in v0.2.0+
@@ -299,7 +305,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
      * GitHub **Issues are out of scope**: an `issue_comment` is actionable only when it belongs to a pull request (the payload carries `issue.pull_request`); comments on plain issues are dropped without enqueueing, because `webhook_jobs.pr_number` is `NOT NULL`.
    * Insert job into `webhook_jobs` with `status = 'QUEUED'` and return `202 Accepted` within `< 200ms`.
    * `GET /healthz`: Verify DB connectivity and return `200 OK`.
-3. Implement an in-process worker pool (configurable concurrency, e.g., 4 workers) polling `webhook_jobs` via `SELECT ... FOR UPDATE SKIP LOCKED`, executing the review engine, and updating job status to `COMPLETED` or `FAILED`.
+3. Implement an in-process worker pool (`worker.concurrency`, §3; 4 by default) polling `webhook_jobs` via `SELECT ... FOR UPDATE SKIP LOCKED`, executing the review engine, and updating job status to `COMPLETED` or `FAILED`. Job pickup is a 250ms poll, and a failed job records `last_error` and its `attempts` count.
 4. Provide `docker-compose.yml` bundling `rumil` and `pgvector/pgvector:pg16`.
 
 #### Mandatory Verification Matrix — `v0.1.0`
@@ -502,8 +508,7 @@ Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: wri
 
 Deliberately unresolved, to be decided with the phase that needs them:
 
-1. **Worker concurrency key (Phase 3).** §3 has no config key for the async worker pool size, and the plan does not name one. Fix the name and the semantics when the worker queue lands, then add it to §3.
-2. **No `LICENSE` file.** The nfpm `license` field, the archive `LICENSE`, and the repository's own license stay unset until a license is chosen (§9).
-3. **Single-platform container image.** The GHCR image is `linux/amd64` until a QEMU step is added to the release workflow.
-4. **`app.bot_handle` has no consumer yet.** It is validated and defaulted in `internal/config`, and read by nothing until the `@rumil` comment commands of Phase 4.
-5. **Upstream kit race.** `MCPToolManager.GetTools` reads the tool slice without holding the mutex that the parallel server loader writes under, and the bug is present on kit `master`. §1 avoids it by registering the specs as raw tools. Reporting it upstream is worthwhile and is not tracked by any phase.
+1. **No `LICENSE` file.** The nfpm `license` field, the archive `LICENSE`, and the repository's own license stay unset until a license is chosen (§9).
+2. **Single-platform container image.** The GHCR image is `linux/amd64` until a QEMU step is added to the release workflow.
+3. **`app.bot_handle` has no consumer yet.** It is validated and defaulted in `internal/config`, and read by nothing until the `@rumil` comment commands of Phase 4.
+4. **Upstream kit race.** `MCPToolManager.GetTools` reads the tool slice without holding the mutex that the parallel server loader writes under, and the bug is present on kit `master`. §1 avoids it by registering the specs as raw tools. Reporting it upstream is worthwhile and is not tracked by any phase.
