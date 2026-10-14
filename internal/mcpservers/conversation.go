@@ -261,8 +261,10 @@ func (t *GithubTools) isBot(login string) bool {
 	return ghapp.SameLogin(login, t.botLogin)
 }
 
-// ownReviewCount is how many reviews Rumil has already submitted on this pull
-// request, read once per session because closing a thread cannot change it.
+// ownReviewCount is how many reviews Rumil had already submitted when this
+// session started. It is read from the baseline, so a review this session
+// submits is not counted: otherwise submitting first would make a first pass
+// look like a second one.
 func (t *GithubTools) ownReviewCount(ctx context.Context) (int, error) {
 	reviews, err := t.readReviews(ctx)
 	if err != nil {
@@ -277,8 +279,9 @@ func (t *GithubTools) ownReviewCount(ctx context.Context) (int, error) {
 	return own, nil
 }
 
-// readReviews is the session's cached view of the reviews, which the history
-// view, the metadata tool and the resolution rule all read.
+// readReviews is the session's baseline view of the reviews: the history view,
+// the metadata tool and the resolution guard all read it, so they agree on
+// which rounds happened before this session (see NewGithubTools).
 func (t *GithubTools) readReviews(ctx context.Context) ([]ghapp.Review, error) {
 	t.reviewsMu.Lock()
 	defer t.reviewsMu.Unlock()

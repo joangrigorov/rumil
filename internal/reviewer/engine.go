@@ -129,7 +129,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		mu     sync.Mutex
 		result Result
 	)
-	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger)
+
+	// The history is read once, before the session can submit anything: the
+	// block in the prompt and the baseline the session measures its own
+	// reviews against have to be the same read, or a review could count
+	// itself and close the threads it just opened (project_plan.md §7.1
+	// rule 4, T-020-07).
+	priorHistory, priorReviews := readPriorHistory(ctx, githubClient, e.cfg.App.BotHandle, e.logger)
+
+	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger, priorReviews)
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -142,16 +150,20 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 
 	specs := githubTools.Specs()
 	memoryBlock := ""
+	memoryOn := e.memory != nil
 	if e.memory != nil {
 		// Pre-retrieval is best effort: an embedding provider that is down costs
 		// this review its recorded rules, which is the state an operator who
 		// never turned memory on is in, and is not worth failing a review over.
-		block, retrieveErr := e.memory.retrieve(ctx, req, meta)
+		// The tools stay registered either way: memory is configured, so the
+		// session can still search, and a session that can search is told what
+		// a recorded rule is.
+		specs = append(specs, e.memory.tools(req)...)
+		block, retrieveErr := e.memory.retrieve(ctx, req, meta, guidelines != "")
 		if retrieveErr != nil {
 			e.logger.Warn("pre-retrieval of recorded rules failed, the review runs without them", "error", retrieveErr)
 		} else {
 			memoryBlock = block
-			specs = append(specs, e.memory.tools(req)...)
 		}
 	}
 
@@ -171,7 +183,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock, resolveThreads), sessionTools, e.cfg.App.MaxAgentTurns))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(SessionContext{
+		Guidelines:     guidelines,
+		Memories:       memoryBlock,
+		MemoryOn:       memoryOn,
+		PriorHistory:   priorHistory,
+		ResolveThreads: resolveThreads,
+	}), sessionTools, e.cfg.App.MaxAgentTurns))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}

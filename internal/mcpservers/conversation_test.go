@@ -1,6 +1,7 @@
 package mcpservers_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"strings"
@@ -13,9 +14,8 @@ import (
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
-// newGithubTools scopes the GitHub tool set to the fake API, which is the
-// surface the tests drive it through.
-func newGithubTools(t *testing.T, gh *testutil.FakeGitHub, botHandle string) *mcpservers.GithubTools {
+// fakeClient is a go-github client pointed at the fake API.
+func fakeClient(t *testing.T, gh *testutil.FakeGitHub) *github.Client {
 	t.Helper()
 
 	client := github.NewClient(nil)
@@ -24,8 +24,21 @@ func newGithubTools(t *testing.T, gh *testutil.FakeGitHub, botHandle string) *mc
 		t.Fatalf("parsing the fake API URL: %v", err)
 	}
 	client.BaseURL = base
+	return client
+}
 
-	return mcpservers.NewGithubTools(ghapp.NewClient(client, gh.Owner, gh.Repo, gh.Number), 4096, botHandle, memoryLogger())
+// newGithubTools scopes the GitHub tool set to the fake API, which is the
+// surface the tests drive it through. The review list is read before the tool
+// set is built, which is what the engine does: it is the session's baseline.
+func newGithubTools(t *testing.T, gh *testutil.FakeGitHub, botHandle string) *mcpservers.GithubTools {
+	t.Helper()
+
+	rumil := ghapp.NewClient(fakeClient(t, gh), gh.Owner, gh.Repo, gh.Number)
+	reviews, err := rumil.Reviews(context.Background())
+	if err != nil {
+		t.Fatalf("reading the fake review list: %v", err)
+	}
+	return mcpservers.NewGithubTools(rumil, 4096, botHandle, memoryLogger(), reviews)
 }
 
 type conversationResult struct {

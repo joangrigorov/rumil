@@ -43,7 +43,8 @@ type GithubTools struct {
 	// can record the outcome of the session.
 	OnReviewSubmitted func(outcome ghapp.ReviewOutcome)
 
-	// reviews caches the pull request's review list for the session.
+	// reviews is the session's view of the review list: the baseline the
+	// history view and the resolution guard read.
 	reviewsMu   sync.Mutex
 	reviews     []ghapp.Review
 	reviewsRead bool
@@ -56,12 +57,24 @@ type GithubTools struct {
 
 // NewGithubTools scopes the tools to one pull request. botHandle is the
 // configured handle, which is how a review recognises its own comments.
-func NewGithubTools(client *ghapp.Client, maxDiffBytes int, botHandle string, logger *slog.Logger) *GithubTools {
+//
+// priorReviews is the review list as it stood when the session was created, and
+// it is the session's baseline rather than a cache: the metadata tool reports
+// the last commit an earlier round reviewed against it, and the resolution
+// guard counts the rounds that happened before this session. A session that
+// read the list lazily could count the review it just submitted as an earlier
+// round and close the threads it had only just opened, which is why the
+// baseline is an argument and not something the tool set fills in on first use.
+// A nil slice is a session whose history could not be read; the resolution
+// guard then counts no earlier round, which is the safe direction.
+func NewGithubTools(client *ghapp.Client, maxDiffBytes int, botHandle string, logger *slog.Logger, priorReviews []ghapp.Review) *GithubTools {
 	return &GithubTools{
 		client:       client,
 		maxDiffBytes: maxDiffBytes,
 		botLogin:     botHandle,
 		logger:       logger,
+		reviews:      priorReviews,
+		reviewsRead:  true,
 	}
 }
 
