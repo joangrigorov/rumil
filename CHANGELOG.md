@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.5](https://github.com/joangrigorov/rumil/compare/v0.0.4...v0.0.5) (2026-10-14)
+
+
+### Features
+
+* **moderation:** the v0.0.5 gate surface, CLI and page ([#8](https://github.com/joangrigorov/rumil/issues/8)) ([2cd6de6](https://github.com/joangrigorov/rumil/commit/2cd6de69212095ae0b0e82093bfb6fe1ccf7029a))
+
 ## [0.0.4](https://github.com/joangrigorov/rumil/compare/v0.0.3...v0.0.4) (2026-10-14)
 
 
