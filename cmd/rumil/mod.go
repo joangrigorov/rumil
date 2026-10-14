@@ -1,0 +1,233 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/joangrigorov/rumil/internal/config"
+	"github.com/joangrigorov/rumil/internal/embedder"
+	"github.com/joangrigorov/rumil/internal/moderation"
+	"github.com/joangrigorov/rumil/internal/store"
+)
+
+// defaultModerator is who a decision is recorded against when the operator does
+// not name one. It is deliberately not the local user: a rules record belongs
+// to the team that writes it, and nothing here reads the host's identity.
+const defaultModerator = "cli"
+
+func newModCmd(configPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mod",
+		Short: "Review the rules waiting for a maintainer's decision",
+		Long: "List, approve and reject the engineering rules Rumil recorded from comments.\n" +
+			"Only an approved rule is ever retrieved into a review.",
+		Args: cobra.NoArgs,
+	}
+
+	cmd.AddCommand(newModListCmd(configPath))
+	cmd.AddCommand(newModApproveCmd(configPath))
+	cmd.AddCommand(newModRejectCmd(configPath))
+	return cmd
+}
+
+func newModListCmd(configPath *string) *cobra.Command {
+	var (
+		status string
+		repo   string
+		limit  int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List recorded rules",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			service, _, closeDB, err := openModeration(*configPath)
+			if err != nil {
+				return err
+			}
+			defer closeDB()
+
+			filter := store.MemoryFilter{Status: strings.ToUpper(status), Limit: limit}
+			if repo != "" {
+				org, name, err := splitRepo(repo)
+				if err != nil {
+					return err
+				}
+				filter.OrgName, filter.RepoName = org, name
+			}
+
+			memories, err := service.List(cmd.Context(), filter)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if len(memories) == 0 {
+				_, _ = fmt.Fprintln(out, "no rules match")
+				return nil
+			}
+
+			writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+			_, _ = fmt.Fprintln(writer, "ID\tSTATUS\tREPO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
+			for _, memory := range memories {
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					memory.ShortID(),
+					memory.Status,
+					memory.OrgName+"/"+memory.RepoName,
+					orDash(memory.PathGlob),
+					memory.RequestedBy,
+					memory.CreatedAt.UTC().Format(time.RFC3339),
+					oneLine(memory.RuleText),
+				)
+			}
+			return writer.Flush()
+		},
+	}
+
+	cmd.Flags().StringVar(&status, "status", "", "only this status: pending, approved or rejected")
+	cmd.Flags().StringVar(&repo, "repo", "", "only this repository, as owner/name")
+	cmd.Flags().IntVar(&limit, "limit", 0, "how many rules to list (default 50, max 200)")
+	return cmd
+}
+
+func newModApproveCmd(configPath *string) *cobra.Command {
+	var (
+		ruleText  string
+		moderator string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "approve <memory-id>",
+		Short: "Approve a rule, so later reviews can retrieve it",
+		Long: "Approve one rule. The id is the short id a confirmation reply named, or the full UUID.\n" +
+			"Passing --rule-text replaces the proposed wording; the replacement is re-embedded, so it is\n" +
+			"found by the words that were approved.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			service, _, closeDB, err := openModeration(*configPath)
+			if err != nil {
+				return err
+			}
+			defer closeDB()
+
+			memory, err := service.Approve(cmd.Context(), args[0], moderation.Decision{
+				RuleText:  ruleText,
+				Moderator: moderator,
+			})
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s/%s, %s)\n",
+				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Status)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&ruleText, "rule-text", "", "replace the proposed wording before approving")
+	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who made the decision, recorded as reviewed_by")
+	return cmd
+}
+
+func newModRejectCmd(configPath *string) *cobra.Command {
+	var moderator string
+
+	cmd := &cobra.Command{
+		Use:   "reject <memory-id>",
+		Short: "Reject a rule, so no review retrieves it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			service, _, closeDB, err := openModeration(*configPath)
+			if err != nil {
+				return err
+			}
+			defer closeDB()
+
+			memory, err := service.Reject(cmd.Context(), args[0], moderator)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "rejected %s (%s/%s, %s)\n",
+				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Status)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who made the decision, recorded as reviewed_by")
+	return cmd
+}
+
+// openModeration builds the service a moderation command needs: the configured
+// database, and the embedding provider an edit needs. A missing provider is not
+// an error here, because listing and rejecting do not need one.
+func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(), error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	logger := newLogger(cfg.App.LogLevel)
+	warnAboutModeration(cfg, logger, false)
+
+	if cfg.Database.DSN == "" {
+		return nil, nil, nil, fmt.Errorf("database.dsn is required to read the recorded rules")
+	}
+	if cfg.GitHub.InstallationID <= 0 {
+		return nil, nil, nil, fmt.Errorf("github.installation_id is required to scope the recorded rules")
+	}
+
+	ctx := context.Background()
+	db, err := store.Open(ctx, cfg.Database.DSN, cfg.Database.AutoMigrate)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	client, err := moderationEmbedder(cfg)
+	if err != nil {
+		db.Close()
+		return nil, nil, nil, err
+	}
+
+	service := moderation.NewService(db, client, cfg.GitHub.InstallationID, logger)
+	return service, logger, db.Close, nil
+}
+
+// moderationEmbedder builds the embedding client an edited rule is re-embedded
+// with, or returns nil when the operator configured no provider. The interface
+// is nil-checked by the service, so a nil client is a value here rather than an
+// error: memory is opt-in, and this surface has work to do without it.
+func moderationEmbedder(cfg *config.Config) (moderation.Embedder, error) {
+	provider, err := cfg.Models.EmbeddingProvider()
+	if err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		return nil, nil
+	}
+	client, err := embedder.New(provider)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func orDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+// oneLine condenses a rule onto one line of the table.
+func oneLine(text string) string {
+	const cap = 80
+	line := strings.Join(strings.Fields(text), " ")
+	if len(line) > cap {
+		return line[:cap] + "…"
+	}
+	return line
+}
