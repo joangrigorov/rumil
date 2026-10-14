@@ -1,0 +1,32 @@
+# --- Local agent operating contract (never committed) ---
+AGENTS.md
+
+# --- Agent session artifacts (never committed) ---
+walkthrough.md
+implementation_plan.md
+.agents/
+
+# --- Secrets & credentials ---
+.env
+.env.*
+*.pem
+*.key
+secrets/
+run/secrets/
+
+# --- Local runtime configuration (contains secret paths/values) ---
+rumil.yaml
+
+# --- Build output ---
+/rumil
+/bin/
+/dist/
+*.test
+coverage.out
+coverage.html
+
+# --- Editor / OS noise ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
