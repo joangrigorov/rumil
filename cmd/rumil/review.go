@@ -8,6 +8,7 @@ import (
 
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/reviewer"
+	"github.com/joangrigorov/rumil/internal/store"
 )
 
 // githubAPIBaseURL overrides the GitHub API endpoint. It is empty in
@@ -47,7 +48,19 @@ func newReviewCmd(configPath *string) *cobra.Command {
 				"pr", pr,
 			)
 
-			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL)
+			// The store is what pre-retrieval reads recorded rules from, so the
+			// one-shot review opens it only when the operator configured a
+			// database (project_plan.md §3 rule 6).
+			var db *store.DB
+			if cfg.Database.DSN != "" {
+				db, err = store.Open(cmd.Context(), cfg.Database.DSN, cfg.Database.AutoMigrate)
+				if err != nil {
+					return err
+				}
+				defer db.Close()
+			}
+
+			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL, db)
 			if err != nil {
 				return err
 			}

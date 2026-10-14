@@ -22,6 +22,7 @@ github:
 # RUMIL.md at the repository root, and capped at 32 KB.
 review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
+  resolve_threads: true           # the reviewer resolves its own review threads once it verifies the finding is gone
 
 # `rumil serve` drains this queue.
 worker:
@@ -53,6 +54,6 @@ database:                         # Required from v0.0.3
   auto_migrate: true
 
 moderation:                       # Used from v0.0.4
-  accept_all: false               # MUST stay false from v0.0.5 on
+  accept_all: false               # MUST stay false from v0.0.4 on: the bypass for the memory approval gate
   auto_approve_associations: []   # Optional, for example ["OWNER"]
   admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer token for the moderation UI and API

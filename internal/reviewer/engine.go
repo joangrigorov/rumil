@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	kit "github.com/mark3labs/kit/pkg/kit"
@@ -14,6 +15,7 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/mcpservers"
+	"github.com/joangrigorov/rumil/internal/store"
 )
 
 // providerWireOpenAICompat selects chat completions on the configured
@@ -53,11 +55,16 @@ type Engine struct {
 	cfg    *config.Config
 	logger *slog.Logger
 	auth   *ghapp.AppAuth
+	// memory is nil when the operator configured no embedding provider, which
+	// is what makes memory opt-in (project_plan.md §3 rule 6).
+	memory *memory
 }
 
-// NewEngine validates the GitHub App credentials and prepares the engine.
-// baseURL overrides the GitHub API endpoint and is empty outside tests.
-func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string) (*Engine, error) {
+// NewEngine validates the GitHub App credentials and prepares the engine. db is
+// the store pre-retrieval reads recorded rules from; it may be nil, and an
+// engine built without it reviews on the prompt alone. baseURL overrides the
+// GitHub API endpoint and is empty outside tests.
+func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string, db *store.DB) (*Engine, error) {
 	keyPEM, err := cfg.GitHub.ResolvePrivateKey()
 	if err != nil {
 		return nil, err
@@ -70,7 +77,12 @@ func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string) (*Engine
 		logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Engine{cfg: cfg, logger: logger, auth: auth}, nil
+	memory, err := newMemory(cfg, db, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Engine{cfg: cfg, logger: logger, auth: auth, memory: memory}, nil
 }
 
 // Review runs the review. The installation is verified before the session is
@@ -117,7 +129,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		mu     sync.Mutex
 		result Result
 	)
-	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.logger)
+
+	// The history is read once, before the session can submit anything: the
+	// block in the prompt and the baseline the session measures its own
+	// reviews against have to be the same read, or a review could count
+	// itself and close the threads it just opened (project_plan.md §7.1
+	// rule 4, T-020-07).
+	priorHistory, priorReviews := readPriorHistory(ctx, githubClient, e.cfg.App.BotHandle, e.logger)
+
+	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger, priorReviews)
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -128,7 +148,33 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		result.SkippedDuplicates = len(outcome.SkippedDuplicates)
 	}
 
-	sessionTools, err := kitTools(githubTools.Specs(), func(string) {
+	specs := githubTools.Specs()
+	memoryBlock := ""
+	memoryOn := e.memory != nil
+	if e.memory != nil {
+		// Pre-retrieval is best effort: an embedding provider that is down costs
+		// this review its recorded rules, which is the state an operator who
+		// never turned memory on is in, and is not worth failing a review over.
+		// The tools stay registered either way: memory is configured, so the
+		// session can still search, and a session that can search is told what
+		// a recorded rule is.
+		specs = append(specs, e.memory.tools(req)...)
+		block, retrieveErr := e.memory.retrieve(ctx, req, meta, guidelines != "")
+		if retrieveErr != nil {
+			e.logger.Warn("pre-retrieval of recorded rules failed, the review runs without them", "error", retrieveErr)
+		} else {
+			memoryBlock = block
+		}
+	}
+
+	// review.resolve_threads off takes the tool away, and the prompt rule that
+	// names it goes with it.
+	resolveThreads := e.cfg.Review.ThreadsResolvable()
+	if !resolveThreads {
+		specs = slices.DeleteFunc(specs, func(spec mcpservers.Spec) bool { return spec.Name == "resolve_review_thread" })
+	}
+
+	sessionTools, err := kitTools(specs, func(string) {
 		mu.Lock()
 		defer mu.Unlock()
 		result.ToolCalls++
@@ -137,7 +183,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines), sessionTools))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(SessionContext{
+		Guidelines:     guidelines,
+		Memories:       memoryBlock,
+		MemoryOn:       memoryOn,
+		PriorHistory:   priorHistory,
+		ResolveThreads: resolveThreads,
+	}), sessionTools, e.cfg.App.MaxAgentTurns))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -172,9 +224,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 }
 
 // sessionOptions builds the kit session configuration: isolated from host
-// state, no core tools (no shell, no file writes), and only the GitHub tool set
-// registered.
-func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool) *kit.Options {
+// state, no core tools (no shell, no file writes), and only the tool set the
+// caller passes. maxSteps bounds the tool loop.
+func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool, maxSteps int) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)
 	kit.WithModel(modelString(provider))(options)
@@ -191,7 +243,7 @@ func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, 
 		options.Temperature = &temperature
 	}
 
-	options.MaxSteps = e.cfg.App.MaxAgentTurns
+	options.MaxSteps = maxSteps
 	options.Quiet = true
 	options.ExtraTools = tools
 	return options

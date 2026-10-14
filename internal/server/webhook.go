@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -23,7 +24,14 @@ import (
 const (
 	eventPullRequest  = "pull_request"
 	eventIssueComment = "issue_comment"
+	// eventReviewComment is a reply inside a review thread. Its payload carries
+	// the diff hunk the comment hangs on, which the issue comment payload does
+	// not have.
+	eventReviewComment = "pull_request_review_comment"
 )
+
+// commandRemember is the one command the conversation supports.
+const commandRemember = "remember"
 
 // signatureHeader carries the HMAC of the raw webhook body.
 const signatureHeader = "X-Hub-Signature-256"
@@ -36,23 +44,28 @@ const healthTimeout = 2 * time.Second
 
 // Webhook verifies and dispatches GitHub deliveries.
 type Webhook struct {
-	secret   []byte
-	jobs     *store.DB
-	botLogin string
-	logger   *slog.Logger
+	secret         []byte
+	jobs           *store.DB
+	botLogin       string
+	installationID int64
+	logger         *slog.Logger
 }
 
 // NewWebhook takes the configured webhook secret and bot handle, so it can
-// tell a review request aimed at Rumil from one aimed at a person.
-func NewWebhook(secret, botHandle string, jobs *store.DB, logger *slog.Logger) *Webhook {
+// tell a review request aimed at Rumil from one aimed at a person, and the
+// installation Rumil serves. An App's webhook secret is account-wide, so a
+// delivery signed with it can belong to any installation of the App; only the
+// configured one has an installation token the engine can use.
+func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, logger *slog.Logger) *Webhook {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Webhook{
-		secret:   []byte(secret),
-		jobs:     jobs,
-		botLogin: normalizeBotLogin(botHandle),
-		logger:   logger,
+		secret:         []byte(secret),
+		jobs:           jobs,
+		botLogin:       ghapp.NormalizeLogin(botHandle),
+		installationID: installationID,
+		logger:         logger,
 	}
 }
 
@@ -61,17 +74,21 @@ func NewWebhook(secret, botHandle string, jobs *store.DB, logger *slog.Logger) *
 func Handler(webhook *Webhook, db *store.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/github", webhook)
-	mux.HandleFunc("GET /healthz", health(db))
+	mux.HandleFunc("GET /healthz", health(db, webhook.logger))
 	return mux
 }
 
-func health(db *store.DB) http.HandlerFunc {
+// health reports whether the database answers. A failed ping is logged rather
+// than returned: the response goes to whoever can reach the port, and the
+// driver's error names the host and the database.
+func health(db *store.DB, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
 		defer cancel()
 
 		if err := db.Ping(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "error": err.Error()})
+			logger.Error("the database health check failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -120,6 +137,7 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		w.logger.Info("queued a review",
 			"delivery_id", deliveryID, "event_type", eventType,
+			"installation_id", job.InstallationID,
 			"repo", job.OrgName+"/"+job.RepoName, "pr", job.PRNumber,
 		)
 		writeJSON(writer, http.StatusAccepted, map[string]string{"status": "queued"})
@@ -158,6 +176,13 @@ func (w *Webhook) validSignature(header string, body []byte) bool {
 // Reviewing is never automatic: the only pull request action that counts is a
 // review request aimed at Rumil itself.
 func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
+	if w.installationID > 0 && d.Installation.ID != w.installationID {
+		// Dropped before anything is written: a job for an installation Rumil
+		// cannot authenticate as would fail after the fact, and a remember
+		// command would leave a row behind while it did.
+		return store.Job{}, fmt.Sprintf("the delivery is for installation %d, and Rumil serves %d", d.Installation.ID, w.installationID)
+	}
+
 	switch eventType {
 	case eventPullRequest:
 		if d.Action != "review_requested" {
@@ -171,13 +196,41 @@ func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
 		}
 		return w.job(eventType, d, d.PullRequest.Number), ""
 
-	case eventIssueComment:
-		// GitHub Issues are out of scope: only a comment on a pull request
-		// carries the number the queue needs.
-		if d.Issue == nil || !d.Issue.isPullRequest() {
-			return store.Job{}, "comment is not on a pull request"
+	case eventIssueComment, eventReviewComment:
+		if d.Action != "created" {
+			return store.Job{}, fmt.Sprintf("%s action %q is not a new comment", eventType, d.Action)
 		}
-		return w.job(eventType, d, d.Issue.Number), ""
+		if d.Comment == nil {
+			return store.Job{}, "the payload carries no comment"
+		}
+		if d.Comment.User.Type == "Bot" {
+			// Rumil's own comments, and every other bot's, are dropped here:
+			// otherwise a comment that quotes the command would answer itself.
+			return store.Job{}, "the comment was written by a bot"
+		}
+		command, ok := parseCommand(w.botLogin, d.Comment.Body)
+		if !ok {
+			return store.Job{}, fmt.Sprintf("the comment carries no @%s command", w.botLogin)
+		}
+		if command.Verb != commandRemember {
+			return store.Job{}, fmt.Sprintf("command %q is not supported", command.Verb)
+		}
+		if command.Instruction == "" {
+			return store.Job{}, "the command carries no instruction"
+		}
+
+		if eventType == eventIssueComment {
+			// GitHub Issues are out of scope: only a comment on a pull request
+			// carries the number the queue needs.
+			if d.Issue == nil || !d.Issue.isPullRequest() {
+				return store.Job{}, "comment is not on a pull request"
+			}
+			return w.job(eventType, d, d.Issue.Number), ""
+		}
+		if d.PullRequest == nil {
+			return store.Job{}, "the payload carries no pull request"
+		}
+		return w.job(eventType, d, d.PullRequest.Number), ""
 
 	default:
 		return store.Job{}, fmt.Sprintf("event %q is not handled", eventType)
@@ -194,21 +247,12 @@ func (w *Webhook) job(eventType string, d payload, prNumber int) store.Job {
 	}
 }
 
-// normalizeBotLogin turns the configured handle into the login GitHub reports:
-// "@rumil" and "rumil[bot]" both become "rumil".
-func normalizeBotLogin(handle string) string {
-	login := strings.ToLower(strings.TrimSpace(handle))
-	login = strings.TrimPrefix(login, "@")
-	login = strings.TrimSuffix(login, "[bot]")
-	return login
-}
-
 // isBotReviewer reports whether the payload asked Rumil to review.
 func isBotReviewer(botLogin string, requested *requestedReviewer) bool {
 	if requested == nil || botLogin == "" {
 		return false
 	}
-	return requested.Type == "Bot" && normalizeBotLogin(requested.Login) == botLogin
+	return requested.Type == "Bot" && ghapp.NormalizeLogin(requested.Login) == botLogin
 }
 
 type payload struct {
@@ -225,6 +269,26 @@ type payload struct {
 	PullRequest       *pullRequest       `json:"pull_request"`
 	RequestedReviewer *requestedReviewer `json:"requested_reviewer"`
 	Issue             *issue             `json:"issue"`
+	Comment           *comment           `json:"comment"`
+}
+
+// comment is the comment a command arrives on, which is a review-thread reply
+// or a conversation comment depending on the event.
+type comment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
+	// AuthorAssociation is the commenter's standing in the repository. It is
+	// recorded for the untrusted-commenter guard of v0.0.5.
+	AuthorAssociation string `json:"author_association"`
+	HTMLURL           string `json:"html_url"`
+	// The next three are set on a review-thread reply only.
+	Path        string `json:"path"`
+	DiffHunk    string `json:"diff_hunk"`
+	InReplyToID int64  `json:"in_reply_to_id"`
 }
 
 type pullRequest struct {

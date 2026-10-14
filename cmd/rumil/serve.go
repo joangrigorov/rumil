@@ -65,13 +65,13 @@ func newServeCmd(configPath *string) *cobra.Command {
 				logger.Warn("requeued jobs interrupted by a previous run", "jobs", moved)
 			}
 
-			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL)
+			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL, db)
 			if err != nil {
 				return err
 			}
 
-			pool := server.NewPool(db, engine, cfg.Worker.Concurrency, logger)
-			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, db, logger)
+			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
+			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
 			httpServer := &http.Server{
 				Addr:              address,
 				Handler:           server.Handler(webhook, db),

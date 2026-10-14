@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/joangrigorov/rumil/internal/ghapp"
 )
@@ -35,32 +36,63 @@ type Spec struct {
 type GithubTools struct {
 	client       *ghapp.Client
 	maxDiffBytes int
+	botLogin     string
 	logger       *slog.Logger
 
 	// OnReviewSubmitted is called once a review reaches GitHub, so the caller
 	// can record the outcome of the session.
 	OnReviewSubmitted func(outcome ghapp.ReviewOutcome)
+
+	// reviews is the session's view of the review list: the baseline the
+	// history view and the resolution guard read.
+	reviewsMu   sync.Mutex
+	reviews     []ghapp.Review
+	reviewsRead bool
+
+	// resolutions counts the threads this review has closed, so the per-review
+	// cap holds whatever the model does with the tool.
+	resolutionsMu sync.Mutex
+	resolutions   int
 }
 
-// NewGithubTools scopes the tools to one pull request.
-func NewGithubTools(client *ghapp.Client, maxDiffBytes int, logger *slog.Logger) *GithubTools {
-	return &GithubTools{client: client, maxDiffBytes: maxDiffBytes, logger: logger}
+// NewGithubTools scopes the tools to one pull request. botHandle is the
+// configured handle, which is how a review recognises its own comments.
+//
+// priorReviews is the review list as it stood when the session was created, and
+// it is the session's baseline rather than a cache: the metadata tool reports
+// the last commit an earlier round reviewed against it, and the resolution
+// guard counts the rounds that happened before this session. A session that
+// read the list lazily could count the review it just submitted as an earlier
+// round and close the threads it had only just opened, which is why the
+// baseline is an argument and not something the tool set fills in on first use.
+// A nil slice is a session whose history could not be read; the resolution
+// guard then counts no earlier round, which is the safe direction.
+func NewGithubTools(client *ghapp.Client, maxDiffBytes int, botHandle string, logger *slog.Logger, priorReviews []ghapp.Review) *GithubTools {
+	return &GithubTools{
+		client:       client,
+		maxDiffBytes: maxDiffBytes,
+		botLogin:     botHandle,
+		logger:       logger,
+		reviews:      priorReviews,
+		reviewsRead:  true,
+	}
 }
 
-// Specs returns the tool set described in project_plan.md §5.1. Every tool is
-// read-only except submit_pr_review.
+// Specs returns the tool set described in project_plan.md §5.1. The reads are
+// diff, file, history; the writes are the review and, from a pull request's
+// second review on, closing Rumil's own threads with a reason.
 func (t *GithubTools) Specs() []Spec {
 	return []Spec{
 		{
 			Name:        "get_pr_metadata",
-			Description: "Return the pull request title, description, author, base and head SHAs, state, and the changed files with their addition and deletion counts.",
+			Description: "Return the pull request title, description, author, base and head SHAs, state, the changed files with their addition and deletion counts, and last_reviewed_commit: the SHA the most recent review was submitted against, empty when this pull request has not been reviewed yet.",
 			Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 			Handle:      t.getMetadata,
 		},
 		{
 			Name:        "get_pr_diff",
-			Description: "Return the pull request diff annotated with explicit old and new line numbers in the form [OLD:12 NEW:15] + code. Pass file_path to limit the result to one file and page to walk large diffs.",
-			Schema:      json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Limit the diff to a single changed file path."},"page":{"type":"integer","description":"1-based page number of the annotated diff."}},"additionalProperties":false}`),
+			Description: "Return the pull request diff annotated with explicit old and new line numbers in the form [OLD:12 NEW:15] + code. Pass file_path to limit the result to one file, since to read only the commits pushed after that SHA, and page to walk large diffs.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Limit the diff to a single changed file path."},"since":{"type":"string","description":"A commit SHA; the result holds only what changed after it, which is how a re-review reads its delta."},"page":{"type":"integer","description":"1-based page number of the annotated diff."}},"additionalProperties":false}`),
 			Handle:      t.getDiff,
 		},
 		{
@@ -70,10 +102,16 @@ func (t *GithubTools) Specs() []Spec {
 			Handle:      t.getFileContents,
 		},
 		{
-			Name:        "list_existing_review_comments",
-			Description: "List the review comments already posted on this pull request so the same finding is never reported twice.",
-			Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
-			Handle:      t.listExistingComments,
+			Name:        "list_pr_conversation",
+			Description: "Read the pull request's review history in one view: every review with its author, state, submitted commit and summary, every review thread with its comments, is_resolved and is_outdated, and the conversation comments. Call this before judging, so a finding an earlier round already raised is never repeated and a resolved thread is read as a decision. Threads come newest first; when more were left out, next_before names the thread to pass as before.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"include_resolved":{"type":"boolean","description":"Include resolved threads. Default true."},"path":{"type":"string","description":"Only threads on this file path."},"before":{"type":"string","description":"A thread id from an earlier page; the result starts at the thread after it."},"limit":{"type":"integer","description":"Threads to return, 1 to 100, default 30."}},"additionalProperties":false}`),
+			Handle:      t.listConversation,
+		},
+		{
+			Name:        "resolve_review_thread",
+			Description: "Close a review thread you opened, once the current code shows the finding is gone, and post the reason into the thread so the resolution is not silent. Only your own threads, only from the second review of a pull request, and at most 20 in one review.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"thread_id":{"type":"string","description":"The thread id from list_pr_conversation."},"reason":{"type":"string","description":"One line saying why the finding no longer applies."}},"required":["thread_id","reason"],"additionalProperties":false}`),
+			Handle:      t.resolveThread,
 		},
 		{
 			Name:        "submit_pr_review",
@@ -90,6 +128,16 @@ func (t *GithubTools) getMetadata(ctx context.Context, _ map[string]any) (string
 		return "", fmt.Errorf("get_pr_metadata failed: %w", err)
 	}
 
+	// The delta a re-review measures from. A failure to read the review list
+	// leaves it empty, which sends the model back to the whole diff: the safe
+	// direction, and not worth failing the metadata call over.
+	lastReviewed := ""
+	if reviews, err := t.readReviews(ctx); err != nil {
+		t.logger.Warn("reading the review list for last_reviewed_commit failed", "error", err)
+	} else {
+		lastReviewed = ghapp.LastReviewedCommitOf(reviews, t.botLogin)
+	}
+
 	type file struct {
 		Path      string `json:"path"`
 		Additions int    `json:"additions"`
@@ -101,33 +149,46 @@ func (t *GithubTools) getMetadata(ctx context.Context, _ map[string]any) (string
 	}
 
 	return marshalJSON(map[string]any{
-		"number":        meta.Number,
-		"title":         meta.Title,
-		"body":          meta.Body,
-		"author":        meta.Author,
-		"state":         meta.State,
-		"draft":         meta.Draft,
-		"base_sha":      meta.BaseSHA,
-		"head_sha":      meta.HeadSHA,
-		"changed_files": files,
+		"number":               meta.Number,
+		"title":                meta.Title,
+		"body":                 meta.Body,
+		"author":               meta.Author,
+		"state":                meta.State,
+		"draft":                meta.Draft,
+		"base_sha":             meta.BaseSHA,
+		"head_sha":             meta.HeadSHA,
+		"last_reviewed_commit": lastReviewed,
+		"changed_files":        files,
 	})
 }
 
 func (t *GithubTools) getDiff(ctx context.Context, args map[string]any) (string, error) {
 	filePath, _ := args["file_path"].(string)
+	since, _ := args["since"].(string)
 	page := intArg(args, "page")
 
-	diff, err := t.client.Diff(ctx)
+	diff, err := t.diff(ctx, since)
 	if err != nil {
 		return "", fmt.Errorf("get_pr_diff failed: %w", err)
+	}
+
+	header := ""
+	if since != "" {
+		header = fmt.Sprintf("diff of the commits after %s: only what the last review did not see\n", shortSHA(since))
+		if len(diff.Paths()) == 0 {
+			return header + "nothing changed after that commit\n", nil
+		}
 	}
 
 	if filePath != "" {
 		annotated := diff.Annotate(filePath)
 		if annotated == "" {
+			if since != "" {
+				return header + fmt.Sprintf("%s has no changes after %s\n", filePath, shortSHA(since)), nil
+			}
 			return "", fmt.Errorf("%s is not part of this pull request diff", filePath)
 		}
-		return annotated, nil
+		return header + annotated, nil
 	}
 
 	pages := diff.AnnotatedPages(t.maxDiffBytes)
@@ -138,11 +199,22 @@ func (t *GithubTools) getDiff(ctx context.Context, args map[string]any) (string,
 		return "", fmt.Errorf("page %d does not exist, the diff has %d pages", page, len(pages))
 	}
 
-	header := fmt.Sprintf("diff page %d of %d\n", page, len(pages))
 	if len(pages) > 1 {
-		header += "call get_pr_diff again with the next page number for the rest of the diff\n"
+		header += fmt.Sprintf("diff page %d of %d\ncall get_pr_diff again with the next page number for the rest of the diff\n", page, len(pages))
 	}
 	return header + pages[page-1], nil
+}
+
+// diff is the whole diff, or the part of it that landed after since.
+func (t *GithubTools) diff(ctx context.Context, since string) (*ghapp.Diff, error) {
+	if since == "" {
+		return t.client.Diff(ctx)
+	}
+	meta, err := t.client.Metadata(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the pull request metadata: %w", err)
+	}
+	return t.client.DiffSince(ctx, since, meta.HeadSHA)
 }
 
 func (t *GithubTools) getFileContents(ctx context.Context, args map[string]any) (string, error) {
@@ -159,24 +231,13 @@ func (t *GithubTools) getFileContents(ctx context.Context, args map[string]any) 
 	return content, nil
 }
 
-func (t *GithubTools) listExistingComments(ctx context.Context, _ map[string]any) (string, error) {
-	comments, err := t.client.ExistingReviewComments(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list_existing_review_comments failed: %w", err)
+// shortSHA is the seven-character form of a commit, which is what fits in a
+// header and what people write.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
 	}
-
-	type comment struct {
-		ID     int64  `json:"id"`
-		Path   string `json:"path"`
-		Line   int    `json:"line"`
-		Author string `json:"author"`
-		Body   string `json:"body"`
-	}
-	out := make([]comment, 0, len(comments))
-	for _, c := range comments {
-		out = append(out, comment{ID: c.ID, Path: c.Path, Line: c.Line, Author: c.Author, Body: c.Body})
-	}
-	return marshalJSON(out)
+	return sha
 }
 
 func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (string, error) {

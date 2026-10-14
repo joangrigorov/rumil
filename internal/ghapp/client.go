@@ -84,6 +84,9 @@ type ExistingComment struct {
 	Line   int
 	Body   string
 	Author string
+	// InReplyToID is the comment this one replies to, and zero when it opened
+	// the thread. It is what makes a thread walkable.
+	InReplyToID int64
 }
 
 // ReviewComment is one inline comment the reviewer wants to post.
@@ -363,10 +366,11 @@ func (c *Client) ExistingReviewComments(ctx context.Context) ([]ExistingComment,
 		}
 		for _, cm := range page {
 			comment := ExistingComment{
-				ID:   cm.GetID(),
-				Path: cm.GetPath(),
-				Line: cm.GetLine(),
-				Body: cm.GetBody(),
+				ID:          cm.GetID(),
+				Path:        cm.GetPath(),
+				Line:        cm.GetLine(),
+				Body:        cm.GetBody(),
+				InReplyToID: cm.GetInReplyTo(),
 			}
 			if user := cm.GetUser(); user != nil {
 				comment.Author = user.GetLogin()
