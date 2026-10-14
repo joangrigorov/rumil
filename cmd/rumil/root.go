@@ -23,6 +23,7 @@ func newRootCmd() *cobra.Command {
 
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "rumil.yaml", "path to the rumil configuration file")
 	root.AddCommand(newReviewCmd(&configPath))
+	root.AddCommand(newServeCmd(&configPath))
 
 	return root
 }

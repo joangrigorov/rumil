@@ -23,6 +23,13 @@ github:
 review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
 
+# `rumil serve` drains this queue.
+worker:
+  concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms
+
+server:
+  listen: ":8080"                 # HTTP address for the webhook endpoint, overridden by --listen
+
 models:
   default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider
   default_embedding: "text-embedding-3-small" # Required from v0.2.0

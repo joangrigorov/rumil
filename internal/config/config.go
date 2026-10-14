@@ -30,6 +30,11 @@ const (
 	// DefaultGuidelinesRef reads RUMIL.md from the pull request base SHA, so
 	// an untrusted branch cannot rewrite the repository's review policy.
 	DefaultGuidelinesRef = "base"
+	// DefaultWorkerConcurrency is the number of reviews `rumil serve` runs in
+	// parallel.
+	DefaultWorkerConcurrency = 4
+	// DefaultListen is the HTTP address of `rumil serve`.
+	DefaultListen = ":8080"
 )
 
 // GuidelinesRef values accepted by review.guidelines_ref.
@@ -50,9 +55,21 @@ type Config struct {
 	App        App        `yaml:"app"`
 	GitHub     GitHub     `yaml:"github"`
 	Review     Review     `yaml:"review"`
+	Worker     Worker     `yaml:"worker"`
+	Server     Server     `yaml:"server"`
 	Models     Models     `yaml:"models"`
 	Database   Database   `yaml:"database"`
 	Moderation Moderation `yaml:"moderation"`
+}
+
+// Worker tunes the review job pool of `rumil serve`.
+type Worker struct {
+	Concurrency int `yaml:"concurrency"`
+}
+
+// Server holds the HTTP surface settings of `rumil serve`.
+type Server struct {
+	Listen string `yaml:"listen"`
 }
 
 // App holds process-wide behavior switches.
@@ -160,6 +177,12 @@ func (c *Config) applyDefaults() {
 	if c.Review.GuidelinesRef == "" {
 		c.Review.GuidelinesRef = DefaultGuidelinesRef
 	}
+	if c.Worker.Concurrency == 0 {
+		c.Worker.Concurrency = DefaultWorkerConcurrency
+	}
+	if c.Server.Listen == "" {
+		c.Server.Listen = DefaultListen
+	}
 }
 
 // Validate enforces the schema rules that v0.0.1 depends on: app limits, GitHub
@@ -181,6 +204,10 @@ func (c *Config) Validate() error {
 	case GuidelinesRefBase, GuidelinesRefHead:
 	default:
 		return fmt.Errorf("review.guidelines_ref must be %q or %q, got %q", GuidelinesRefBase, GuidelinesRefHead, c.Review.GuidelinesRef)
+	}
+
+	if c.Worker.Concurrency < 1 {
+		return fmt.Errorf("worker.concurrency must be at least 1, got %d", c.Worker.Concurrency)
 	}
 
 	if err := c.GitHub.validate(); err != nil {
