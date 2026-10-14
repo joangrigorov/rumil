@@ -116,6 +116,7 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 	logger := p.logger.With(
 		"delivery_id", job.DeliveryID,
 		"job_id", job.ID,
+		"installation_id", job.InstallationID,
 		"repo", job.OrgName+"/"+job.RepoName,
 		"pr", job.PRNumber,
 		"event_type", job.EventType,
@@ -145,12 +146,15 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 		Number: job.PRNumber,
 	})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			// Leave the job RUNNING: the next start returns it to the queue.
+		if classifyFailure(err) == jobRetry {
 			logger.Warn("review interrupted, the job returns to the queue on the next start", "error", err)
 			return
 		}
-		logger.Error("review failed", "error", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("review exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+		} else {
+			logger.Error("review failed", "error", err)
+		}
 		p.finish(ctx, logger, job, false, err)
 		return
 	}
@@ -187,13 +191,17 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 
 	result, err := p.engine.Remember(commandCtx, req)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if classifyFailure(err) == jobRetry {
 			// Leave the job RUNNING: the next start returns it to the queue, and
 			// the short id in the answer is what stops it answering twice.
 			logger.Warn("command interrupted, the job returns to the queue on the next start", "error", err)
 			return
 		}
-		logger.Error("recording the rule failed", "error", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("the command exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+		} else {
+			logger.Error("recording the rule failed", "error", err)
+		}
 		p.finish(ctx, logger, job, false, err)
 		return
 	}
@@ -244,6 +252,33 @@ func (p *Pool) rememberRequest(job *store.Job) (reviewer.RememberRequest, error)
 		RequestedBy:   delivery.Comment.User.Login,
 		SourceComment: source,
 	}, nil
+}
+
+// jobFailure is what a failed job means for the queue.
+type jobFailure int
+
+const (
+	// jobRetry means the job was stopped rather than broken: the process is
+	// shutting down, and the next start returns the job to the queue.
+	jobRetry jobFailure = iota
+	// jobFailed means the job is recorded FAILED with its cause and is not run
+	// again.
+	jobFailed
+)
+
+// classifyFailure tells those two apart. The job's work runs on
+// context.WithoutCancel, so a cancellation is the process shutting down, while
+// the job's own deadline is the work spending its budget: a job that spent it
+// cannot finish on a retry, and leaving it RUNNING would requeue it on every
+// restart, burning a review's tokens each time and never recording why.
+func classifyFailure(err error) jobFailure {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return jobFailed
+	}
+	if errors.Is(err, context.Canceled) {
+		return jobRetry
+	}
+	return jobFailed
 }
 
 // finish records the job outcome on a context that survives a shutdown, so a

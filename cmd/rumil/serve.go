@@ -71,7 +71,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 			}
 
 			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
-			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, db, logger)
+			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
 			httpServer := &http.Server{
 				Addr:              address,
 				Handler:           server.Handler(webhook, db),

@@ -44,23 +44,28 @@ const healthTimeout = 2 * time.Second
 
 // Webhook verifies and dispatches GitHub deliveries.
 type Webhook struct {
-	secret   []byte
-	jobs     *store.DB
-	botLogin string
-	logger   *slog.Logger
+	secret         []byte
+	jobs           *store.DB
+	botLogin       string
+	installationID int64
+	logger         *slog.Logger
 }
 
 // NewWebhook takes the configured webhook secret and bot handle, so it can
-// tell a review request aimed at Rumil from one aimed at a person.
-func NewWebhook(secret, botHandle string, jobs *store.DB, logger *slog.Logger) *Webhook {
+// tell a review request aimed at Rumil from one aimed at a person, and the
+// installation Rumil serves. An App's webhook secret is account-wide, so a
+// delivery signed with it can belong to any installation of the App; only the
+// configured one has an installation token the engine can use.
+func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, logger *slog.Logger) *Webhook {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Webhook{
-		secret:   []byte(secret),
-		jobs:     jobs,
-		botLogin: ghapp.NormalizeLogin(botHandle),
-		logger:   logger,
+		secret:         []byte(secret),
+		jobs:           jobs,
+		botLogin:       ghapp.NormalizeLogin(botHandle),
+		installationID: installationID,
+		logger:         logger,
 	}
 }
 
@@ -69,17 +74,21 @@ func NewWebhook(secret, botHandle string, jobs *store.DB, logger *slog.Logger) *
 func Handler(webhook *Webhook, db *store.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/github", webhook)
-	mux.HandleFunc("GET /healthz", health(db))
+	mux.HandleFunc("GET /healthz", health(db, webhook.logger))
 	return mux
 }
 
-func health(db *store.DB) http.HandlerFunc {
+// health reports whether the database answers. A failed ping is logged rather
+// than returned: the response goes to whoever can reach the port, and the
+// driver's error names the host and the database.
+func health(db *store.DB, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), healthTimeout)
 		defer cancel()
 
 		if err := db.Ping(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "error": err.Error()})
+			logger.Error("the database health check failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -128,6 +137,7 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		w.logger.Info("queued a review",
 			"delivery_id", deliveryID, "event_type", eventType,
+			"installation_id", job.InstallationID,
 			"repo", job.OrgName+"/"+job.RepoName, "pr", job.PRNumber,
 		)
 		writeJSON(writer, http.StatusAccepted, map[string]string{"status": "queued"})
@@ -166,6 +176,13 @@ func (w *Webhook) validSignature(header string, body []byte) bool {
 // Reviewing is never automatic: the only pull request action that counts is a
 // review request aimed at Rumil itself.
 func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
+	if w.installationID > 0 && d.Installation.ID != w.installationID {
+		// Dropped before anything is written: a job for an installation Rumil
+		// cannot authenticate as would fail after the fact, and a remember
+		// command would leave a row behind while it did.
+		return store.Job{}, fmt.Sprintf("the delivery is for installation %d, and Rumil serves %d", d.Installation.ID, w.installationID)
+	}
+
 	switch eventType {
 	case eventPullRequest:
 		if d.Action != "review_requested" {

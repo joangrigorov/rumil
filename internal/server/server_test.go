@@ -138,7 +138,7 @@ type harnessOpts struct {
 }
 
 func (h *harness) webhook() *server.Webhook {
-	return server.NewWebhook(h.cfg.GitHub.WebhookSecret, h.cfg.App.BotHandle, h.db, h.logger)
+	return server.NewWebhook(h.cfg.GitHub.WebhookSecret, h.cfg.App.BotHandle, h.cfg.GitHub.InstallationID, h.db, h.logger)
 }
 
 func (h *harness) engine(t *testing.T, gh *testutil.FakeGitHub) *reviewer.Engine {
@@ -400,6 +400,40 @@ func TestT010_04_NoiseIsIgnored(t *testing.T) {
 	}
 	if queued != 0 {
 		t.Errorf("queued jobs = %d, want none of the noise to enqueue work", queued)
+	}
+}
+
+// An App's webhook secret is account-wide, so a signed delivery can belong to
+// another installation of the same App. Rumil serves one installation, and a
+// job for another would fail after the fact — for a remember command, after
+// writing a row for an organization the operator does not serve.
+func TestDeliveryForAnotherInstallationIsIgnored(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler := server.Handler(h.webhook(), h.db)
+
+	body := bytes.Replace(
+		reviewRequestedPayload("review_requested", "rumil[bot]", "Bot"),
+		[]byte(`"installation":{"id":98765432}`),
+		[]byte(`"installation":{"id":11111111}`),
+		1,
+	)
+	if !bytes.Contains(body, []byte("11111111")) {
+		t.Fatalf("the fixture does not carry the other installation: %s", body)
+	}
+
+	response := h.deliver(t, handler, "pull_request", "d-other-installation", body, sign(webhookSecret, body))
+	if response.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 with an ignored notice", response.Code)
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("ignored")) {
+		t.Errorf("body = %s, want an ignored notice", response.Body.String())
+	}
+	if queued, err := h.db.CountJobs(context.Background(), store.StatusQueued); err != nil {
+		t.Fatalf("CountJobs returned error: %v", err)
+	} else if queued != 0 {
+		t.Errorf("queued jobs = %d, want the other installation to enqueue nothing", queued)
 	}
 }
 
