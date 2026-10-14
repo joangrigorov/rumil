@@ -244,6 +244,36 @@ func TestProposeMemoryApprovesWhenAcceptAllIsOn(t *testing.T) {
 	}
 }
 
+// T-020-06 (second half): the chain "propose with accept_all on, retrieve it"
+// runs as one flow, so the retrieval half is proven against a row the gate let
+// through rather than against one a test wrote APPROVED itself.
+func TestAcceptAllProposalIsRetrievable(t *testing.T) {
+	db := testMemoryStore(t)
+	embedder := newFakeEmbedder()
+	session := memoryTenant("accept-all-recall")
+	session.AcceptAll = true
+	const rule = "Clock skew of up to 60 seconds is intentional in the JWT validator"
+
+	writing := mcpservers.NewMemoryTools(db, embedder, session, memoryLogger())
+	proposed := decode[proposeResult](t, mustCall(t, writing.ProposeSpecs(), "propose_memory", map[string]any{
+		"rule_text": rule,
+		"rationale": "the author confirmed it in review",
+		"path_glob": "pkg/auth/**",
+	}))
+	if proposed.Status != store.MemoryApproved {
+		t.Fatalf("status = %s, want %s with accept_all on", proposed.Status, store.MemoryApproved)
+	}
+
+	reading := mcpservers.NewMemoryTools(db, embedder, session, memoryLogger())
+	out := decode[searchResult](t, mustCall(t, reading.SearchSpecs(), "search_memory", map[string]any{
+		"query":     rule,
+		"file_path": "pkg/auth/jwt.go",
+	}))
+	if out.Count != 1 || out.Rules[0].ID != proposed.ID {
+		t.Errorf("search returned %+v, want the rule accept_all approved", out.Rules)
+	}
+}
+
 // T-020-04: the second developer asking for the same rule is answered with the
 // memory the first one produced.
 func TestProposeMemoryAnswersADuplicateWithTheExistingMemory(t *testing.T) {

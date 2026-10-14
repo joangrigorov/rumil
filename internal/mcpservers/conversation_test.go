@@ -69,8 +69,9 @@ type conversationResult struct {
 		Author string `json:"author"`
 		Body   string `json:"body"`
 	} `json:"conversation"`
-	ThreadsOmitted int    `json:"threads_omitted"`
-	NextBefore     string `json:"next_before"`
+	ThreadsOmitted      int    `json:"threads_omitted"`
+	ConversationOmitted int    `json:"conversation_omitted"`
+	NextBefore          string `json:"next_before"`
 }
 
 // historyFixture is a pull request reviewed once, with one open thread, one
@@ -285,6 +286,94 @@ func TestResolveReviewThreadIsRefusedOnTheFirstReview(t *testing.T) {
 	}
 	if resolved := gh.Resolved(); len(resolved) != 0 {
 		t.Errorf("resolved %v, want no mutation", resolved)
+	}
+}
+
+// The baseline is what the session was built with, not what the api says when
+// the guard runs: a session that submits its own review first must still be
+// refused, or a prompt injection could talk a first pass into closing the
+// findings it just raised.
+func TestResolveReviewThreadIsRefusedWhenThisSessionSubmitsFirst(t *testing.T) {
+	gh := historyFixture(t)
+	gh.ExistingReviews = nil
+	tools := newGithubTools(t, gh, "@rumil")
+
+	if _, err := callTool(t, tools.Specs(), "submit_pr_review", map[string]any{
+		"event": "COMMENT", "summary_body": "round one",
+	}); err != nil {
+		t.Fatalf("submit_pr_review returned error: %v", err)
+	}
+	// The submitted review is on the pull request now, so a lazy read would
+	// count it as an earlier round.
+	reviews, err := ghapp.NewClient(fakeClient(t, gh), gh.Owner, gh.Repo, gh.Number).Reviews(context.Background())
+	if err != nil {
+		t.Fatalf("reading the fake review list: %v", err)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("the fake serves %d reviews after submitting one, want 1", len(reviews))
+	}
+
+	if _, err := callTool(t, tools.Specs(), "resolve_review_thread", map[string]any{
+		"thread_id": "PRRT_open", "reason": "fixed",
+	}); err == nil || !strings.Contains(err.Error(), "second review") {
+		t.Errorf("error = %v, want a refusal: this session's own review is not an earlier round", err)
+	}
+	if resolved := gh.Resolved(); len(resolved) != 0 {
+		t.Errorf("resolved %v, want no mutation", resolved)
+	}
+}
+
+// A cursor the filters exclude is an error rather than a silent restart at the
+// top of the list, which would send a caller walking next_before in a loop.
+func TestListConversationRejectsACursorOutsideTheView(t *testing.T) {
+	gh := historyFixture(t)
+	tools := newGithubTools(t, gh, "@rumil")
+
+	_, err := callTool(t, tools.Specs(), "list_pr_conversation", map[string]any{"before": "PRRT_gone"})
+	if err == nil || !strings.Contains(err.Error(), "PRRT_gone") {
+		t.Errorf("error = %v, want a refusal naming the cursor", err)
+	}
+
+	// A cursor that the filter excludes is the same case: the page it came from
+	// had the thread, this one does not.
+	_, err = callTool(t, tools.Specs(), "list_pr_conversation", map[string]any{
+		"before": "PRRT_fixed", "include_resolved": false,
+	})
+	if err == nil || !strings.Contains(err.Error(), "PRRT_fixed") {
+		t.Errorf("error = %v, want a refusal naming the excluded cursor", err)
+	}
+}
+
+// One long conversation cannot fill the call: the newest comments arrive and
+// the response says how many were left out.
+func TestListConversationBoundsTheConversation(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	for i := 0; i < 40; i++ {
+		gh.IssueComments = append(gh.IssueComments,
+			testutil.ReviewComment(int64(200+i), 0, "octocat", strings.Repeat("x", 4<<10)))
+	}
+	gh.IssueComments = append(gh.IssueComments, testutil.ReviewComment(999, 0, "octocat", "the newest question"))
+	tools := newGithubTools(t, gh, "@rumil")
+
+	out := decode[conversationResult](t, mustCall(t, tools.Specs(), "list_pr_conversation", nil))
+
+	if len(out.Conversation) == 0 {
+		t.Fatal("no conversation comment came back")
+	}
+	if len(out.Conversation) == len(gh.IssueComments) {
+		t.Errorf("returned all %d comments, want the budget to bite", len(out.Conversation))
+	}
+	last := out.Conversation[len(out.Conversation)-1]
+	if last.ID != 999 {
+		t.Errorf("the last comment is %d, want the newest one", last.ID)
+	}
+	if out.ConversationOmitted != len(gh.IssueComments)-len(out.Conversation) {
+		t.Errorf("conversation_omitted = %d, want %d", out.ConversationOmitted, len(gh.IssueComments)-len(out.Conversation))
+	}
+	for _, comment := range out.Conversation {
+		if len(comment.Body) > 4<<10+len("\n[trimmed]") {
+			t.Errorf("a comment of %d bytes was returned in full", len(comment.Body))
+		}
 	}
 }
 

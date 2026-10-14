@@ -9,12 +9,13 @@ import (
 	"github.com/joangrigorov/rumil/internal/ghapp"
 )
 
-// Bounds on the conversation view. Reviews are the narrative a later round
-// reads first, so they are not part of the thread budget; a thread is dropped
-// whole rather than cut in half.
+// Bounds on the conversation view. The byte budget is what keeps one long
+// thread or comment from filling the model's context; the page size is what
+// keeps one call from returning a whole pull request's history.
 const (
 	conversationByteBudget = 32 << 10
 	reviewBodyCap          = 4 << 10
+	conversationBodyCap    = 4 << 10
 	conversationPageMin    = 1
 	conversationPageMax    = 100
 	conversationPageSize   = 30
@@ -41,7 +42,7 @@ func (t *GithubTools) listConversation(ctx context.Context, args map[string]any)
 		limit = conversationPageMax
 	}
 
-	reviews, err := t.client.Reviews(ctx)
+	reviews, err := t.readReviews(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list_pr_conversation failed: %w", err)
 	}
@@ -54,20 +55,42 @@ func (t *GithubTools) listConversation(ctx context.Context, args map[string]any)
 		return "", fmt.Errorf("list_pr_conversation failed: %w", err)
 	}
 
-	page, omitted, next := t.threadPage(threads, includeResolved, path, before, limit)
+	page, omitted, next, err := t.threadPage(threads, includeResolved, path, before, limit)
+	if err != nil {
+		return "", fmt.Errorf("list_pr_conversation failed: %w", err)
+	}
+	// The threads page owns the budget it filled; the conversation gets what is
+	// left, newest first, so the tail of a long discussion still arrives.
+	comments, commentsOmitted := renderConversation(conversation, conversationByteBudget-pageBytes(page))
 	return marshalJSON(map[string]any{
-		"reviews":         t.renderReviews(reviews),
-		"threads":         page,
-		"conversation":    renderConversation(conversation),
-		"threads_omitted": omitted,
-		"next_before":     next,
+		"reviews":              t.renderReviews(reviews),
+		"threads":              page,
+		"conversation":         comments,
+		"threads_omitted":      omitted,
+		"conversation_omitted": commentsOmitted,
+		"next_before":          next,
 	})
+}
+
+// pageBytes is the encoded size of a rendered thread page.
+func pageBytes(page []map[string]any) int {
+	size := 0
+	for _, thread := range page {
+		encoded, err := marshalJSON(thread)
+		if err != nil {
+			continue
+		}
+		size += len(encoded)
+	}
+	return size
 }
 
 // threadPage selects the threads to return: newest first, the ones the caller
 // asked for, up to the limit and the byte budget. It returns how many threads
-// were left out and the cursor that reads the next page.
-func (t *GithubTools) threadPage(threads []ghapp.ReviewThread, includeResolved bool, path, before string, limit int) (page []map[string]any, omitted int, next string) {
+// were left out and the cursor that reads the next page. A cursor the filters
+// exclude is an error rather than a silent restart at the top of the list,
+// which would leave a caller walking next_before in a loop.
+func (t *GithubTools) threadPage(threads []ghapp.ReviewThread, includeResolved bool, path, before string, limit int) (page []map[string]any, omitted int, next string, err error) {
 	eligible := make([]ghapp.ReviewThread, 0, len(threads))
 	for _, thread := range threads {
 		if !includeResolved && thread.IsResolved {
@@ -86,11 +109,15 @@ func (t *GithubTools) threadPage(threads []ghapp.ReviewThread, includeResolved b
 
 	start := 0
 	if before != "" {
+		found := false
 		for i, thread := range eligible {
 			if thread.ID == before {
-				start = i + 1
+				start, found = i+1, true
 				break
 			}
+		}
+		if !found {
+			return nil, 0, "", fmt.Errorf("no thread %s in this view: it is missing, already returned, or excluded by include_resolved and path", before)
 		}
 	}
 
@@ -119,7 +146,7 @@ func (t *GithubTools) threadPage(threads []ghapp.ReviewThread, includeResolved b
 	if remaining > 0 && len(page) > 0 {
 		next, _ = page[len(page)-1]["id"].(string)
 	}
-	return page, remaining, next
+	return page, remaining, next, nil
 }
 
 func renderThread(thread ghapp.ReviewThread) map[string]any {
@@ -148,8 +175,8 @@ func renderThread(thread ghapp.ReviewThread) map[string]any {
 
 // renderReviews lists the reviews oldest first. Rumil's own summaries are the
 // narrative spine, so they are kept whole; another author's long body is
-// trimmed, because the model needs to know a review happened more than it needs
-// every word of it.
+// trimmed, and every body is capped, because a review body is text someone else
+// wrote (T-020-07).
 func (t *GithubTools) renderReviews(reviews []ghapp.Review) []map[string]any {
 	rendered := make([]map[string]any, 0, len(reviews))
 	for _, review := range reviews {
@@ -173,20 +200,47 @@ func (t *GithubTools) renderReviews(reviews []ghapp.Review) []map[string]any {
 	return rendered
 }
 
-func renderConversation(comments []ghapp.ConversationComment) []map[string]any {
-	rendered := make([]map[string]any, 0, len(comments))
-	for _, comment := range comments {
-		entry := map[string]any{
-			"id":     comment.ID,
-			"author": comment.Author,
-			"body":   comment.Body,
+// renderConversation renders the conversation comments, oldest first, keeping
+// the newest that fit the budget and reporting how many older ones were left
+// out: a long discussion is read from its tail, which is where the answer to
+// the current round usually is.
+func renderConversation(comments []ghapp.ConversationComment, budget int) ([]map[string]any, int) {
+	kept := make([]map[string]any, 0, len(comments))
+	size := 0
+	for i := len(comments) - 1; i >= 0; i-- {
+		entry := renderConversationComment(comments[i])
+		encoded, err := marshalJSON(entry)
+		if err != nil {
+			continue
 		}
-		if !comment.CreatedAt.IsZero() {
-			entry["created_at"] = comment.CreatedAt.Format(time.RFC3339)
+		if size+len(encoded) > budget && len(kept) > 0 {
+			break
 		}
-		rendered = append(rendered, entry)
+		size += len(encoded)
+		kept = append(kept, entry)
 	}
-	return rendered
+
+	rendered := make([]map[string]any, 0, len(kept))
+	for i := len(kept) - 1; i >= 0; i-- {
+		rendered = append(rendered, kept[i])
+	}
+	return rendered, len(comments) - len(rendered)
+}
+
+func renderConversationComment(comment ghapp.ConversationComment) map[string]any {
+	body := comment.Body
+	if len(body) > conversationBodyCap {
+		body = body[:conversationBodyCap] + "\n[trimmed]"
+	}
+	entry := map[string]any{
+		"id":     comment.ID,
+		"author": comment.Author,
+		"body":   body,
+	}
+	if !comment.CreatedAt.IsZero() {
+		entry["created_at"] = comment.CreatedAt.Format(time.RFC3339)
+	}
+	return entry
 }
 
 // resolveThread closes one of Rumil's own threads once the current code shows
