@@ -44,6 +44,9 @@ type CommentEntry struct {
 	} `json:"user"`
 	// InReplyToID is zero for a comment that opened a thread.
 	InReplyToID int64 `json:"in_reply_to_id"`
+	// CreatedAt is when the comment was written, which is how threads are
+	// ordered newest first.
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // PostedComment is one comment Rumil posted: a reply inside a review thread, or
@@ -54,15 +57,41 @@ type PostedComment struct {
 }
 
 // ReviewComment builds a comment fixture for the fake's comment endpoints. The
-// reported type follows the login, so a bot fixture looks like one.
+// reported type follows the login, so a bot fixture looks like one, and the
+// timestamp follows the id, so a higher id is a newer comment.
 func ReviewComment(id, inReplyTo int64, login, body string) CommentEntry {
-	entry := CommentEntry{ID: id, Path: "main.go", Body: body, InReplyToID: inReplyTo}
+	entry := CommentEntry{
+		ID:          id,
+		Path:        "main.go",
+		Body:        body,
+		InReplyToID: inReplyTo,
+		CreatedAt:   time.Date(2026, 1, 2, 15, 0, 0, 0, time.UTC).Add(time.Duration(id) * time.Minute),
+	}
 	entry.User.Login = login
 	entry.User.Type = "User"
 	if strings.HasSuffix(login, "[bot]") {
 		entry.User.Type = "Bot"
 	}
 	return entry
+}
+
+// ReviewEntry is one review the pull request already received.
+type ReviewEntry struct {
+	ID       int64  `json:"id"`
+	Author   string `json:"author"`
+	State    string `json:"state"`
+	Body     string `json:"body"`
+	CommitID string `json:"commit_id"`
+}
+
+// ThreadEntry is one review thread the GraphQL endpoint serves.
+type ThreadEntry struct {
+	ID         string         `json:"id"`
+	Path       string         `json:"path"`
+	Line       int            `json:"line"`
+	IsResolved bool           `json:"is_resolved"`
+	IsOutdated bool           `json:"is_outdated"`
+	Comments   []CommentEntry `json:"comments"`
 }
 
 // SubmittedReview captures a POST to the reviews endpoint.
@@ -101,11 +130,26 @@ type FakeGitHub struct {
 	ContentsByRef map[string]map[string]string
 	// Blobs backs the git blobs endpoint. handleContents fills it for files the
 	// contents API declines to inline.
-	Blobs    map[string]string
+	Blobs map[string]string
+	// Comments are the review comments the pull request already carries.
 	Comments []CommentEntry
 	// IssueComments are the conversation comments the pull request already
 	// carries.
 	IssueComments []CommentEntry
+	// ExistingReviews are the reviews the pull request received before this
+	// session, oldest first. Reviews submitted through the fake are appended to
+	// them when the list is served.
+	ExistingReviews []ReviewEntry
+	// Threads are the review threads the GraphQL endpoint serves, and
+	// ResolvedThreads records the ids the mutation was called with.
+	Threads         []ThreadEntry
+	ResolvedThreads []string
+	// SinceDiff is served by the compare endpoint, which is how a later round
+	// reads only the new commits.
+	SinceDiff string
+	// GraphQLErrors, when set, is returned in the errors array of every
+	// GraphQL response.
+	GraphQLErrors []string
 	// Posted collects the comments Rumil posted through the reply and
 	// conversation endpoints.
 	Posted []PostedComment
@@ -215,6 +259,13 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.handlePull(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/files":
 		f.writeJSON(w, http.StatusOK, f.Files)
+	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/reviews":
+		f.writeJSON(w, http.StatusOK, f.reviewsJSON())
+	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+		f.handleGraphQL(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/compare/"):
+		w.Header().Set("Content-Type", "application/vnd.github.v3.diff")
+		_, _ = w.Write([]byte(f.SinceDiff))
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/comments":
 		f.writeJSON(w, http.StatusOK, f.Comments)
 	case r.Method == http.MethodPost && r.URL.Path == f.pullPath()+"/comments":
@@ -442,6 +493,134 @@ func (f *FakeGitHub) botLogin() string {
 		return f.BotLogin
 	}
 	return "rumil[bot]"
+}
+
+// reviewsJSON renders the stored reviews in the shape of the REST endpoint.
+// reviewsJSON renders the reviews the endpoint serves: the ones the fixture
+// already holds, then the ones submitted through this fake, which GitHub would
+// serve the same way, each against the head commit it was submitted on.
+func (f *FakeGitHub) reviewsJSON() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	submittedAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	entry := func(id int64, author, state, body, commit string) map[string]any {
+		return map[string]any{
+			"id":           id,
+			"state":        state,
+			"body":         body,
+			"commit_id":    commit,
+			"user":         map[string]string{"login": author, "type": "Bot"},
+			"submitted_at": submittedAt,
+		}
+	}
+
+	out := make([]map[string]any, 0, len(f.ExistingReviews)+len(f.Reviews))
+	for _, review := range f.ExistingReviews {
+		out = append(out, entry(review.ID, review.Author, review.State, review.Body, review.CommitID))
+	}
+	for i, review := range f.Reviews {
+		out = append(out, entry(int64(i+1), f.botLogin(), reviewState(review.Event), review.Body, f.HeadSHA))
+	}
+	return out
+}
+
+// handleGraphQL answers the two operations Rumil issues. It reads the query
+// text rather than parsing the document, which is enough to serve a fixture.
+func (f *FakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		f.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "malformed graphql request"})
+		return
+	}
+
+	f.mu.Lock()
+	errors := append([]string(nil), f.GraphQLErrors...)
+	f.mu.Unlock()
+
+	if len(errors) > 0 {
+		entries := make([]map[string]string, 0, len(errors))
+		for _, message := range errors {
+			entries = append(entries, map[string]string{"message": message, "type": "FORBIDDEN"})
+		}
+		f.writeJSON(w, http.StatusOK, map[string]any{"data": nil, "errors": entries})
+		return
+	}
+
+	switch {
+	case strings.Contains(body.Query, "resolveReviewThread"):
+		threadID, _ := body.Variables["threadId"].(string)
+		f.mu.Lock()
+		f.ResolvedThreads = append(f.ResolvedThreads, threadID)
+		for i := range f.Threads {
+			if f.Threads[i].ID == threadID {
+				f.Threads[i].IsResolved = true
+			}
+		}
+		f.mu.Unlock()
+		f.writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			"resolveReviewThread": map[string]any{"thread": map[string]any{"id": threadID, "isResolved": true}},
+		}})
+	case strings.Contains(body.Query, "reviewThreads"):
+		f.writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			"repository": map[string]any{
+				"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+						"nodes":    f.threadNodes(),
+					},
+				},
+			},
+		}})
+	default:
+		f.writeJSON(w, http.StatusOK, map[string]any{
+			"data":   nil,
+			"errors": []map[string]string{{"message": "the query is not one this fake serves", "type": "BAD_REQUEST"}},
+		})
+	}
+}
+
+// threadNodes renders the stored threads in the shape of the GraphQL query.
+func (f *FakeGitHub) threadNodes() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	nodes := make([]map[string]any, 0, len(f.Threads))
+	for _, thread := range f.Threads {
+		comments := make([]map[string]any, 0, len(thread.Comments))
+		for _, comment := range thread.Comments {
+			comments = append(comments, map[string]any{
+				"databaseId": comment.ID,
+				"author":     map[string]string{"login": comment.User.Login},
+				"body":       comment.Body,
+				"path":       thread.Path,
+				"line":       thread.Line,
+				"createdAt":  comment.CreatedAt.Format(time.RFC3339),
+			})
+		}
+		nodes = append(nodes, map[string]any{
+			"id":         thread.ID,
+			"isResolved": thread.IsResolved,
+			"isOutdated": thread.IsOutdated,
+			"path":       thread.Path,
+			"line":       thread.Line,
+			"comments": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": false},
+				"nodes":    comments,
+			},
+		})
+	}
+	return nodes
+}
+
+// Resolved returns the thread ids the mutation was called with.
+func (f *FakeGitHub) Resolved() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ResolvedThreads...)
 }
 
 func (f *FakeGitHub) writeJSON(w http.ResponseWriter, status int, body any) {
