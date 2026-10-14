@@ -384,13 +384,17 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * Log a startup security warning when `accept_all: true` is configured.
 2. **Untrusted Commenter Guard:**
    * Reject `@rumil remember` commands from users with `author_association == "NONE"` or `"FIRST_TIME_CONTRIBUTOR"` on public repos so external actors cannot flood the moderation queue or burn embedding API credits.
+   * The guard is an allow-list rather than those two names: a public repository accepts a command only from `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR`, so an association GitHub adds later, an unknown value, and an absent field all fail closed. The check runs in the webhook, so a dropped command never reaches the database, the model, or the embedder. A private repository needs no check: everybody who can comment on one already has access to it.
 3. **CLI Moderation (`cmd/rumil/mod.go`):**
-   * `rumil mod list [--status pending|approved|rejected] [--repo owner/repo]`
-   * `rumil mod approve <memory-id> [--rule-text "optional edited text"]` (re-embeds if `rule_text` was edited)
-   * `rumil mod reject <memory-id>`
+   * `rumil mod list [--status pending|approved|rejected] [--repo owner/repo] [--limit n]`
+   * `rumil mod approve <memory-id> [--rule-text "optional edited text"] [--moderator name]` (re-embeds if `rule_text` was edited)
+   * `rumil mod reject <memory-id> [--moderator name]`
+   * `<memory-id>` is the full UUID or the short id the confirmation reply named. `--moderator` defaults to `cli`, because nothing here reads the host's identity: `reviewed_by` records what the team says it is.
 4. **Web UI Moderation (`internal/server/mod_ui.go`):**
-   * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time via `subtle.ConstantTimeCompare`. No login page, no sessions, no cookies.
-   * Serves lightweight server-rendered HTML (`html/template` + HTMX) at `/ui/moderation` allowing maintainers to filter by repo/status, inline-edit `rule_text` and `path_glob`, and click **Approve** or **Reject**.
+   * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time via `subtle.ConstantTimeCompare`. No login page, no sessions, no cookies. An unset token disables the surface: every request is refused rather than served to anyone.
+   * The token is also accepted as the password of a basic credential, because a browser cannot set an `Authorization` header of its own and basic auth is what lets a maintainer use the page without a login route, a cookie, or a line of JavaScript.
+   * Serves server-rendered HTML (`html/template`) at `/ui/moderation` allowing maintainers to filter by repo/status, inline-edit `rule_text` and `path_glob`, and click **Approve** or **Reject**. The page needs no JavaScript: each action is a plain form post to `/api/moderation/{id}/approve|reject`, and the answer is a redirect back to the filtered list. HTMX was dropped deliberately — on a surface that can promote unvetted text into a review prompt, the less machinery between the operator and the decision the better, and it keeps the page working offline.
+   * `POST /api/moderation/{id}/approve|reject` answers JSON to a client that does not ask for HTML, which is the API half of `T-030-06`.
 
 #### Mandatory Verification Matrix — `v0.0.5`
 
