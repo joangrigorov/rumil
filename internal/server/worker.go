@@ -240,17 +240,18 @@ func (p *Pool) rememberRequest(job *store.Job) (reviewer.RememberRequest, error)
 	}
 
 	return reviewer.RememberRequest{
-		Owner:         job.OrgName,
-		Repo:          job.RepoName,
-		Number:        job.PRNumber,
-		Command:       command.Instruction,
-		CommentID:     delivery.Comment.ID,
-		InReplyToID:   delivery.Comment.InReplyToID,
-		Conversation:  job.EventType == eventIssueComment,
-		Path:          delivery.Comment.Path,
-		DiffHunk:      delivery.Comment.DiffHunk,
-		RequestedBy:   delivery.Comment.User.Login,
-		SourceComment: source,
+		Owner:             job.OrgName,
+		Repo:              job.RepoName,
+		Number:            job.PRNumber,
+		Command:           command.Instruction,
+		CommentID:         delivery.Comment.ID,
+		InReplyToID:       delivery.Comment.InReplyToID,
+		Conversation:      job.EventType == eventIssueComment,
+		Path:              delivery.Comment.Path,
+		DiffHunk:          delivery.Comment.DiffHunk,
+		RequestedBy:       delivery.Comment.User.Login,
+		AuthorAssociation: delivery.Comment.AuthorAssociation,
+		SourceComment:     source,
 	}, nil
 }
 

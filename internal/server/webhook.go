@@ -70,11 +70,15 @@ func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, 
 }
 
 // Handler builds the routes of `rumil serve`. Method patterns make the mux
-// answer 405 for anything else.
-func Handler(webhook *Webhook, db *store.DB) http.Handler {
+// answer 405 for anything else. moderation may be nil, and its routes are then
+// not mounted at all.
+func Handler(webhook *Webhook, db *store.DB, moderation *ModerationUI) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/github", webhook)
 	mux.HandleFunc("GET /healthz", health(db, webhook.logger))
+	if moderation != nil {
+		moderation.Routes(mux)
+	}
 	return mux
 }
 
@@ -218,6 +222,13 @@ func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
 		if command.Instruction == "" {
 			return store.Job{}, "the command carries no instruction"
 		}
+		if !w.mayRecordRules(d) {
+			// Dropped here rather than in the worker, so an outsider's command
+			// never reaches the database, the model, or the embedder: the point
+			// is that it costs the operator nothing.
+			return store.Job{}, fmt.Sprintf("a commenter with author_association %q cannot record rules on a public repository",
+				d.Comment.AuthorAssociation)
+		}
 
 		if eventType == eventIssueComment {
 			// GitHub Issues are out of scope: only a comment on a pull request
@@ -255,6 +266,27 @@ func isBotReviewer(botLogin string, requested *requestedReviewer) bool {
 	return requested.Type == "Bot" && ghapp.NormalizeLogin(requested.Login) == botLogin
 }
 
+// mayRecordRules reports whether the commenter's standing is enough to record a
+// rule. A public repository is readable by everyone, so anyone can post a
+// command on it; accepting it would let an outsider queue proposals and spend
+// the operator's embedding credits, so a public repository accepts a command
+// only from a commenter with a standing in it. A private repository needs no
+// check, because everybody who can comment on one already has access to it.
+func (w *Webhook) mayRecordRules(d payload) bool {
+	if d.Repository.Private {
+		return true
+	}
+	if d.Comment == nil {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(d.Comment.AuthorAssociation)) {
+	case "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR":
+		return true
+	default:
+		return false
+	}
+}
+
 type payload struct {
 	Action       string `json:"action"`
 	Installation struct {
@@ -265,6 +297,10 @@ type payload struct {
 		Owner struct {
 			Login string `json:"login"`
 		} `json:"owner"`
+		// Private decides whether a commenter's standing has to be checked
+		// before a command is accepted: everybody who can see a private
+		// repository already has access to it.
+		Private bool `json:"private"`
 	} `json:"repository"`
 	PullRequest       *pullRequest       `json:"pull_request"`
 	RequestedReviewer *requestedReviewer `json:"requested_reviewer"`
@@ -282,7 +318,8 @@ type comment struct {
 		Type  string `json:"type"`
 	} `json:"user"`
 	// AuthorAssociation is the commenter's standing in the repository. It is
-	// recorded for the untrusted-commenter guard of v0.0.5.
+	// what the untrusted-commenter guard reads, and what decides whether a rule
+	// this comment records is exempt from moderation.
 	AuthorAssociation string `json:"author_association"`
 	HTMLURL           string `json:"html_url"`
 	// The next three are set on a review-thread reply only.

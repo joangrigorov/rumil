@@ -53,7 +53,7 @@ database:                         # Required from v0.0.3
   dsn: "${DATABASE_URL}"          # postgres://user:pass@db:5432/rumil?sslmode=disable
   auto_migrate: true
 
-moderation:                       # Used from v0.0.4
+moderation:                       # Used from v0.0.4, surface from v0.0.5
   accept_all: false               # MUST stay false from v0.0.4 on: the bypass for the memory approval gate
-  auto_approve_associations: []   # Optional, for example ["OWNER"]
-  admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer token for the moderation UI and API
+  auto_approve_associations: []   # Optional: commenters with these GitHub author_associations record rules APPROVED, for example ["OWNER", "MEMBER"]
+  admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer (or basic-auth password) for /ui/moderation and /api/moderation; unset disables them

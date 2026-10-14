@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/joangrigorov/rumil/internal/config"
+	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/server"
 	"github.com/joangrigorov/rumil/internal/store"
@@ -40,6 +41,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			logger := newLogger(cfg.App.LogLevel)
+			warnAboutModeration(cfg, logger, true)
 
 			if cfg.GitHub.WebhookSecret == "" {
 				return fmt.Errorf("github.webhook_secret is required to run the webhook server")
@@ -72,9 +74,21 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
 			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
+
+			// The moderation surface is mounted with whatever the operator
+			// configured: no token means every request to it is refused, and no
+			// embedding provider means an edit is refused while approving the
+			// rule as it was proposed still works.
+			embedderClient, err := moderationEmbedder(cfg)
+			if err != nil {
+				return err
+			}
+			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.InstallationID, logger)
+			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminToken, logger)
+
 			httpServer := &http.Server{
 				Addr:              address,
-				Handler:           server.Handler(webhook, db),
+				Handler:           server.Handler(webhook, db, moderationUI),
 				ReadHeaderTimeout: readHeaderTimeout,
 			}
 

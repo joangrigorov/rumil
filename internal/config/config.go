@@ -143,6 +143,30 @@ type Moderation struct {
 	AdminToken              string   `yaml:"admin_token"`
 }
 
+// AutoApproves reports whether a commenter with this GitHub
+// author_association may record a rule without a maintainer looking at it.
+// accept_all answers for everybody; the list answers per association, which is
+// how a team lets its own members record rules while strangers queue for
+// moderation.
+func (m Moderation) AutoApproves(association string) bool {
+	if m.AcceptAll {
+		return true
+	}
+	association = strings.TrimSpace(association)
+	if association == "" {
+		// No association is on the list: a delivery that carries none, and an
+		// empty entry someone left in the list, must not agree with each other.
+		return false
+	}
+	for _, approved := range m.AutoApproveAssociations {
+		approved = strings.TrimSpace(approved)
+		if approved != "" && strings.EqualFold(approved, association) {
+			return true
+		}
+	}
+	return false
+}
+
 // Load reads path, expands ${ENV_VAR} placeholders, parses the YAML, applies
 // defaults, and validates the result.
 func Load(path string) (*Config, error) {

@@ -44,7 +44,7 @@ worker:
   concurrency: %d
 server:
   listen: "127.0.0.1:0"
-models:
+%smodels:
   providers:
     - id: "chat"
       provider: "openai-compatible"
@@ -92,7 +92,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 
 	doc := fmt.Sprintf(testConfigTemplate, keyPath, webhookSecret, opts.concurrency,
-		llm.URL()+"/v1", llm.URL()+"/v1", models, dsn)
+		opts.moderation, llm.URL()+"/v1", llm.URL()+"/v1", models, dsn)
 	cfg, err := config.Parse([]byte(doc), "server_test.yaml")
 	if err != nil {
 		t.Fatalf("parsing the test config: %v", err)
@@ -130,11 +130,15 @@ func truncateJobs(t *testing.T, dsn string) {
 	}
 }
 
+// harnessOpts are the configuration choices a test makes.
 type harnessOpts struct {
 	concurrency int
 	// embedding adds models.default_embedding, which together with
 	// database.dsn is what turns memory on.
 	embedding bool
+	// moderation is a moderation block to splice into the configuration, for
+	// example `moderation:\n  accept_all: true\n`.
+	moderation string
 }
 
 func (h *harness) webhook() *server.Webhook {
@@ -229,7 +233,7 @@ func TestT010_01_ReviewRequestedIsQueuedAndReviewed(t *testing.T) {
 
 	h := newHarness(t, gh, llm, harnessOpts{})
 	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	started := time.Now()
 	response := h.deliver(t, handler, "pull_request", "delivery-1", body, sign(webhookSecret, body))
@@ -282,7 +286,7 @@ func TestT010_02_InvalidSignatureIsRejected(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
 
@@ -321,7 +325,7 @@ func TestT010_03_DuplicateDeliveryIsAbsorbed(t *testing.T) {
 
 	h := newHarness(t, gh, llm, harnessOpts{})
 	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 	signature := sign(webhookSecret, body)
 
 	first := h.deliver(t, handler, "pull_request", "delivery-1", body, signature)
@@ -366,7 +370,7 @@ func TestT010_04_NoiseIsIgnored(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	cases := []struct {
 		name     string
@@ -411,7 +415,7 @@ func TestDeliveryForAnotherInstallationIsIgnored(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	body := bytes.Replace(
 		reviewRequestedPayload("review_requested", "rumil[bot]", "Bot"),
@@ -443,7 +447,7 @@ func TestT010_05_ShutdownStopsAcceptingAndRequeues(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
-	handler := server.Handler(h.webhook(), h.db)
+	handler := server.Handler(h.webhook(), h.db, nil)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

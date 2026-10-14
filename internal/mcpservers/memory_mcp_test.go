@@ -231,7 +231,7 @@ func TestProposeMemoryFillsTheColumnsTheModelDoesNotSupply(t *testing.T) {
 func TestProposeMemoryApprovesWhenAcceptAllIsOn(t *testing.T) {
 	db := testMemoryStore(t)
 	session := memoryTenant("accept-all")
-	session.AcceptAll = true
+	session.AutoApprove = true
 	tools := mcpservers.NewMemoryTools(db, newFakeEmbedder(), session, memoryLogger())
 
 	out := decode[proposeResult](t, mustCall(t, tools.ProposeSpecs(), "propose_memory", map[string]any{
@@ -251,7 +251,7 @@ func TestAcceptAllProposalIsRetrievable(t *testing.T) {
 	db := testMemoryStore(t)
 	embedder := newFakeEmbedder()
 	session := memoryTenant("accept-all-recall")
-	session.AcceptAll = true
+	session.AutoApprove = true
 	const rule = "Clock skew of up to 60 seconds is intentional in the JWT validator"
 
 	writing := mcpservers.NewMemoryTools(db, embedder, session, memoryLogger())
