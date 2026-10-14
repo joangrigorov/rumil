@@ -1,0 +1,106 @@
+name: CI
+
+# Verification gates run in three situations:
+#   1. on every pull request,
+#   2. on main after a merge,
+#   3. as a reusable workflow called by release.yml before artifacts are published.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detect Go module
+    runs-on: ubuntu-latest
+    outputs:
+      go_module: ${{ steps.detect.outputs.go_module }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Detect go.mod
+        id: detect
+        run: |
+          if [ -f go.mod ]; then
+            echo "go_module=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go_module=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Go verification skipped::go.mod does not exist yet. The gates activate automatically as soon as the Go module lands (Phase 1)."
+          fi
+
+  verify:
+    name: Go verification gates
+    needs: detect
+    if: ${{ needs.detect.outputs.go_module == 'true' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rumil
+          POSTGRES_PASSWORD: rumil
+          POSTGRES_DB: rumil
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rumil -d rumil"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # v0.1.0+ database tests use this when set and fall back to testcontainers locally.
+      TEST_DATABASE_URL: postgres://rumil:rumil@localhost:5432/rumil?sslmode=disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error title=gofmt::Unformatted files, run gofmt -w:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: v2.14.0
+
+      - name: Vulnerability check
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+          repo-checkout: false
+
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

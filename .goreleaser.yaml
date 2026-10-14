@@ -1,0 +1,92 @@
+# GoReleaser v2 configuration for Rumil.
+#
+# Split of responsibilities with release-please:
+#   * release-please owns the version, the tag, CHANGELOG.md, and the GitHub Release object.
+#   * goreleaser compiles the binaries, packs the Linux packages, and attaches everything
+#     to the release that release-please already created (release.mode: keep-existing).
+# Therefore the goreleaser changelog is disabled and no release notes are generated here.
+version: 2
+
+project_name: rumil
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: rumil
+    main: ./cmd/rumil
+    binary: rumil
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      # 32-bit ARM binaries only make sense for the Linux server targets.
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+
+archives:
+  - id: rumil
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
+      {{- else }}{{ .Arch }}{{ end }}
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Release notes and CHANGELOG.md belong to release-please.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+
+nfpms:
+  - id: rumil-packages
+    package_name: rumil
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: rumil
+    homepage: https://github.com/joangrigorov/rumil
+    maintainer: joangrigorov <joangrigorov@users.noreply.github.com>
+    description: |-
+      Rumil is a read-only GitHub App pull request reviewer with moderated RAG memory.
+    formats:
+      - deb
+      - rpm
+      - apk
+      - archlinux
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+    mtime: "{{ .CommitDate }}"
+    umask: 0o755
+    # Signed packages are intentionally skipped: signing keys are not part of this
+    # open source pipeline. macOS artifacts are likewise unsigned and un-notarized,
+    # which is the free-code-signing limitation of this setup.

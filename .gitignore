@@ -25,6 +25,10 @@ rumil.yaml
 coverage.out
 coverage.html
 
+# --- Locally downloaded installers/toolchains ---
+*.tar.gz
+*.zip
+
 # --- Editor / OS noise ---
 .DS_Store
 .idea/
