@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/joangrigorov/rumil/compare/v0.0.3...v0.0.4) (2026-10-14)
+
+
+### Features
+
+* **memory:** pgvector memory, the [@rumil](https://github.com/rumil) remember command, and re-review continuity ([#6](https://github.com/joangrigorov/rumil/issues/6)) ([2785bf0](https://github.com/joangrigorov/rumil/commit/2785bf0ac7563649edddc3231373fd037493c025))
+
 ## [0.0.3](https://github.com/joangrigorov/rumil/compare/v0.0.2...v0.0.3) (2026-10-14)
 
 
