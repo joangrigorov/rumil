@@ -1,0 +1,20 @@
+# syntax=docker/dockerfile:1
+
+# Release image. goreleaser builds the binary and hands this file a temporary
+# build context holding it per target platform, so the binary is copied rather
+# than compiled again here. See "The Docker build context" in the dockers_v2
+# documentation.
+#
+# `Dockerfile` is the from-source variant that `docker compose up` and a
+# developer build by hand. Both images share the same runtime layout: distroless
+# static, user 65532, same entrypoint.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+# TARGETPLATFORM is provided by buildx and selects the staged platform
+# directory, for example linux/amd64/rumil.
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/rumil /usr/local/bin/rumil
+
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/rumil"]
+CMD ["--help"]

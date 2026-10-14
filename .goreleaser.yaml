@@ -97,8 +97,11 @@ nfpms:
     # open source pipeline. macOS artifacts are likewise unsigned and un-notarized,
     # which is the free-code-signing limitation of this setup.
 
-# Container image built from the same multi-stage Dockerfile a developer builds
-# by hand, so releases and local builds produce the same image layout.
+# Container image. goreleaser builds the binary and then hands the Dockerfile a
+# temporary build context holding it per target platform, so `Dockerfile.release`
+# copies the binary rather than compiling it again. `Dockerfile` is the
+# from-source variant that `docker compose up` and a developer build by hand;
+# both images share the same runtime layout.
 dockers_v2:
   - images:
       - "ghcr.io/joangrigorov/rumil"
@@ -106,9 +109,14 @@ dockers_v2:
       - "{{ .Tag }}"
       - "v{{ .Major }}.{{ .Minor }}"
       - "latest"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.release
     platforms:
       - linux/amd64
+    # An SBOM attestation needs a builder with attestation support, which is why
+    # the release workflow sets up a docker-container driver before running
+    # goreleaser. Written out because goreleaser defaults it to true, so the
+    # dependency on that driver is otherwise invisible here.
+    sbom: "true"
     build_args:
       VERSION: "{{ .Version }}"
     labels:
