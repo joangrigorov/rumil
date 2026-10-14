@@ -15,7 +15,7 @@ func newRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:           "rumil",
-		Short:         "Read-only GitHub pull request reviewer with moderated RAG memory",
+		Short:         "GitHub PR reviewer that learns your team's conventions",
 		Version:       strings.TrimSpace(version + " (" + commit + ", " + date + ")"),
 		SilenceUsage:  true,
 		SilenceErrors: true,
