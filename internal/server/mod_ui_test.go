@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -490,3 +491,97 @@ func TestModerationRefusesAnUnknownStatusFilter(t *testing.T) {
 
 // ptrTo is the pointer a *string field needs when a test sets one.
 func ptrTo(value string) *string { return &value }
+
+// A body the decision endpoints cannot read is refused rather than read as
+// nothing: ParseForm ignores multipart, so a caller that sent one would have its
+// rule text dropped and the rule approved as it happened to be stored.
+func TestModerationRefusesABodyItCannotRead(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	rule := seedMemory(t, h, "Clock skew up to 60 seconds is intentional")
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("rule_text", "a rewritten rule"); err != nil {
+		t.Fatalf("writing a multipart field: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("closing the multipart body: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/moderation/"+rule.ID+"/approve", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+adminToken)
+	request.Header.Set("Accept", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415 (body: %s)", recorder.Code, recorder.Body.String())
+	}
+	if stored, err := h.db.MemoryByID(context.Background(), 98765432, rule.ID); err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	} else if stored.Status != store.MemoryPending {
+		t.Errorf("a body that cannot be read still decided the rule: %+v", stored)
+	}
+}
+
+// The name in the audit line comes from the body. The query string is part of a
+// URL that gets pasted around, so it is not somebody's decision.
+func TestModerationTakesTheModeratorFromTheBody(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	fromQuery := seedMemory(t, h, "Clock skew up to 60 seconds is intentional")
+	response := moderatedRequest(t, handler, http.MethodPost,
+		"/api/moderation/"+fromQuery.ID+"/reject?moderator=somebody-else", adminToken, url.Values{}, "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("reject returned %d, want 200 (body: %s)", response.Code, response.Body.String())
+	}
+	stored, err := h.db.MemoryByID(context.Background(), 98765432, fromQuery.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.ReviewedBy != "admin-token" {
+		t.Errorf("reviewed_by = %q, want the token holder rather than the query string", stored.ReviewedBy)
+	}
+
+	fromBody := seedMemory(t, h, "Settlements are retried with a bounded budget")
+	response = moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+fromBody.ID+"/reject", adminToken,
+		url.Values{"moderator": {"octocat"}}, "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("reject returned %d, want 200 (body: %s)", response.Code, response.Body.String())
+	}
+	stored, err = h.db.MemoryByID(context.Background(), 98765432, fromBody.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.ReviewedBy != "octocat" {
+		t.Errorf("reviewed_by = %q, want the name the form carried", stored.ReviewedBy)
+	}
+}
+
+// A repository reference that is not owner/name is refused on the page as well
+// as in the CLI.
+func TestModerationRefusesARepositoryReferenceItCannotUse(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	for _, ref := range []string{"acme", "acme/", "/payments", "acme/payments/extra"} {
+		t.Run(ref, func(t *testing.T) {
+			response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?repo="+url.QueryEscape(ref), adminToken, nil, "text/html")
+			if response.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (body: %s)", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	if response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?repo=acme/payments", adminToken, nil, "text/html"); response.Code != http.StatusOK {
+		t.Errorf("a real reference returned %d, want 200", response.Code)
+	}
+}

@@ -55,6 +55,7 @@ func TestSameOriginReadsWhatTheBrowserSays(t *testing.T) {
 		{"another origin", map[string]string{"Origin": "https://evil.example"}, false},
 		{"another port", map[string]string{"Origin": "http://example.com:8080"}, false},
 		{"a malformed origin", map[string]string{"Origin": "://"}, false},
+		{"an origin naming no host", map[string]string{"Origin": "null"}, false},
 		{"no browser at all", nil, true},
 		{"a script that sets its own headers", map[string]string{"User-Agent": "curl/8"}, true},
 	}
@@ -69,6 +70,80 @@ func TestSameOriginReadsWhatTheBrowserSays(t *testing.T) {
 				t.Errorf("sameOrigin = %v, want %v", got, tc.want)
 			}
 		})
+	}
+
+	// An Origin that names no host must not agree with a request that carries no
+	// Host either: that is how a `null` origin would otherwise get in.
+	request := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
+	request.Host = ""
+	request.Header.Set("Origin", "null")
+	if sameOrigin(request) {
+		t.Error("an origin naming no host was accepted against an empty Host")
+	}
+}
+
+// A repository reference means one thing on the page and in the CLI.
+func TestSplitRepoRefTakesOwnerAndNameOnly(t *testing.T) {
+	cases := []struct {
+		ref   string
+		org   string
+		name  string
+		valid bool
+	}{
+		{"acme/payments", "acme", "payments", true},
+		{"acme/payments/extra", "", "", false},
+		{"/payments", "", "", false},
+		{"acme/", "", "", false},
+		{"acme", "", "", false},
+		{"", "", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.ref, func(t *testing.T) {
+			org, name, err := splitRepoRef(tc.ref)
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("splitRepoRef(%q) returned error: %v", tc.ref, err)
+				}
+				if org != tc.org || name != tc.name {
+					t.Errorf("splitRepoRef(%q) = %q, %q, want %q, %q", tc.ref, org, name, tc.org, tc.name)
+				}
+				return
+			}
+			if err == nil {
+				t.Errorf("splitRepoRef(%q) was accepted as %q, %q", tc.ref, org, name)
+			}
+		})
+	}
+}
+
+// A refusal is shaped like the success it stands in for, so a JSON client never
+// has to parse a plain-text error to find out what happened.
+func TestRefuseFollowsTheCallersShape(t *testing.T) {
+	ui := NewModerationUI(nil, "s3cret-token", nil)
+
+	jsonRequest := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
+	jsonRecorder := httptest.NewRecorder()
+	ui.refuse(jsonRecorder, jsonRequest, http.StatusConflict, "the rule changed")
+	if jsonRecorder.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", jsonRecorder.Code)
+	}
+	if got := jsonRecorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("Content-Type = %q, want JSON for a client that did not ask for the page", got)
+	}
+	if body := jsonRecorder.Body.String(); !strings.Contains(body, `"error":"the rule changed"`) {
+		t.Errorf("body = %q, want the reason under an error key", body)
+	}
+
+	pageRequest := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
+	pageRequest.Header.Set("Accept", "text/html,application/xhtml+xml")
+	pageRecorder := httptest.NewRecorder()
+	ui.refuse(pageRecorder, pageRequest, http.StatusConflict, "the rule changed")
+	if got := pageRecorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("Content-Type = %q, want text for a browser", got)
+	}
+	if !strings.Contains(pageRecorder.Body.String(), "the rule changed") {
+		t.Errorf("the browser is not told why: %q", pageRecorder.Body.String())
 	}
 }
 

@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -66,7 +68,7 @@ func (m *ModerationUI) sameSite(next http.HandlerFunc) http.HandlerFunc {
 			m.logger.Warn("refused a moderation decision a browser reported as cross-site",
 				"path", r.URL.Path, "remote", r.RemoteAddr,
 				"sec_fetch_site", r.Header.Get("Sec-Fetch-Site"), "origin", r.Header.Get("Origin"))
-			http.Error(w, "a decision has to come from the moderation page", http.StatusForbidden)
+			m.refuse(w, r, http.StatusForbidden, "a decision has to come from the moderation page")
 			return
 		}
 		next(w, r)
@@ -76,6 +78,11 @@ func (m *ModerationUI) sameSite(next http.HandlerFunc) http.HandlerFunc {
 // sameOrigin reports whether the request is one a browser could have started
 // here. "none" is a request the browser itself initiated, which is not a page
 // driving a form; anything else is refused, including a sibling subdomain.
+//
+// The Origin is compared by host, port included, so the reverse proxy in front
+// of this service has to pass the Host through unchanged. An Origin that names
+// no host at all — the `null` a sandboxed frame or a `data:` URL sends — is
+// refused rather than compared.
 func sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin" || site == "none"
@@ -85,7 +92,7 @@ func sameOrigin(r *http.Request) bool {
 		return true
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || parsed.Host == "" {
 		return false
 	}
 	return strings.EqualFold(parsed.Host, r.Host)
@@ -100,14 +107,14 @@ func (m *ModerationUI) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if m.token == "" {
 			m.logger.Warn("a moderation request arrived while moderation.admin_token is not set")
-			http.Error(w, "the moderation surface needs moderation.admin_token", http.StatusServiceUnavailable)
+			m.refuse(w, r, http.StatusServiceUnavailable, "the moderation surface needs moderation.admin_token")
 			return
 		}
 		if !m.authorized(r) {
 			m.logger.Warn("refused a moderation request with a missing or wrong token",
 				"path", r.URL.Path, "remote", r.RemoteAddr)
 			w.Header().Set("WWW-Authenticate", `Basic realm="rumil moderation"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			m.refuse(w, r, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
@@ -159,9 +166,9 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 		OrgName: r.URL.Query().Get("org"),
 	}
 	if rawRepo != "" {
-		org, name, found := strings.Cut(rawRepo, "/")
-		if !found || org == "" || name == "" {
-			http.Error(w, `repo takes owner/name`, http.StatusBadRequest)
+		org, name, err := splitRepoRef(rawRepo)
+		if err != nil {
+			http.Error(w, "repo takes owner/name", http.StatusBadRequest)
 			return
 		}
 		filter.OrgName, filter.RepoName = org, name
@@ -192,8 +199,7 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+	if !m.readForm(w, r) {
 		return
 	}
 	memory, err := m.service.Approve(r.Context(), r.PathValue("id"), moderation.Decision{
@@ -209,8 +215,7 @@ func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *ModerationUI) reject(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "malformed form", http.StatusBadRequest)
+	if !m.readForm(w, r) {
 		return
 	}
 	memory, err := m.service.Reject(r.Context(), r.PathValue("id"), moderatorOf(r))
@@ -219,6 +224,38 @@ func (m *ModerationUI) reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.decide(w, r, memory, "rejected")
+}
+
+// readForm parses the body a decision arrives in, and refuses a body it cannot
+// read rather than reading nothing from it. ParseForm ignores a multipart body,
+// so a caller that sent one would have its rule_text silently dropped and the
+// rule approved as it happened to be stored, which is a decision nobody made.
+// An empty body is the "approve as it was proposed" case, which the CLI has too.
+func (m *ModerationUI) readForm(w http.ResponseWriter, r *http.Request) bool {
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || mediaType != "application/x-www-form-urlencoded" {
+			m.refuse(w, r, http.StatusUnsupportedMediaType,
+				"a decision is sent as application/x-www-form-urlencoded")
+			return false
+		}
+	}
+	if err := r.ParseForm(); err != nil {
+		m.refuse(w, r, http.StatusBadRequest, "malformed form")
+		return false
+	}
+	return true
+}
+
+// splitRepoRef splits owner/name the way the CLI's --repo flag does, so the page
+// and the command agree on what a repository reference is: one slash, with
+// something on each side of it.
+func splitRepoRef(repo string) (owner, name string, err error) {
+	owner, name, found := strings.Cut(repo, "/")
+	if !found || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", fmt.Errorf("a repository reference is owner/name, not %q", repo)
+	}
+	return owner, name, nil
 }
 
 // pathGlobOf reads the glob the form carried. An absent field is not the same
@@ -262,25 +299,36 @@ func (m *ModerationUI) decide(w http.ResponseWriter, r *http.Request, memory sto
 // fail answers a refused decision. An error this surface recognizes is repeated,
 // because it says what the caller can do about it; anything else is logged and
 // answered with a fixed sentence, so a database message is not handed to a
-// client. The content type follows what the caller asked for.
+// client.
 func (m *ModerationUI) fail(w http.ResponseWriter, r *http.Request, err error) {
 	status := statusFor(err)
-	message := "the decision could not be recorded"
-	if status == http.StatusInternalServerError {
+	message := err.Error()
+	switch status {
+	case http.StatusInternalServerError:
 		m.logger.Error("a moderation request failed", "path", r.URL.Path, "error", err)
-	} else {
-		message = err.Error()
+		message = "the decision could not be recorded"
+	case http.StatusConflict:
+		// A refusal to act on a rule as it is now is worth a line: it means a
+		// second moderator is working the same rule, or a page was left open.
+		m.logger.Warn("refused a moderation decision", "path", r.URL.Path, "error", err)
 	}
+	m.refuse(w, r, status, message)
+}
 
-	if wantsJSON(r) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
-			m.logger.Error("writing the moderation error failed", "error", err)
-		}
+// refuse answers a request the surface will not carry out, in the shape the
+// caller asked for. One rule for the whole surface, so a refusal is never
+// shaped differently from the success standing in for it: a client that asked
+// for the page gets text, and everything else gets the JSON it is parsing.
+func (m *ModerationUI) refuse(w http.ResponseWriter, r *http.Request, status int, message string) {
+	if wantsHTML(r) {
+		http.Error(w, message, status)
 		return
 	}
-	http.Error(w, message, status)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		m.logger.Error("writing the moderation refusal failed", "error", err)
+	}
 }
 
 // statusFor maps a service error onto a status code: a rule that is not there is
@@ -300,28 +348,20 @@ func statusFor(err error) int {
 	}
 }
 
-// wantsHTML reports whether the caller is a browser rendering the page. A form
-// post cannot set Accept on its own, and the answer to a decision is the list.
+// wantsHTML reports whether the caller is a browser rendering the page, which
+// is what decides the shape of both a decision and a refusal. A form post
+// cannot set Accept on its own, and the answer to a decision is the list.
 func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
-}
-
-// wantsJSON reports whether the caller asked for JSON without asking for the
-// page, which is what tells a script apart from a browser: a navigation sends
-// text/html and a catch-all, so the catch-all alone decides nothing.
-func wantsJSON(r *http.Request) bool {
-	accept := r.Header.Get("Accept")
-	if strings.Contains(accept, "text/html") {
-		return false
-	}
-	return strings.Contains(accept, "application/json") || strings.Contains(accept, "*/*")
 }
 
 // moderatorOf names the decision in the audit line. The credential is shared,
 // so the surface cannot know who used it, and it says so rather than guessing
 // from a hostname or a login it does not have.
 func moderatorOf(r *http.Request) string {
-	if name := strings.TrimSpace(r.FormValue("moderator")); name != "" {
+	// The body, not r.FormValue: the query string is part of a URL that gets
+	// pasted around, and an audit line is about the decision, not about a link.
+	if name := strings.TrimSpace(r.PostFormValue("moderator")); name != "" {
 		return name
 	}
 	return "admin-token"
