@@ -123,6 +123,98 @@ models:
 }
 
 // review.guidelines_ref accepts the two named sources and rejects anything else.
+func TestResolveThreadsDefaultsOn(t *testing.T) {
+	doc := func(review string) []byte {
+		return []byte(review + `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		review string
+		wantOn bool
+	}{
+		{name: "unset resolves as on", review: "review:\n  guidelines_ref: \"base\"\n", wantOn: true},
+		{name: "explicit true", review: "review:\n  guidelines_ref: \"base\"\n  resolve_threads: true\n", wantOn: true},
+		{name: "explicit false survives", review: "review:\n  guidelines_ref: \"base\"\n  resolve_threads: false\n", wantOn: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(doc(tc.review), "test.yaml")
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := cfg.Review.ThreadsResolvable(); got != tc.wantOn {
+				t.Errorf("ThreadsResolvable() = %v, want %v", got, tc.wantOn)
+			}
+		})
+	}
+}
+
+func TestEmbeddingProviderIsOptIn(t *testing.T) {
+	doc := func(defaultEmbedding string) []byte {
+		return []byte(`
+models:
+  default_chat: "chat"
+  default_embedding: "` + defaultEmbedding + `"
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+    - id: "embed"
+      provider: "openai-compatible"
+      base_url: "https://embed.example.com/v1"
+      model_name: "embed"
+      api_key: "k"
+      dimensions: 1536
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+`)
+	}
+
+	cfg, err := Parse(doc(""), "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse rejected an unset default_embedding: %v", err)
+	}
+	provider, err := cfg.Models.EmbeddingProvider()
+	if err != nil {
+		t.Fatalf("EmbeddingProvider: %v", err)
+	}
+	if provider != nil {
+		t.Errorf("EmbeddingProvider = %q, want nil when default_embedding is unset", provider.ID)
+	}
+
+	cfg, err = Parse(doc("embed"), "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse rejected an embedding provider: %v", err)
+	}
+	provider, err = cfg.Models.EmbeddingProvider()
+	if err != nil {
+		t.Fatalf("EmbeddingProvider: %v", err)
+	}
+	if provider == nil || provider.ID != "embed" {
+		t.Errorf("EmbeddingProvider = %v, want the provider named by default_embedding", provider)
+	}
+
+	if _, err := Parse(doc("chat"), "test.yaml"); err == nil {
+		t.Error("Parse accepted a default_embedding that names a chat provider")
+	}
+}
+
 func TestReviewGuidelinesRef(t *testing.T) {
 	doc := func(ref string) []byte {
 		return []byte(`

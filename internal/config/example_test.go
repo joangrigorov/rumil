@@ -44,4 +44,7 @@ func TestExampleConfigIsValid(t *testing.T) {
 	if provider.APIKey != "deepseek-key" {
 		t.Errorf("api_key = %q, want the expanded environment value", provider.APIKey)
 	}
+	if !cfg.Review.ThreadsResolvable() {
+		t.Error("review.resolve_threads resolves as off, want the example to resolve threads")
+	}
 }

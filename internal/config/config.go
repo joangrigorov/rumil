@@ -114,9 +114,20 @@ type Provider struct {
 // IsEmbedding reports whether the provider produces embeddings.
 func (p Provider) IsEmbedding() bool { return p.Dimensions > 0 }
 
-// Review tunes the repository guidelines injected into the review prompt.
+// Review tunes the repository guidelines injected into the review prompt and
+// the reviewer's own write actions.
 type Review struct {
 	GuidelinesRef string `yaml:"guidelines_ref"`
+	// ResolveThreads lets the reviewer resolve the review threads it opened. It
+	// is a pointer so that an operator can turn it off explicitly, since the
+	// default is on and a plain bool could not tell the two apart.
+	ResolveThreads *bool `yaml:"resolve_threads"`
+}
+
+// ThreadsResolvable reports whether the reviewer may resolve its own review
+// threads. It may, unless the operator turned that off.
+func (r Review) ThreadsResolvable() bool {
+	return r.ResolveThreads == nil || *r.ResolveThreads
 }
 
 // Database is used from v0.0.3 on.
@@ -268,16 +279,28 @@ func (m Models) validate() error {
 		return err
 	}
 
-	if m.DefaultEmbedding != "" {
-		p, err := m.providerByID(m.DefaultEmbedding)
-		if err != nil {
-			return fmt.Errorf("models.default_embedding: %w", err)
-		}
-		if !p.IsEmbedding() {
-			return fmt.Errorf("models.default_embedding %q refers to a provider without dimensions", m.DefaultEmbedding)
-		}
+	if _, err := m.EmbeddingProvider(); err != nil {
+		return err
 	}
 	return nil
+}
+
+// EmbeddingProvider resolves the provider named by models.default_embedding. It
+// returns nil, nil when that selector is unset, because memory is opt-in: an
+// absent embedding provider means no pre-retrieval and no memory tools rather
+// than a configuration error (project_plan.md §3 rule 6).
+func (m Models) EmbeddingProvider() (*Provider, error) {
+	if m.DefaultEmbedding == "" {
+		return nil, nil
+	}
+	p, err := m.providerByID(m.DefaultEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("models.default_embedding: %w", err)
+	}
+	if !p.IsEmbedding() {
+		return nil, fmt.Errorf("models.default_embedding %q refers to a provider without dimensions", m.DefaultEmbedding)
+	}
+	return p, nil
 }
 
 // ChatProvider resolves the chat provider using the project_plan.md §3 model
