@@ -24,9 +24,9 @@ func testDB(t *testing.T) *DB {
 	t.Cleanup(db.Close)
 
 	// Tests in this package share the schema, so each starts from an empty
-	// queue.
-	if _, err := db.pool.Exec(ctx, `TRUNCATE webhook_jobs`); err != nil {
-		t.Fatalf("truncating webhook_jobs: %v", err)
+	// queue and an empty memory table.
+	if _, err := db.pool.Exec(ctx, `TRUNCATE webhook_jobs, memories`); err != nil {
+		t.Fatalf("truncating the test tables: %v", err)
 	}
 	return db
 }
