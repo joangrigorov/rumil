@@ -152,8 +152,15 @@ func (m Moderation) AutoApproves(association string) bool {
 	if m.AcceptAll {
 		return true
 	}
+	association = strings.TrimSpace(association)
+	if association == "" {
+		// No association is on the list: a delivery that carries none, and an
+		// empty entry someone left in the list, must not agree with each other.
+		return false
+	}
 	for _, approved := range m.AutoApproveAssociations {
-		if strings.EqualFold(strings.TrimSpace(approved), association) {
+		approved = strings.TrimSpace(approved)
+		if approved != "" && strings.EqualFold(approved, association) {
 			return true
 		}
 	}

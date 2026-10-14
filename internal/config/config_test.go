@@ -206,6 +206,18 @@ func TestAutoApprovesByAssociation(t *testing.T) {
 			association: "",
 			want:        false,
 		},
+		{
+			name:        "an empty entry does not answer for a missing association",
+			moderation:  Moderation{AutoApproveAssociations: []string{""}},
+			association: "",
+			want:        false,
+		},
+		{
+			name:        "an empty entry does not answer for a real association",
+			moderation:  Moderation{AutoApproveAssociations: []string{"  "}},
+			association: "MEMBER",
+			want:        false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.moderation.AutoApproves(tc.association); got != tc.want {
