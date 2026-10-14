@@ -428,10 +428,22 @@ func TestVerifyReportsMissingInstallation(t *testing.T) {
 	}
 }
 
-// ReviewGuidelines walks REVIEW.md, .github/REVIEW.md, docs/REVIEW.md and
-// returns the first file it finds.
+// ReviewGuidelines reads RUMIL.md at the repository root, and nothing else.
 func TestReviewGuidelines(t *testing.T) {
-	t.Run("priority order", func(t *testing.T) {
+	t.Run("reads the root file", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents[GuidelinesPath] = "root policy"
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if path != GuidelinesPath || text != "root policy" {
+			t.Errorf("got (%q, %q), want (%q, %q)", path, text, GuidelinesPath, "root policy")
+		}
+	})
+
+	t.Run("ignores files with other names", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
 		gh.Contents["REVIEW.md"] = "root policy"
 		gh.Contents[".github/REVIEW.md"] = "github policy"
@@ -441,35 +453,8 @@ func TestReviewGuidelines(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReviewGuidelines returned error: %v", err)
 		}
-		if path != "REVIEW.md" || text != "root policy" {
-			t.Errorf("got (%q, %q), want the root file to win", path, text)
-		}
-	})
-
-	t.Run("github directory fallback", func(t *testing.T) {
-		gh := testutil.NewFakeGitHub(t)
-		gh.Contents[".github/REVIEW.md"] = "github policy"
-		gh.Contents["docs/REVIEW.md"] = "docs policy"
-
-		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
-		if err != nil {
-			t.Fatalf("ReviewGuidelines returned error: %v", err)
-		}
-		if path != ".github/REVIEW.md" || text != "github policy" {
-			t.Errorf("got (%q, %q), want .github/REVIEW.md", path, text)
-		}
-	})
-
-	t.Run("docs fallback", func(t *testing.T) {
-		gh := testutil.NewFakeGitHub(t)
-		gh.Contents["docs/REVIEW.md"] = "docs policy"
-
-		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
-		if err != nil {
-			t.Fatalf("ReviewGuidelines returned error: %v", err)
-		}
-		if path != "docs/REVIEW.md" || text != "docs policy" {
-			t.Errorf("got (%q, %q), want docs/REVIEW.md", path, text)
+		if path != "" || text != "" {
+			t.Errorf("got (%q, %q), want REVIEW.md at any path to be ignored", path, text)
 		}
 	})
 
@@ -489,15 +474,15 @@ func TestReviewGuidelines(t *testing.T) {
 	t.Run("reads the ref it is given", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
 		gh.ContentsByRef = map[string]map[string]string{
-			gh.BaseSHA: {"REVIEW.md": "trusted"},
-			gh.HeadSHA: {"REVIEW.md": "untrusted"},
+			gh.BaseSHA: {GuidelinesPath: "trusted"},
+			gh.HeadSHA: {GuidelinesPath: "untrusted"},
 		}
 
 		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.HeadSHA)
 		if err != nil {
 			t.Fatalf("ReviewGuidelines returned error: %v", err)
 		}
-		if path != "REVIEW.md" || text != "untrusted" {
+		if path != GuidelinesPath || text != "untrusted" {
 			t.Errorf("got (%q, %q), want the head SHA copy", path, text)
 		}
 	})
@@ -505,8 +490,8 @@ func TestReviewGuidelines(t *testing.T) {
 	t.Run("defaults to the base SHA", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
 		gh.ContentsByRef = map[string]map[string]string{
-			gh.BaseSHA: {"REVIEW.md": "trusted"},
-			gh.HeadSHA: {"REVIEW.md": "untrusted"},
+			gh.BaseSHA: {GuidelinesPath: "trusted"},
+			gh.HeadSHA: {GuidelinesPath: "untrusted"},
 		}
 
 		_, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), "")
@@ -520,7 +505,7 @@ func TestReviewGuidelines(t *testing.T) {
 
 	t.Run("truncates at the cap through the blob API", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
-		gh.Contents["REVIEW.md"] = strings.Repeat("a", 5<<20)
+		gh.Contents[GuidelinesPath] = strings.Repeat("a", 5<<20)
 
 		_, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
 		if err != nil {

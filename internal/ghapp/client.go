@@ -21,9 +21,10 @@ const MaxFileReadLines = 500
 // system prompt, so a generated file cannot overflow the model's context.
 const MaxGuidelinesBytes = 32 << 10
 
-// ReviewGuidelinesPaths is the §6 Phase 2 priority order for repository review
-// guidelines.
-var ReviewGuidelinesPaths = []string{"REVIEW.md", ".github/REVIEW.md", "docs/REVIEW.md"}
+// GuidelinesPath is the repository review guidelines file (§6 Phase 2), read
+// from the repository root. The name is Rumil's own so that a REVIEW.md kept
+// for another purpose is never picked up.
+const GuidelinesPath = "RUMIL.md"
 
 // maxFileBytes bounds how much of a single file is downloaded.
 const maxFileBytes = 8 << 20
@@ -191,10 +192,10 @@ func (c *Client) diffLocked(ctx context.Context) (*Diff, error) {
 	return c.diff, nil
 }
 
-// ReviewGuidelines fetches the repository's review guidelines at ref, trying
-// ReviewGuidelinesPaths in order, and returns the path that supplied them with
-// the text. A repository with no guidelines file returns empty strings and a
-// nil error, and the review proceeds on the default prompt.
+// ReviewGuidelines fetches the repository's review guidelines, GuidelinesPath
+// at the repository root and nothing else, and returns the path with the text.
+// A repository without the file returns empty strings and a nil error, and the
+// review proceeds on the default prompt.
 //
 // The text is capped at MaxGuidelinesBytes with a truncation marker. Callers
 // pass the pull request base SHA so an untrusted branch cannot rewrite the
@@ -208,23 +209,19 @@ func (c *Client) ReviewGuidelines(ctx context.Context, ref string) (string, stri
 		ref = meta.BaseSHA
 	}
 
-	for _, path := range ReviewGuidelinesPaths {
-		file, err := c.fileAt(ctx, path, ref)
-		if err != nil {
-			return "", "", err
-		}
-		if file == nil {
-			continue
-		}
-
-		text, err := c.fileText(ctx, file, path, ref)
-		if err != nil {
-			return "", "", err
-		}
-		return path, truncateGuidelines(text), nil
+	file, err := c.fileAt(ctx, GuidelinesPath, ref)
+	if err != nil {
+		return "", "", err
+	}
+	if file == nil {
+		return "", "", nil
 	}
 
-	return "", "", nil
+	text, err := c.fileText(ctx, file, GuidelinesPath, ref)
+	if err != nil {
+		return "", "", err
+	}
+	return GuidelinesPath, truncateGuidelines(text), nil
 }
 
 // truncateGuidelines caps the guidelines at MaxGuidelinesBytes, cutting on a

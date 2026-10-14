@@ -27,7 +27,7 @@ const (
 	DefaultMaxAgentTurns = 25
 	DefaultMaxDiffBytes  = 250_000
 	DefaultLogLevel      = "info"
-	// DefaultGuidelinesRef reads REVIEW.md from the pull request base SHA, so
+	// DefaultGuidelinesRef reads RUMIL.md from the pull request base SHA, so
 	// an untrusted branch cannot rewrite the repository's review policy.
 	DefaultGuidelinesRef = "base"
 )

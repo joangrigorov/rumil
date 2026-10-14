@@ -19,7 +19,7 @@ github:
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.1.0 for webhook verification
 
 # Repository review guidelines are read before the first agent turn, from
-# REVIEW.md, .github/REVIEW.md, or docs/REVIEW.md, and capped at 32 KB.
+# RUMIL.md at the repository root, and capped at 32 KB.
 review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
 
