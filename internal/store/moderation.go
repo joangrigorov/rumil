@@ -19,13 +19,12 @@ var ErrMemoryNotFound = errors.New("memory not found")
 // asked to be more specific rather than given whichever row sorted first.
 var ErrAmbiguousMemory = errors.New("memory id is ambiguous")
 
-// ErrMemoryChanged reports a decision that does not fit the rule as it is now.
-// It is what two moderators working the queue at once produce, and what a page
-// left open produces: the decision replaces the wording with words the row no
-// longer holds and brings no vector for them. The decision is refused rather
-// than applied, because applying it would pair the words one moderator read with
-// the vector the other one computed, and a rule has to be found by the words it
-// says.
+// ErrMemoryChanged reports a decision that does not fit the rule as it is now:
+// it replaces the wording with words the row no longer holds and brings no
+// vector for them, which is what a page left open produces. Two moderators who
+// both edit the same rule do not produce it — each edit is applied whole, with
+// its own vector, and the last one wins — so this is not a lost-update detector
+// but a refusal to write a pair that would not agree with itself.
 var ErrMemoryChanged = errors.New("the rule changed while the decision was being made")
 
 // memoryRefPattern is what a moderation command may name: a UUID, or the
@@ -220,11 +219,16 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 	}
 	if memory == nil {
 		// Either the row is gone, or the decision is not one the rule as it is
-		// now can take. Reading again tells those two apart.
-		if _, readErr := d.MemoryByID(ctx, installationID, id); readErr == nil {
-			return Memory{}, fmt.Errorf("%w: %s", ErrMemoryChanged, id)
+		// now can take. Reading back the row that was resolved tells those two
+		// apart; a read that fails for any other reason is not an answer, so it
+		// is returned as what it is rather than reported as a missing rule.
+		if _, readErr := d.MemoryByID(ctx, installationID, resolved.ID); readErr != nil {
+			if errors.Is(readErr, ErrMemoryNotFound) {
+				return Memory{}, fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
+			}
+			return Memory{}, fmt.Errorf("reading memory %s back after a refused update: %w", id, readErr)
 		}
-		return Memory{}, fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
+		return Memory{}, fmt.Errorf("%w: %s", ErrMemoryChanged, id)
 	}
 	return *memory, nil
 }
