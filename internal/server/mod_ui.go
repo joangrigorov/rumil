@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -34,11 +36,59 @@ func NewModerationUI(service *moderation.Service, token string, logger *slog.Log
 	return &ModerationUI{service: service, token: token, logger: logger}
 }
 
-// Routes mounts the moderation surface.
+// Routes mounts the moderation surface. The two state-changing routes carry the
+// same-site check, which is what a browser cannot be asked to skip.
 func (m *ModerationUI) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/moderation", m.authorize(m.list))
-	mux.HandleFunc("POST /api/moderation/{id}/approve", m.authorize(m.approve))
-	mux.HandleFunc("POST /api/moderation/{id}/reject", m.authorize(m.reject))
+	mux.HandleFunc("POST /api/moderation/{id}/approve", m.authorize(m.sameSite(m.approve)))
+	mux.HandleFunc("POST /api/moderation/{id}/reject", m.authorize(m.sameSite(m.reject)))
+}
+
+// sameSite refuses a state-changing request that the browser says came from
+// another site.
+//
+// The token is accepted as the password of a basic credential so a maintainer
+// can use the HTML page, and a browser attaches a cached basic credential to
+// every request to this origin — including a form on somebody else's page. A
+// cross-site form post is a CORS-safelisted content type, so it is sent without
+// a preflight and the page's answer never has to be read for the write to
+// happen. Nothing in the credential itself tells the two requests apart, so the
+// request has to. A refusal is logged: it is the one moderation event that says
+// somebody else's page tried to decide.
+//
+// Sec-Fetch-Site and Origin are set by the browser and a page cannot forge
+// them. A request carrying neither was not sent by a browser on another site —
+// it is the CLI, or a script that sets its own headers and could have chosen
+// any credential anyway — so it is allowed.
+func (m *ModerationUI) sameSite(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !sameOrigin(r) {
+			m.logger.Warn("refused a moderation decision a browser reported as cross-site",
+				"path", r.URL.Path, "remote", r.RemoteAddr,
+				"sec_fetch_site", r.Header.Get("Sec-Fetch-Site"), "origin", r.Header.Get("Origin"))
+			http.Error(w, "a decision has to come from the moderation page", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameOrigin reports whether the request is one a browser could have started
+// here. "none" is a request the browser itself initiated, which is not a page
+// driving a form; anything else is refused, including a sibling subdomain.
+func sameOrigin(r *http.Request) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		return site == "same-origin" || site == "none"
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
 }
 
 // authorize refuses a request that does not carry the token, before the handler
@@ -64,16 +114,20 @@ func (m *ModerationUI) authorize(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// authorized compares the presented credential with the configured token in
-// constant time, so the comparison says nothing about how much of the token was
-// right.
+// authorized checks the presented credential against the configured token. The
+// scheme is matched case-insensitively because the RFC says it is
+// case-insensitive, and a credential that fails to parse is simply not
+// accepted.
 func (m *ModerationUI) authorized(r *http.Request) bool {
-	header := r.Header.Get("Authorization")
+	scheme, credential, found := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !found {
+		return false
+	}
 	switch {
-	case strings.HasPrefix(header, "Bearer "):
-		return equalToken(strings.TrimPrefix(header, "Bearer "), m.token)
-	case strings.HasPrefix(header, "Basic "):
-		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Basic "))
+	case strings.EqualFold(scheme, "Bearer"):
+		return equalToken(credential, m.token)
+	case strings.EqualFold(scheme, "Basic"):
+		raw, err := base64.StdEncoding.DecodeString(credential)
 		if err != nil {
 			return false
 		}
@@ -87,19 +141,26 @@ func (m *ModerationUI) authorized(r *http.Request) bool {
 	}
 }
 
+// equalToken compares a presented credential with the configured token. Both
+// sides are hashed first so that the comparison is over two values of the same
+// length: ConstantTimeCompare answers immediately when the lengths differ,
+// which would otherwise report how long the configured token is.
 func equalToken(presented, token string) bool {
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
+	presentedSum := sha256.Sum256([]byte(presented))
+	tokenSum := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(presentedSum[:], tokenSum[:]) == 1
 }
 
 func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
+	rawRepo := r.URL.Query().Get("repo")
 	filter := store.MemoryFilter{
-		Status:  strings.ToUpper(r.URL.Query().Get("status")),
+		Status:  r.URL.Query().Get("status"),
 		Limit:   store.MemoryListMax,
 		OrgName: r.URL.Query().Get("org"),
 	}
-	if repo := r.URL.Query().Get("repo"); repo != "" {
-		org, name, found := strings.Cut(repo, "/")
-		if !found {
+	if rawRepo != "" {
+		org, name, found := strings.Cut(rawRepo, "/")
+		if !found || org == "" || name == "" {
 			http.Error(w, `repo takes owner/name`, http.StatusBadRequest)
 			return
 		}
@@ -108,16 +169,21 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 
 	memories, err := m.service.List(r.Context(), filter)
 	if err != nil {
-		m.logger.Error("listing the recorded rules failed", "error", err)
-		http.Error(w, "reading the recorded rules failed", http.StatusInternalServerError)
+		m.fail(w, r, err)
 		return
 	}
 
+	// The page renders text a commenter wrote, so it is not framed: an approve
+	// button under someone else's overlay would otherwise be a decision taken
+	// by whoever drew the overlay, from this origin, which the same-site check
+	// on the post cannot see.
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := moderationTemplate.Execute(w, moderationPage{
 		Rules:   memories,
-		Status:  filter.Status,
-		Repo:    r.URL.Query().Get("repo"),
+		Status:  strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Repo:    rawRepo,
 		Decided: r.URL.Query().Get("decided"),
 	}); err != nil {
 		// The response is already streaming, so the failure can only be logged.
@@ -130,14 +196,13 @@ func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
-	glob := r.PostFormValue("path_glob")
 	memory, err := m.service.Approve(r.Context(), r.PathValue("id"), moderation.Decision{
 		RuleText:  r.PostFormValue("rule_text"),
-		PathGlob:  &glob,
+		PathGlob:  pathGlobOf(r),
 		Moderator: moderatorOf(r),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		m.fail(w, r, err)
 		return
 	}
 	m.decide(w, r, memory, "approved")
@@ -150,21 +215,36 @@ func (m *ModerationUI) reject(w http.ResponseWriter, r *http.Request) {
 	}
 	memory, err := m.service.Reject(r.Context(), r.PathValue("id"), moderatorOf(r))
 	if err != nil {
-		http.Error(w, err.Error(), statusFor(err))
+		m.fail(w, r, err)
 		return
 	}
 	m.decide(w, r, memory, "rejected")
 }
 
+// pathGlobOf reads the glob the form carried. An absent field is not the same
+// as an empty one: absent leaves the rule's scope alone, which is what the CLI
+// does and what a client that only meant to edit the text expects, while an
+// empty one widens the rule to the whole repository, which is what a maintainer
+// clearing the box on the page is asking for.
+func pathGlobOf(r *http.Request) *string {
+	values, present := r.PostForm["path_glob"]
+	if !present {
+		return nil
+	}
+	glob := values[0]
+	return &glob
+}
+
+// decide answers a recorded decision: a form post from a browser cannot set
+// Accept, so it is sent back to the list it came from, and a client that asks
+// for JSON gets JSON.
 func (m *ModerationUI) decide(w http.ResponseWriter, r *http.Request, memory store.Memory, decision string) {
-	// A browser form post cannot set Accept, so it is answered with a redirect
-	// back to the list; an API client that asks for JSON gets JSON.
-	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		target := "/ui/moderation?decided=" + decision + "+" + memory.ShortID()
+	if wantsHTML(r) {
+		query := url.Values{"decided": {decision + " " + memory.ShortID()}}
 		if status := r.FormValue("status_filter"); status != "" {
-			target += "&status=" + status
+			query.Set("status", status)
 		}
-		http.Redirect(w, r, target, http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/moderation?"+query.Encode(), http.StatusSeeOther)
 		return
 	}
 
@@ -179,17 +259,62 @@ func (m *ModerationUI) decide(w http.ResponseWriter, r *http.Request, memory sto
 	}
 }
 
-// statusFor maps a service error onto a status code: a rule that is not there
-// is not found, and a decision the service refuses is a conflict.
+// fail answers a refused decision. An error this surface recognizes is repeated,
+// because it says what the caller can do about it; anything else is logged and
+// answered with a fixed sentence, so a database message is not handed to a
+// client. The content type follows what the caller asked for.
+func (m *ModerationUI) fail(w http.ResponseWriter, r *http.Request, err error) {
+	status := statusFor(err)
+	message := "the decision could not be recorded"
+	if status == http.StatusInternalServerError {
+		m.logger.Error("a moderation request failed", "path", r.URL.Path, "error", err)
+	} else {
+		message = err.Error()
+	}
+
+	if wantsJSON(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+			m.logger.Error("writing the moderation error failed", "error", err)
+		}
+		return
+	}
+	http.Error(w, message, status)
+}
+
+// statusFor maps a service error onto a status code: a rule that is not there is
+// not found, an ambiguous reference and a decision that lost a race both ask the
+// moderator to look again, a refused edit is a conflict, and a filter that names
+// no status is a bad request.
 func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrMemoryNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, moderation.ErrNoEmbedder):
+	case errors.Is(err, store.ErrAmbiguousMemory), errors.Is(err, store.ErrMemoryChanged), errors.Is(err, moderation.ErrNoEmbedder):
 		return http.StatusConflict
+	case errors.Is(err, moderation.ErrUnknownStatus):
+		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// wantsHTML reports whether the caller is a browser rendering the page. A form
+// post cannot set Accept on its own, and the answer to a decision is the list.
+func wantsHTML(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// wantsJSON reports whether the caller asked for JSON without asking for the
+// page, which is what tells a script apart from a browser: a navigation sends
+// text/html and a catch-all, so the catch-all alone decides nothing.
+func wantsJSON(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "text/html") {
+		return false
+	}
+	return strings.Contains(accept, "application/json") || strings.Contains(accept, "*/*")
 }
 
 // moderatorOf names the decision in the audit line. The credential is shared,
