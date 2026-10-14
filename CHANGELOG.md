@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.3](https://github.com/joangrigorov/rumil/compare/v0.0.2...v0.0.3) (2026-10-14)
+
+
+### Features
+
+* **serve:** Phase 3 (v0.0.3) webhook server and review workers ([#4](https://github.com/joangrigorov/rumil/issues/4)) ([f8fa6fd](https://github.com/joangrigorov/rumil/commit/f8fa6fd18f54df9b59b3c8483e63e4e04b8cc9ce))
+
 ## [0.0.2](https://github.com/joangrigorov/rumil/compare/v0.0.1...v0.0.2) (2026-10-14)
 
 
