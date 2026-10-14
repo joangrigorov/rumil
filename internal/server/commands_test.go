@@ -243,6 +243,13 @@ func TestT030_01_PendingRuleStaysOutOfTheNextReview(t *testing.T) {
 	if strings.Contains(prompt, "<project_memories>\n") {
 		t.Errorf("the prompt carries an empty or unapproved memory block:\n%s", prompt)
 	}
+
+	// The rule is out of the prompt because retrieval ran and left it out, not
+	// because retrieval did not run: its query was embedded, and the row it
+	// would have matched was on record while that happened.
+	if len(llm.EmbeddedTexts()) == 0 {
+		t.Error("the review embedded no retrieval query: nothing looked for the rule")
+	}
 }
 
 // T-030-05: an operator who turned the gate off gets the rule straight away,
@@ -574,9 +581,6 @@ func TestRememberCommandWithoutMemoryCostsNoModelCall(t *testing.T) {
 	}
 }
 
-// storedRules reads the repository's rules through the review path, approving
-// them first: only APPROVED rows are retrievable, and the moderation surface
-// that makes that transition arrives in v0.0.5.
 // storedMemories reads the rows as they are, with the status the gate gave
 // them, which is what a test of the approval gate asserts on.
 func storedMemories(t *testing.T, dsn string) []store.Memory {
