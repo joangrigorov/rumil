@@ -19,6 +19,15 @@ var ErrMemoryNotFound = errors.New("memory not found")
 // asked to be more specific rather than given whichever row sorted first.
 var ErrAmbiguousMemory = errors.New("memory id is ambiguous")
 
+// ErrMemoryChanged reports a decision that does not fit the rule as it is now.
+// It is what two moderators working the queue at once produce, and what a page
+// left open produces: the decision replaces the wording with words the row no
+// longer holds and brings no vector for them. The decision is refused rather
+// than applied, because applying it would pair the words one moderator read with
+// the vector the other one computed, and a rule has to be found by the words it
+// says.
+var ErrMemoryChanged = errors.New("the rule changed while the decision was being made")
+
 // memoryRefPattern is what a moderation command may name: a UUID, or the
 // leading group of one, which is the short id a confirmation reply puts in the
 // pull request so a maintainer can paste it. Validating the shape first is what
@@ -146,7 +155,9 @@ type MemoryDecision struct {
 	// Embedding is the vector for RuleText, and is required when RuleText is an
 	// edit: the store does not call an embedding provider, and keeping the old
 	// vector would leave a rule that no longer matches what a search looks for
-	// (T-030-03).
+	// (T-030-03). The store enforces that pairing rather than trusting it, so a
+	// decision computed against a rule another moderator has since changed is
+	// refused with ErrMemoryChanged instead of written.
 	Embedding []float32
 	// ReviewedBy records who decided.
 	ReviewedBy string
@@ -179,15 +190,22 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 
 	// The text, the glob and the vector are only replaced when the decision
 	// carries them, so a rejection cannot erase what was proposed.
+	//
+	// The last condition is what makes an edit atomic against a second
+	// moderator. It reads rule_text as it is now, and it only lets the statement
+	// replace the text when the decision brings the vector for that replacement,
+	// so a decision computed before the text changed matches nothing instead of
+	// overwriting the words and leaving the other moderator's vector behind.
 	rows, err := d.pool.Query(ctx, `
 		UPDATE memories
 		SET status = $3::memory_status,
 		    rule_text = coalesce(nullif($4, ''), rule_text),
 		    path_glob = coalesce($5, path_glob),
-		    embedding = coalesce($6::vector, embedding),
+		    embedding = CASE WHEN $4 <> '' AND $4 <> rule_text THEN $6::vector ELSE embedding END,
 		    reviewed_by = nullif($7, ''),
 		    updated_at = now()
 		WHERE installation_id = $1 AND id = $2
+		  AND ($4 = '' OR $4 = rule_text OR $6::vector IS NOT NULL)
 		RETURNING `+memoryColumns,
 		installationID, resolved.ID, status, decision.RuleText, decision.PathGlob,
 		vectorLiteralOrNull(decision.Embedding), decision.ReviewedBy)
@@ -201,6 +219,11 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 		return Memory{}, fmt.Errorf("updating memory %s: %w", id, err)
 	}
 	if memory == nil {
+		// Either the row is gone, or the decision is not one the rule as it is
+		// now can take. Reading again tells those two apart.
+		if _, readErr := d.MemoryByID(ctx, installationID, id); readErr == nil {
+			return Memory{}, fmt.Errorf("%w: %s", ErrMemoryChanged, id)
+		}
 		return Memory{}, fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
 	}
 	return *memory, nil
