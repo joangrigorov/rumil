@@ -1,0 +1,46 @@
+# Rumil example configuration.
+#
+# Copy this file to rumil.yaml and fill in your own values. ${ENV_VAR}
+# placeholders are expanded from the environment before the YAML is parsed, so
+# secrets never have to live in the file itself.
+
+app:
+  bot_handle: "@rumil"
+  max_agent_turns: 25
+  max_diff_bytes: 250000          # Diffs larger than this are paginated by get_pr_diff
+  log_level: "info"               # debug | info | warn | error
+
+# Rumil ships no centralized GitHub App. Register your own App, install it on the
+# repositories Rumil should review, and fill in the three credential values below.
+github:
+  app_id: 123456
+  installation_id: 98765432       # Installation of your App on the target account
+  private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use the GITHUB_PRIVATE_KEY environment variable instead
+  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.1.0 for webhook verification
+
+models:
+  default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider
+  default_embedding: "text-embedding-3-small" # Required from v0.2.0
+  providers:
+    - id: "deepseek-v4-flash"
+      provider: "openai-compatible"
+      base_url: "https://api.deepseek.com/v1"
+      model_name: "deepseek-v4-flash"
+      api_key: "${DEEPSEEK_API_KEY}"
+      temperature: 0.1
+      max_tokens: 8192
+    - id: "text-embedding-3-small"
+      provider: "openai-compatible"
+      base_url: "https://api.openai.com/v1"
+      model_name: "text-embedding-3-small"
+      api_key: "${OPENAI_API_KEY}"
+      dimensions: 1536            # A provider with dimensions is an embedding provider; it must match the memories.embedding column
+
+database:                         # Required from v0.1.0
+  dsn: "${DATABASE_URL}"          # postgres://user:pass@db:5432/rumil?sslmode=disable
+  auto_migrate: true
+
+moderation:                       # Used from v0.2.0
+  accept_all: false               # MUST stay false from v0.3.0 on
+  auto_approve_associations: []   # Optional, for example ["OWNER"]
+  admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer token for the moderation UI and API
