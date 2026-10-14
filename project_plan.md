@@ -5,7 +5,7 @@
 > 2. Implement strictly phase-by-phase (`v0.0.1` -> `v0.0.2` -> `v0.0.3` -> `v0.0.4` -> `v0.0.5` -> `v0.0.6`).
 > 3. Every phase is **incomplete** until 100% of the tests in that phase's **Mandatory Verification Matrix** pass via `go test -race ./...`.
 > 4. Rumil is strictly **read-only** toward target repositories. It may only read repository contents/diffs and write GitHub PR reviews/comments and internal memory records.
-> 5. Deliver each phase in its own pull request against `main`: implement, run that phase's **Mandatory Verification Matrix**, open the PR, then **stop** and wait for maintainer review before starting the next phase. Version numbers attached to phases are indicative; the phase order and its matrices are mandatory.
+> 5. Deliver each phase in its own pull request against `main`: implement it, run that phase's **Mandatory Verification Matrix**, open the PR, then run an adversarial review pass with fresh-context subagents that see the plan, the diff and the matrix, and resolve what they find before merging. The phase PR is **squash-merged**, and the release-please PR that follows is **normal-merged**. Work **stops and goes to the maintainer** when a matrix item cannot pass, a gate cannot be fixed without changing the plan, a finding would change the plan's scope or phase structure, a credential the agent does not hold is required, or a phase-boundary surprise appears. Version numbers attached to phases are indicative; the phase order and its matrices are mandatory.
 
 ---
 
@@ -135,7 +135,7 @@ database:                                         # Required in v0.0.3+
   auto_migrate: true
 
 moderation:                                       # Used in v0.0.4 / v0.0.5+
-  accept_all: false                               # MUST default to false in v0.0.5+
+  accept_all: false                               # MUST default to false from v0.0.4 on: the bypass for the memory approval gate
   auto_approve_associations: []                   # Optional e.g. ["OWNER"]
   admin_token: "${RUMIL_ADMIN_TOKEN}"             # Bearer token auth for Moderation UI/API (constant-time compare)
 ```
@@ -243,7 +243,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
 | :--- | :--- | :--- |
 | `search_memory` | `{"query": "string (required)", "file_path": "string (optional)", "limit": "int (default 5, max 15)"}` | Embeds `query` and runs a cosine similarity search against `memories` where `status = 'APPROVED'` AND `installation_id = $1` AND (`(scope = 'REPO' AND repo_name = $2)` OR `(scope = 'ORG' AND org_name = $3)`). Filters or boosts results whose `path_glob` matches `file_path`. |
-| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`). Determines `status`: in v0.0.4 (or if `moderation.accept_all == true`), sets `APPROVED`; in v0.0.5+ with `accept_all == false`, sets `PENDING`. In v0.0.4–v0.0.5, forces `scope = 'REPO'` unless v0.0.6 org-scope is enabled and authorized. |
+| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`). Sets `status = 'APPROVED'` only when `moderation.accept_all == true`; otherwise `PENDING`, which waits for a human decision on the moderation surface. A `PENDING` row is inert: nothing retrieves it. Forces `scope = 'REPO'` until the org-scope work of v0.0.6 is enabled and authorized. |
 
 ---
 
@@ -341,28 +341,30 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
      2. Rumil's prior comment in the thread,
      3. The user's `@rumil remember ...` comment.
    * Run a synthesis prompt that distills the raw conversation (e.g., *"we don't use transactions here"*) into a self-contained rule (e.g., *"In `internal/billing/webhook.go`, database writes do not use explicit SQL transactions because handlers are idempotent single-statement upserts"*), invokes `propose_memory`, and replies to the PR comment confirming the memory record ID.
-   * *(Note: In `v0.0.4`, `propose_memory` saves with `status = 'APPROVED'` by default until `v0.0.5` locks the gate).*
+   * *(Note: the approval gate is on from this phase, not from v0.0.5. `propose_memory` writes `PENDING` unless `moderation.accept_all == true`, and only `APPROVED` rows are retrieved, so a memory recorded here waits for the approval surface that arrives in v0.0.5. That leaves `accept_all: true` as the documented bypass: it is off by default, and an operator who turns it on has accepted that comment-derived text reaches the review prompt unvetted.)*
+   * *(Known gap until v0.0.5: the comment handler accepts `@rumil remember` from any commenter, so an outsider can queue proposals and spend embedding credits. Nothing they propose reaches the prompt while the gate holds, and v0.0.5 adds the `author_association` guard.)*
 
 #### Mandatory Verification Matrix — `v0.0.4`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
-| `T-020-01` | Happy Flow (Command -> Store) | Developer replies to a review comment on `pkg/auth/jwt.go`: `@rumil remember we intentionally allow clock skew up to 60s here`. | Webhook queues command job; agent synthesizes standalone rule referencing `pkg/auth/jwt.go`, generates embedding, stores row in `memories` with `scope='REPO'`, and replies with confirmation comment on GitHub. |
-| `T-020-02` | Happy Flow (RAG Recall) | Subsequent PR modifies `pkg/auth/jwt.go` with 60s clock skew. | Pre-retrieval and/or `search_memory` retrieves the stored memory; agent does NOT flag the 60s clock skew as a bug. |
+| `T-020-01` | Happy Flow (Command -> Store) | Developer replies to a review comment on `pkg/auth/jwt.go`: `@rumil remember we intentionally allow clock skew up to 60s here`. | Webhook queues command job; agent synthesizes standalone rule referencing `pkg/auth/jwt.go`, generates embedding, stores row in `memories` with `scope='REPO'` and `status='PENDING'`, and replies with confirmation comment on GitHub. |
+| `T-020-02` | Happy Flow (RAG Recall) | The row from `T-020-01` is approved in the store, then a subsequent PR modifies `pkg/auth/jwt.go` with 60s clock skew. | Pre-retrieval and/or `search_memory` retrieves the stored memory; agent does NOT flag the 60s clock skew as a bug. |
 | `T-020-03` | Loop Prevention | Rumil posts a comment containing the string `@rumil remember` in its own help text. | Webhook handler checks `sender.type == "Bot"` (or matches Rumil's App ID) and drops the event immediately. |
 | `T-020-04` | Deduplication | Two developers post nearly identical `@rumil remember` comments (`cosine_similarity > 0.92`). | Second `propose_memory` call detects existing near-duplicate rule, skips inserting a duplicate row, and replies referencing the existing memory ID. |
 | `T-020-05` | Tenant/Repo Isolation | Repo A stores a `REPO`-scoped memory. Repo B (under the same or different org) opens a PR with identical code. | `search_memory` on Repo B returns zero records from Repo A. |
+| `T-020-06` | Approval Gate | Default config (`accept_all: false`), and a `PENDING` memory whose `path_glob` matches the modified file. | Neither pre-retrieval nor `search_memory` returns the `PENDING` row, so it never reaches the system prompt. The same proposal with `accept_all: true` is stored `APPROVED` and is retrieved. |
 
 ---
 
 ### Phase 5: `v0.0.5` — Security Gate, Moderation Queue, CLI & Web UI
 
 #### Scope & Deliverables
-1. **Flip the Security Gate:**
-   * `moderation.accept_all` defaults to `false`.
-   * Unless `accept_all: true` (or the commenter's GitHub `author_association` is explicitly listed in `moderation.auto_approve_associations`), all `propose_memory` calls insert rows with `status = 'PENDING'`.
-   * `search_memory` strictly queries `WHERE status = 'APPROVED'`. `PENDING` and `REJECTED` rows are invisible to the reviewer agent.
-   * When a memory enters `PENDING`, Rumil replies on the PR: *"Memory proposal `#<short-id>` queued for maintainer moderation (`status: PENDING`)."*
+1. **Moderation Surface for the v0.0.4 Gate:**
+   * The gate itself landed in `v0.0.4`: `propose_memory` writes `PENDING` unless `accept_all: true`, and `search_memory` queries `WHERE status = 'APPROVED'` only. This phase adds the surface that resolves a `PENDING` row, which is why `T-030-01` re-asserts that an unapproved rule stays invisible.
+   * Extend `moderation.auto_approve_associations`: a commenter whose GitHub `author_association` is explicitly listed stores `APPROVED` immediately, without `accept_all`.
+   * A proposal that lands `PENDING` replies on the PR: *"Memory proposal `#<short-id>` queued for maintainer moderation (`status: PENDING`)."*
+   * Log a startup security warning when `accept_all: true` is configured.
 2. **Untrusted Commenter Guard:**
    * Reject `@rumil remember` commands from users with `author_association == "NONE"` or `"FIRST_TIME_CONTRIBUTOR"` on public repos so external actors cannot flood the moderation queue or burn embedding API credits.
 3. **CLI Moderation (`cmd/rumil/mod.go`):**
