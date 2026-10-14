@@ -119,13 +119,13 @@ type Review struct {
 	GuidelinesRef string `yaml:"guidelines_ref"`
 }
 
-// Database is used from v0.1.0 on.
+// Database is used from v0.0.3 on.
 type Database struct {
 	DSN         string `yaml:"dsn"`
 	AutoMigrate bool   `yaml:"auto_migrate"`
 }
 
-// Moderation is used from v0.2.0 on.
+// Moderation is used from v0.0.4 on.
 type Moderation struct {
 	AcceptAll               bool     `yaml:"accept_all"`
 	AutoApproveAssociations []string `yaml:"auto_approve_associations"`

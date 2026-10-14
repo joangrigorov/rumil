@@ -27,5 +27,7 @@ COPY --from=build /out/rumil /usr/local/bin/rumil
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/rumil"]
 
-# Phase 1 exposes `rumil review`; `rumil serve` becomes the default in v0.1.0.
+# `rumil review` arrived in Phase 1 and `rumil serve` in v0.0.3. The default
+# command stays `--help`, so a bare `docker run` prints usage instead of failing
+# on a missing config file.
 CMD ["--help"]

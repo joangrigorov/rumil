@@ -117,7 +117,7 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 
 	if job.EventType != eventPullRequest {
 		// A comment job carries no review: the @rumil command parser that
-		// consumes it arrives in v0.2.0 (Phase 4).
+		// consumes it arrives in v0.0.4 (Phase 4).
 		logger.Info("job needs no review in this phase")
 		p.finish(ctx, logger, job, true, nil)
 		return

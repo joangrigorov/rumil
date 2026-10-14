@@ -17,4 +17,7 @@ COPY ${TARGETPLATFORM}/rumil /usr/local/bin/rumil
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/rumil"]
+
+# The default command stays `--help`, so a bare `docker run` prints usage
+# instead of failing on a missing config file.
 CMD ["--help"]
