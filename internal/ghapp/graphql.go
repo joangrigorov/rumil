@@ -61,8 +61,8 @@ type ThreadComment struct {
 	CreatedAt time.Time
 }
 
-// ReviewThread is one thread of review comments. The first comment opened it,
-// which is what decides whose thread it is.
+// ReviewThread is one thread of review comments. Its earliest comment opened
+// it, which is what decides whose thread it is.
 type ReviewThread struct {
 	ID         string
 	Path       string
@@ -76,12 +76,21 @@ type ReviewThread struct {
 }
 
 // Root returns the comment that opened the thread, which is the only one a
-// resolution may be allowed to touch.
+// resolution may be allowed to touch. Ownership is decided by the timestamp
+// rather than by position in the list: the caller that lists threads for a
+// resolution must not depend on the order the api happens to return comments
+// in, because the check is what keeps a person's thread open.
 func (t ReviewThread) Root() (ThreadComment, bool) {
 	if len(t.Comments) == 0 {
 		return ThreadComment{}, false
 	}
-	return t.Comments[0], true
+	root := t.Comments[0]
+	for _, comment := range t.Comments[1:] {
+		if !comment.CreatedAt.IsZero() && (root.CreatedAt.IsZero() || comment.CreatedAt.Before(root.CreatedAt)) {
+			root = comment
+		}
+	}
+	return root, true
 }
 
 // Newest returns the timestamp of the thread's most recent comment, which is

@@ -67,34 +67,55 @@ func TestCreateIssueCommentPostsAConversationComment(t *testing.T) {
 }
 
 // The retry that returns a job to the queue has to see the answer the previous
-// attempt already posted, whichever endpoint carried it.
-func TestCommentsByAuthorReadsBothEndpoints(t *testing.T) {
+// attempt already posted, on both kinds of command.
+func TestCommentBodiesReadTheCommandThread(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	gh.Comments = []testutil.CommentEntry{
-		comment(1, 0, "rumil[bot]", "Memory proposal `#9f1c2a4b` queued for maintainer moderation."),
-		comment(2, 0, "octocat", "please remember this"),
+		comment(1, 0, "rumil[bot]", "This line wraps the call without a timeout."),
+		comment(2, 1, "octocat", "@rumil remember we do that on purpose"),
+		comment(3, 2, "rumil[bot]", "Memory proposal `#9f1c2a4b` queued for maintainer moderation."),
+		comment(4, 0, "rumil[bot]", "An unrelated thread."),
+		comment(5, 4, "rumil[bot]", "Memory `#deadbee1` already covers this (`status: APPROVED`)."),
 	}
 	gh.IssueComments = []testutil.CommentEntry{
-		comment(3, 0, "rumil", "Reviewed against the repository guidelines."),
-		comment(4, 0, "reviewer", "looks good"),
+		comment(6, 0, "reviewer", "@rumil remember to close rows we migrate"),
+		comment(7, 0, "rumil", "Memory `#0ddba11` recorded (`status: APPROVED`)."),
 	}
 	client := newTestClient(t, gh)
 
-	bodies, err := client.CommentsByAuthor(context.Background(), "@rumil")
-	if err != nil {
-		t.Fatalf("CommentsByAuthor returned error: %v", err)
-	}
-	if len(bodies) != 2 {
-		t.Fatalf("read %d comments, want Rumil's two: %v", len(bodies), bodies)
-	}
-	if !strings.Contains(strings.Join(bodies, "\n"), "#9f1c2a4b") {
-		t.Errorf("the comments Rumil posted do not include the answer: %v", bodies)
-	}
-	for _, body := range bodies {
-		if strings.Contains(body, "please remember this") || strings.Contains(body, "looks good") {
-			t.Errorf("another author's comment was attributed to Rumil: %q", body)
+	t.Run("a command's own thread is what is read", func(t *testing.T) {
+		bodies, err := client.ThreadCommentBodies(context.Background(), 2, "@rumil")
+		if err != nil {
+			t.Fatalf("ThreadCommentBodies returned error: %v", err)
 		}
-	}
+		joined := strings.Join(bodies, "\n")
+		if !strings.Contains(joined, "#9f1c2a4b") {
+			t.Errorf("the answer in the command's thread was not read: %v", bodies)
+		}
+		if strings.Contains(joined, "#deadbee1") {
+			t.Errorf("another thread's answer was attributed to this command: %v", bodies)
+		}
+		if strings.Contains(joined, "we do that on purpose") {
+			t.Errorf("another author's comment was attributed to Rumil: %v", bodies)
+		}
+	})
+
+	t.Run("conversation answers are read separately", func(t *testing.T) {
+		bodies, err := client.ConversationCommentBodies(context.Background(), "@rumil")
+		if err != nil {
+			t.Fatalf("ConversationCommentBodies returned error: %v", err)
+		}
+		joined := strings.Join(bodies, "\n")
+		if !strings.Contains(joined, "#0ddba11") {
+			t.Errorf("the conversation answer was not read: %v", bodies)
+		}
+		if strings.Contains(joined, "#9f1c2a4b") {
+			t.Errorf("a review-thread answer was read as a conversation one: %v", bodies)
+		}
+		if strings.Contains(joined, "to close rows we migrate") {
+			t.Errorf("another author's comment was attributed to Rumil: %v", bodies)
+		}
+	})
 }
 
 func TestThreadCommentByWalksUpTheThread(t *testing.T) {

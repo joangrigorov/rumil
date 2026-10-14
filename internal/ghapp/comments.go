@@ -29,33 +29,16 @@ func (c *Client) CreateIssueComment(ctx context.Context, body string) error {
 	return nil
 }
 
-// CommentsByAuthor returns the bodies of every comment login has posted on the
-// pull request, review comments and conversation comments alike. It is how a
-// retry tells whether it already answered a proposal: an interrupted job runs
-// again, and the answer must not be posted twice.
-func (c *Client) CommentsByAuthor(ctx context.Context, login string) ([]string, error) {
+// ConversationCommentBodies returns the bodies of the conversation comments
+// login has posted on the pull request. It is how a retry tells whether it
+// already answered a top-level command: an interrupted job runs again, and the
+// answer must not be posted twice.
+func (c *Client) ConversationCommentBodies(ctx context.Context, login string) ([]string, error) {
 	if NormalizeLogin(login) == "" {
 		return nil, fmt.Errorf("a login is required to look its comments up")
 	}
 
 	var bodies []string
-	reviewOpts := &github.PullRequestListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
-	for {
-		page, resp, err := c.gh.PullRequests.ListComments(ctx, c.owner, c.repo, c.number, reviewOpts)
-		if err != nil {
-			return nil, fmt.Errorf("listing review comments of %s/%s#%d: %w", c.owner, c.repo, c.number, err)
-		}
-		for _, comment := range page {
-			if user := comment.GetUser(); user != nil && SameLogin(user.GetLogin(), login) {
-				bodies = append(bodies, comment.GetBody())
-			}
-		}
-		if resp == nil || resp.NextPage == 0 {
-			break
-		}
-		reviewOpts.Page = resp.NextPage
-	}
-
 	commentOpts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
 	for {
 		page, resp, err := c.gh.Issues.ListComments(ctx, c.owner, c.repo, c.number, commentOpts)
@@ -74,6 +57,51 @@ func (c *Client) CommentsByAuthor(ctx context.Context, login string) ([]string, 
 	}
 
 	return bodies, nil
+}
+
+// ThreadCommentBodies returns the bodies of login's comments that answer
+// commentID: the comments whose in_reply_to chain passes through it. A command
+// is answered inside its own thread, so this is the view that tells whether
+// that particular command already has its answer; every other thread on the
+// pull request is a different question.
+func (c *Client) ThreadCommentBodies(ctx context.Context, commentID int64, login string) ([]string, error) {
+	if NormalizeLogin(login) == "" {
+		return nil, fmt.Errorf("a login is required to look its comments up")
+	}
+	comments, err := c.ExistingReviewComments(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int64]ExistingComment, len(comments))
+	for _, comment := range comments {
+		byID[comment.ID] = comment
+	}
+
+	var bodies []string
+	for _, comment := range comments {
+		if SameLogin(comment.Author, login) && repliesTo(byID, comment.ID, commentID) {
+			bodies = append(bodies, comment.Body)
+		}
+	}
+	return bodies, nil
+}
+
+// repliesTo reports whether the in_reply_to chain that starts at id passes
+// through ancestor. The command comment is normally in the listing, but it does
+// not have to be: a reply that names it as its parent is already in the same
+// thread.
+func repliesTo(byID map[int64]ExistingComment, id, ancestor int64) bool {
+	for depth := 0; depth < threadDepthLimit; depth++ {
+		if id == ancestor {
+			return true
+		}
+		if id == 0 {
+			return false
+		}
+		id = byID[id].InReplyToID
+	}
+	return false
 }
 
 // ThreadCommentBy returns the body of the first comment in the chain that

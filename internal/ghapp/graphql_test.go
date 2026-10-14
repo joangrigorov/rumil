@@ -2,6 +2,7 @@ package ghapp
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -133,5 +134,60 @@ func TestGraphQLErrorsAreReported(t *testing.T) {
 	}
 	if _, err := client.ReviewThreads(context.Background()); err == nil {
 		t.Error("ReviewThreads hid a graphql error")
+	}
+}
+
+// threadFixture builds n threads whose ids order them, so a paging test can say
+// which threads came back.
+func threadFixture(n int) []testutil.ThreadEntry {
+	threads := make([]testutil.ThreadEntry, 0, n)
+	for i := 0; i < n; i++ {
+		threads = append(threads, testutil.ThreadEntry{
+			ID: "PRRT_" + strconv.Itoa(i), Path: "main.go", Line: i + 1,
+			Comments: []testutil.CommentEntry{
+				testutil.ReviewComment(int64(10+i), 0, "rumil[bot]", "finding "+strconv.Itoa(i)),
+			},
+		})
+	}
+	return threads
+}
+
+// A pull request with more threads than one page holds is read across pages: a
+// later round that lost half the history would repeat findings it cannot see.
+func TestReviewThreadsFollowsTheCursor(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Threads = threadFixture(5)
+	gh.ThreadPageSize = 2
+	client := newTestClient(t, gh)
+
+	threads, err := client.ReviewThreads(context.Background())
+	if err != nil {
+		t.Fatalf("ReviewThreads returned error: %v", err)
+	}
+	if len(threads) != 5 {
+		t.Fatalf("read %d threads, want all 5 across three pages", len(threads))
+	}
+	for i, thread := range threads {
+		if want := "PRRT_" + strconv.Itoa(i); thread.ID != want {
+			t.Errorf("thread %d is %s, want %s", i, thread.ID, want)
+		}
+	}
+}
+
+// maxThreadPages bounds the read: a pull request with more threads than that is
+// one where a later round should narrow with a path rather than read
+// everything.
+func TestReviewThreadsStopsAtThePageLimit(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Threads = threadFixture(maxThreadPages * 4)
+	gh.ThreadPageSize = 1
+	client := newTestClient(t, gh)
+
+	threads, err := client.ReviewThreads(context.Background())
+	if err != nil {
+		t.Fatalf("ReviewThreads returned error: %v", err)
+	}
+	if len(threads) != maxThreadPages {
+		t.Errorf("read %d threads, want the %d pages the client reads", len(threads), maxThreadPages)
 	}
 }

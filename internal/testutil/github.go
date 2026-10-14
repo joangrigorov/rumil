@@ -150,6 +150,9 @@ type FakeGitHub struct {
 	// GraphQLErrors, when set, is returned in the errors array of every
 	// GraphQL response.
 	GraphQLErrors []string
+	// ThreadPageSize, when set, is how many threads one reviewThreads page
+	// holds, so a test can make the client follow endCursor.
+	ThreadPageSize int
 	// Posted collects the comments Rumil posted through the reply and
 	// conversation endpoints.
 	Posted []PostedComment
@@ -568,10 +571,7 @@ func (f *FakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
 			"repository": map[string]any{
 				"pullRequest": map[string]any{
-					"reviewThreads": map[string]any{
-						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-						"nodes":    f.threadNodes(),
-					},
+					"reviewThreads": f.threadPage(body.Variables),
 				},
 			},
 		}})
@@ -583,13 +583,45 @@ func (f *FakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// threadNodes renders the stored threads in the shape of the GraphQL query.
-func (f *FakeGitHub) threadNodes() []map[string]any {
+// threadPage serves one page of threads. ThreadPageSize 0 serves every thread
+// in one page, which is what a fixture of a few threads looks like; a smaller
+// size makes the caller follow endCursor, which is what a test of the paging
+// loop needs.
+func (f *FakeGitHub) threadPage(variables map[string]any) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	nodes := make([]map[string]any, 0, len(f.Threads))
-	for _, thread := range f.Threads {
+	start := 0
+	if cursor, _ := variables["cursor"].(string); cursor != "" {
+		for i, thread := range f.Threads {
+			if thread.ID == cursor {
+				start = i + 1
+				break
+			}
+		}
+	}
+	size := f.ThreadPageSize
+	if size <= 0 || start+size > len(f.Threads) {
+		size = len(f.Threads) - start
+	}
+	end := start + size
+
+	hasNext := end < len(f.Threads)
+	endCursor := ""
+	if hasNext && end > start {
+		endCursor = f.Threads[end-1].ID
+	}
+	return map[string]any{
+		"pageInfo": map[string]any{"hasNextPage": hasNext, "endCursor": endCursor},
+		"nodes":    f.threadNodesLocked(f.Threads[start:end]),
+	}
+}
+
+// threadNodesLocked renders threads in the shape of the GraphQL query. The
+// caller holds the lock.
+func (f *FakeGitHub) threadNodesLocked(threads []ThreadEntry) []map[string]any {
+	nodes := make([]map[string]any, 0, len(threads))
+	for _, thread := range threads {
 		comments := make([]map[string]any, 0, len(thread.Comments))
 		for _, comment := range thread.Comments {
 			comments = append(comments, map[string]any{

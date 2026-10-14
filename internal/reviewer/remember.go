@@ -149,7 +149,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 		return result, nil
 	}
 
-	answered, err := e.answeredWith(ctx, client, result.Memory.ShortID())
+	answered, err := e.answeredWith(ctx, client, req, result.Memory.ShortID())
 	if err != nil {
 		// The check is what keeps a retry from answering twice, so an
 		// inconclusive answer is left unanswered rather than posted blind.
@@ -157,7 +157,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 		return result, nil
 	}
 	if answered {
-		e.logger.Info("the proposal was already answered on the pull request", "memory", result.Memory.ID)
+		e.logger.Info("this command was already answered on the pull request", "memory", result.Memory.ID)
 		return result, nil
 	}
 
@@ -182,11 +182,28 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 	return result, nil
 }
 
-// answeredWith reports whether an earlier comment by Rumil already names this
-// memory. An interrupted job returns to the queue and runs again, so this is
-// what keeps the second run from posting the answer twice.
-func (e *Engine) answeredWith(ctx context.Context, client *ghapp.Client, shortID string) (bool, error) {
-	bodies, err := client.CommentsByAuthor(ctx, e.cfg.App.BotHandle)
+// answeredWith reports whether this command already has Rumil's answer. An
+// interrupted job returns to the queue and runs again, so this is what keeps
+// the second run from posting the answer twice.
+//
+// The question is about the command's own thread, because the short id alone
+// does not identify one: a second person whose note dedupes onto a rule the
+// first person already recorded is answering a different comment, and matching
+// the id anywhere on the pull request would leave that person without an
+// answer (T-020-04).
+func (e *Engine) answeredWith(ctx context.Context, client *ghapp.Client, req RememberRequest, shortID string) (bool, error) {
+	var (
+		bodies []string
+		err    error
+	)
+	switch {
+	case req.Conversation:
+		bodies, err = client.ConversationCommentBodies(ctx, e.cfg.App.BotHandle)
+	case req.CommentID != 0:
+		bodies, err = client.ThreadCommentBodies(ctx, req.CommentID, e.cfg.App.BotHandle)
+	default:
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
