@@ -288,7 +288,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * `POST /webhooks/github`: Verify `X-Hub-Signature-256` using HMAC SHA-256 and `github.webhook_secret`.
    * Enforce idempotency using `X-GitHub-Delivery` stored in `webhook_jobs.delivery_id`.
    * Filter for actionable events:
-     * `pull_request` where `action == "review_requested"` (and requested reviewer is the Rumil App/bot) OR `action == "opened"` (if `auto_review_on_open: true`).
+     * `pull_request` where `action == "review_requested"` and the requested reviewer is the Rumil App/bot. This is the **only** trigger: Rumil never reviews on its own initiative, so the `opened`, `synchronize`, `reopened`, `labeled`, and `ready_for_review` actions are all ignored.
      * GitHub **Issues are out of scope**: an `issue_comment` is actionable only when it belongs to a pull request (the payload carries `issue.pull_request`); comments on plain issues are dropped without enqueueing, because `webhook_jobs.pr_number` is `NOT NULL`.
    * Insert job into `webhook_jobs` with `status = 'QUEUED'` and return `202 Accepted` within `< 200ms`.
    * `GET /healthz`: Verify DB connectivity and return `200 OK`.
@@ -302,7 +302,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 | `T-010-01` | Happy Flow | Valid `pull_request` (`review_requested`) webhook signed with valid HMAC secret. | HTTP handler returns `202 Accepted` in under 200ms; job is persisted as `QUEUED`, picked up by worker, reviewed, and marked `COMPLETED`. |
 | `T-010-02` | Security | Webhook request with missing or invalid `X-Hub-Signature-256`. | Returns `401 Unauthorized`; zero database writes; zero worker triggers. |
 | `T-010-03` | Idempotency | GitHub retries the exact same webhook payload with identical `X-GitHub-Delivery` UUID twice. | First request returns `202` and queues job; second request hits unique constraint on `delivery_id`, returns `200 OK (Duplicate ignored)`, and does not run a second review. |
-| `T-010-04` | Noise Filtering | Webhook sends `pull_request` with `action: "labeled"` or `review_requested` for a different human user. | Returns `200 OK (Ignored)`; does not enqueue a job. |
+| `T-010-04` | Noise Filtering | Webhook sends `pull_request` with `action: "opened"`, `"synchronize"`, or `"labeled"`, or with `review_requested` for a different human user. | Returns `200 OK (Ignored)`; does not enqueue a job. Rumil reviews only when it is explicitly requested as a reviewer. |
 | `T-010-05` | Resilience | Container receives `SIGTERM` while a review job is `RUNNING`. | Server stops accepting new HTTP requests, gives active worker up to 30s graceful shutdown context, or resets interrupted `RUNNING` jobs to `QUEUED` on restart. |
 
 ---
