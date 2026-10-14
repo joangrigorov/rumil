@@ -161,8 +161,11 @@ Even though vector memory launches in `v0.2.0`, moderation in `v0.3.0`, and org-
 
 ```sql
 -- +goose Up
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- The schema is pinned because an extension is database-wide: a bare
+-- CREATE EXTENSION installs into the first schema on the caller's search_path,
+-- which is a different schema for every test package.
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 CREATE TYPE memory_scope AS ENUM ('REPO', 'ORG');
 CREATE TYPE memory_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
@@ -459,7 +462,7 @@ Rewrite the developer's note into a clear, self-contained engineering rule that 
 1. **Deterministic Testing without Live APIs:**
    * All verification matrix tests (`T-001-*` through `T-040-*`) MUST run hermetic integration tests using:
      * `httptest.NewServer` to mock GitHub REST API endpoints and OpenAI-compatible LLM/Embedding responses.
-     * `testcontainers-go` (or a local test Postgres instance via `TEST_DATABASE_URL`) running `pgvector/pgvector:pg16` for all `v0.1.0+` database tests.
+     * A `pgvector/pgvector:pg16` service for all `v0.1.0+` database tests. The harness reads its URL from `TEST_DATABASE_URL` and skips those tests when the variable is unset. Each test package names its own schema through the DSN so `go test ./...` never lets two packages share a table.
 2. **Error Handling & Observability:**
    * Use standard library `log/slog` with structured JSON output. Every log line during a job must carry `delivery_id`, `installation_id`, `repo`, and `pr`.
    * Wrap all errors with context (`fmt.Errorf("fetching diff for %s#%d: %w", repo, pr, err)`).

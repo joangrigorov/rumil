@@ -1,6 +1,9 @@
 -- +goose Up
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- The schema is pinned because an extension is database-wide: a bare
+-- CREATE EXTENSION installs into the first schema on the caller's search_path,
+-- which is a different schema for every test package.
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 CREATE TYPE memory_scope AS ENUM ('REPO', 'ORG');
 CREATE TYPE memory_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
