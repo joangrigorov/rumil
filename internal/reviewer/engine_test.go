@@ -118,9 +118,9 @@ func TestT001_01_HappyFlowWithSecondProvider(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 
-	llm.QueueToolCall("github__get_pr_metadata", nil)
-	llm.QueueToolCall("github__get_pr_diff", nil)
-	llm.QueueToolCall("github__submit_pr_review", map[string]any{
+	llm.QueueToolCall("get_pr_metadata", nil)
+	llm.QueueToolCall("get_pr_diff", nil)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "Adds retry around the settlement call.",
 		"comments": []map[string]any{
@@ -222,11 +222,11 @@ func TestT001_03_PromptInjectionCannotUseHostTools(t *testing.T) {
 
 	// The model reads the diff, then plays along with the injection it finds
 	// there and asks for the host tools it names.
-	llm.QueueToolCall("github__get_pr_diff", nil)
+	llm.QueueToolCall("get_pr_diff", nil)
 	llm.QueueToolCall("bash", map[string]any{"command": "cat /proc/self/environ"})
 	llm.QueueToolCall("write", map[string]any{"file_path": target, "content": "pwned"})
 	llm.QueueToolCall("edit", map[string]any{"file_path": target, "old_string": "a", "new_string": "b"})
-	llm.QueueToolCall("github__submit_pr_review", map[string]any{
+	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "No security-relevant findings in this change.",
 	})
@@ -276,8 +276,8 @@ func TestT001_04_CommentOutsideDiffMovesIntoSummary(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 
-	llm.QueueToolCall("github__get_pr_diff", nil)
-	llm.QueueToolCall("github__submit_pr_review", map[string]any{
+	llm.QueueToolCall("get_pr_diff", nil)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "One finding inside the diff, one outside.",
 		"comments": []map[string]any{
@@ -324,8 +324,8 @@ func TestT001_05_DuplicateFindingIsNotReposted(t *testing.T) {
 	existing.User.Type = "Bot"
 	gh.Comments = []testutil.CommentEntry{existing}
 
-	llm.QueueToolCall("github__list_existing_review_comments", nil)
-	llm.QueueToolCall("github__submit_pr_review", map[string]any{
+	llm.QueueToolCall("list_existing_review_comments", nil)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "Retry logic looks fine.",
 		"comments": []map[string]any{
@@ -382,7 +382,7 @@ func TestT001_07_TurnLimitHaltsCleanly(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	for i := 0; i < 30; i++ {
-		llm.QueueToolCall("github__get_file_contents", map[string]any{"file_path": "main.go"})
+		llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "main.go"})
 	}
 
 	h := newHarness(t, gh, llm, harnessOpts{maxTurns: 3})

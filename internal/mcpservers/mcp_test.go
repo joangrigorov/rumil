@@ -1,27 +1,19 @@
 package mcpservers_test
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/joangrigorov/rumil/internal/mcpservers"
 )
 
-// TestSpecsSurviveInProcessRoundTrip pins the tool surface the model sees: the
-// names, and the JSON schema that travels over the in-process MCP transport.
-func TestSpecsSurviveInProcessRoundTrip(t *testing.T) {
+// TestSpecsPinTheToolSurface pins the tool surface the model sees: the names,
+// and the JSON Schema fields a valid call is built from.
+func TestSpecsPinTheToolSurface(t *testing.T) {
 	tools := mcpservers.NewGithubTools(nil, 4096, slog.New(slog.DiscardHandler))
-	srv := tools.Server("v0.0.1-test")
-
-	listed := listTools(t, srv)
+	specs := tools.Specs()
 
 	wantNames := []string{
 		"get_pr_metadata",
@@ -30,68 +22,50 @@ func TestSpecsSurviveInProcessRoundTrip(t *testing.T) {
 		"list_existing_review_comments",
 		"submit_pr_review",
 	}
-	got := make(map[string]mcp.Tool, len(listed))
-	for _, tool := range listed {
-		got[tool.Name] = tool
+	if len(specs) != len(wantNames) {
+		t.Errorf("tool set holds %d specs, want %d", len(specs), len(wantNames))
+	}
+
+	byName := make(map[string]mcpservers.Spec, len(specs))
+	for _, spec := range specs {
+		byName[spec.Name] = spec
 	}
 	for _, name := range wantNames {
-		if _, ok := got[name]; !ok {
-			t.Errorf("server does not expose %q", name)
+		if _, ok := byName[name]; !ok {
+			t.Errorf("tool set does not expose %q", name)
 		}
 	}
-	if len(listed) != len(wantNames) {
-		t.Errorf("server exposes %d tools, want %d", len(listed), len(wantNames))
+
+	for _, spec := range specs {
+		if spec.Description == "" {
+			t.Errorf("%s has no description", spec.Name)
+		}
+		if spec.Handle == nil {
+			t.Errorf("%s has no handler", spec.Name)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(spec.Schema, &schema); err != nil {
+			t.Errorf("%s has an undecodable schema: %v", spec.Name, err)
+			continue
+		}
+		if schema["type"] != "object" {
+			t.Errorf("%s schema type = %v, want object", spec.Name, schema["type"])
+		}
+		if schema["additionalProperties"] != false {
+			t.Errorf("%s schema does not forbid additional properties", spec.Name)
+		}
 	}
 
-	raw, err := json.Marshal(got["submit_pr_review"])
-	if err != nil {
-		t.Fatalf("marshaling the tool: %v", err)
-	}
-	schema := string(raw)
-	t.Logf("submit_pr_review as seen by a client: %s", schema)
-
+	submit := string(byName["submit_pr_review"].Schema)
 	for _, want := range []string{"REQUEST_CHANGES", "APPROVE", "summary_body", "comments", "required"} {
-		if !strings.Contains(schema, want) {
-			t.Errorf("submit_pr_review schema lost %q: %s", want, schema)
+		if !strings.Contains(submit, want) {
+			t.Errorf("submit_pr_review schema lost %q: %s", want, submit)
 		}
 	}
-
-	raw, err = json.Marshal(got["get_file_contents"])
-	if err != nil {
-		t.Fatalf("marshaling the tool: %v", err)
+	if !strings.Contains(string(byName["get_file_contents"].Schema), "file_path") {
+		t.Errorf("get_file_contents schema lost file_path: %s", byName["get_file_contents"].Schema)
 	}
-	if !strings.Contains(string(raw), "file_path") {
-		t.Errorf("get_file_contents schema lost file_path: %s", raw)
+	if !strings.Contains(string(byName["get_pr_diff"].Schema), "page") {
+		t.Errorf("get_pr_diff schema lost page: %s", byName["get_pr_diff"].Schema)
 	}
-}
-
-func listTools(t *testing.T, srv *server.MCPServer) []mcp.Tool {
-	t.Helper()
-
-	mcpClient, err := client.NewInProcessClient(srv)
-	if err != nil {
-		t.Fatalf("creating the in-process client: %v", err)
-	}
-	t.Cleanup(func() { _ = mcpClient.Close() })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := mcpClient.Start(ctx); err != nil {
-		t.Fatalf("starting the in-process client: %v", err)
-	}
-
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{Name: "test", Version: "test"}
-	initRequest.Params.Capabilities = mcp.ClientCapabilities{}
-	if _, err := mcpClient.Initialize(ctx, initRequest); err != nil {
-		t.Fatalf("initializing the in-process client: %v", err)
-	}
-
-	listed, err := mcpClient.ListTools(ctx, mcp.ListToolsRequest{})
-	if err != nil {
-		t.Fatalf("listing tools: %v", err)
-	}
-	return listed.Tools
 }

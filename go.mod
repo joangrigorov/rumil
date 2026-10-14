@@ -6,7 +6,6 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/google/go-github/v69 v69.2.0
 	github.com/mark3labs/kit v0.129.1
-	github.com/mark3labs/mcp-go v1.2.1
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -76,6 +75,7 @@ require (
 	github.com/kaptinlin/jsonpointer v0.4.28 // indirect
 	github.com/kaptinlin/jsonschema v0.9.10 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
+	github.com/mark3labs/mcp-go v1.2.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect

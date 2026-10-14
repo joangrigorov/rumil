@@ -1,5 +1,5 @@
 // Package reviewer runs one pull request review through an embedded kit agent
-// session whose only tools are Rumil's in-process MCP tools.
+// session whose only tools are Rumil's own tool set.
 package reviewer
 
 import (
@@ -94,13 +94,8 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		mu     sync.Mutex
 		result Result
 	)
-	tools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.logger)
-	tools.OnToolCall = func(string) {
-		mu.Lock()
-		defer mu.Unlock()
-		result.ToolCalls++
-	}
-	tools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
+	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.logger)
+	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
 		defer mu.Unlock()
 		result.ReviewSubmitted = true
@@ -110,13 +105,16 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		result.SkippedDuplicates = len(outcome.SkippedDuplicates)
 	}
 
-	mcpTools, stopMCP, err := inProcessTools(ctx, tools.Server(e.cfg.App.BotHandle), mcpservers.GithubServerName)
+	sessionTools, err := kitTools(githubTools.Specs(), func(string) {
+		mu.Lock()
+		defer mu.Unlock()
+		result.ToolCalls++
+	})
 	if err != nil {
-		return nil, fmt.Errorf("connecting the in-process MCP tools: %w", err)
+		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
-	defer stopMCP()
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, mcpTools))
+	session, err := kit.New(ctx, e.sessionOptions(provider, sessionTools))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -151,8 +149,8 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 }
 
 // sessionOptions builds the kit session configuration: isolated from host
-// state, no core tools (no shell, no file writes), and only the tools of the
-// in-process GitHub MCP server registered.
+// state, no core tools (no shell, no file writes), and only the GitHub tool set
+// registered.
 func (e *Engine) sessionOptions(provider *config.Provider, tools []kit.Tool) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)

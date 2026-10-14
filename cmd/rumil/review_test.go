@@ -62,9 +62,9 @@ func runReviewCmd(t *testing.T, configPath string) (string, error) {
 func TestT001_01_ReviewCommandExitsZeroOnSuccess(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
-	llm.QueueToolCall("github__get_pr_metadata", nil)
-	llm.QueueToolCall("github__get_pr_diff", nil)
-	llm.QueueToolCall("github__submit_pr_review", map[string]any{
+	llm.QueueToolCall("get_pr_metadata", nil)
+	llm.QueueToolCall("get_pr_diff", nil)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
 		"event":        "COMMENT",
 		"summary_body": "Looks fine.",
 	})
@@ -112,7 +112,7 @@ func TestT001_07_ReviewCommandExitsZeroAtTurnLimit(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	for i := 0; i < 20; i++ {
-		llm.QueueToolCall("github__get_pr_metadata", nil)
+		llm.QueueToolCall("get_pr_metadata", nil)
 	}
 
 	githubAPIBaseURL = gh.URL()

@@ -1,6 +1,11 @@
-// Package mcpservers exposes Rumil's MCP tools. The GitHub server is scoped to
-// a single (owner, repo, pull request) session and never mutates branches,
+// Package mcpservers defines Rumil's tool set. The GitHub tools are scoped to a
+// single (owner, repo, pull request) session and never mutate branches,
 // commits, or repository settings: the only write is a review.
+//
+// A Spec is the one definition of a tool. The review session registers the
+// specs as kit raw tools, so a call is a direct in-process Go call. The mcp-go
+// server that publishes the same specs over stdio for external clients arrives
+// with `rumil mcp`.
 package mcpservers
 
 import (
@@ -9,23 +14,16 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
-
 	"github.com/joangrigorov/rumil/internal/ghapp"
 )
-
-// GithubServerName is the MCP server name. Tool names are namespaced with it so
-// a later memory server cannot collide with this one.
-const GithubServerName = "github"
 
 // Handler runs one tool call. A returned error is reported to the model as a
 // tool error, so it can correct itself; a successful call returns the text
 // payload.
 type Handler func(ctx context.Context, args map[string]any) (string, error)
 
-// Spec is a single tool definition: the one source of truth for the MCP server
-// and for the agent session.
+// Spec is a single tool definition: the one source of truth for the agent
+// session and, later, for the stdio MCP server.
 type Spec struct {
 	Name        string
 	Description string
@@ -38,10 +36,6 @@ type GithubTools struct {
 	client       *ghapp.Client
 	maxDiffBytes int
 	logger       *slog.Logger
-
-	// OnToolCall is called before each tool runs, so the caller can enforce and
-	// report the session's turn budget.
-	OnToolCall func(name string)
 
 	// OnReviewSubmitted is called once a review reaches GitHub, so the caller
 	// can record the outcome of the session.
@@ -88,29 +82,6 @@ func (t *GithubTools) Specs() []Spec {
 			Handle:      t.submitReview,
 		},
 	}
-}
-
-// Server builds the mcp-go server serving the specs above.
-func (t *GithubTools) Server(version string) *server.MCPServer {
-	srv := server.NewMCPServer(GithubServerName, version, server.WithToolCapabilities(true))
-
-	for _, spec := range t.Specs() {
-		spec := spec
-		srv.AddTool(
-			mcp.NewToolWithRawSchema(spec.Name, spec.Description, spec.Schema),
-			func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				if t.OnToolCall != nil {
-					t.OnToolCall(spec.Name)
-				}
-				text, err := spec.Handle(ctx, req.GetArguments())
-				if err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
-				}
-				return mcp.NewToolResultText(text), nil
-			},
-		)
-	}
-	return srv
 }
 
 func (t *GithubTools) getMetadata(ctx context.Context, _ map[string]any) (string, error) {
@@ -275,8 +246,8 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 	})
 }
 
-// intArg reads an integer argument, accepting the JSON number types the MCP
-// layer may hand over.
+// intArg reads an integer argument, accepting the JSON number types a decoded
+// argument map may carry.
 func intArg(args map[string]any, key string) int {
 	switch v := args[key].(type) {
 	case int:
