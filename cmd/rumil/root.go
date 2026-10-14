@@ -34,7 +34,9 @@ func newRootCmd() *cobra.Command {
 // warnAboutModeration logs what a configuration means for the approval gate.
 // Turning the gate off is a decision an operator may make, but it is a decision
 // that comment-derived text reaches a review prompt without a maintainer
-// reading it, so it is said out loud on every start rather than left in a file.
+// reading it, so it is said out loud rather than left in a file. Every command
+// that can record or resolve a rule says it: `review` neither records one nor
+// resolves one, so it has nothing to report.
 // serve also reports a missing admin token, because that is what decides
 // whether the moderation surface is reachable at all.
 func warnAboutModeration(cfg *config.Config, logger *slog.Logger, serve bool) {

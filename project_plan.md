@@ -73,10 +73,13 @@ rumil/
 │   ├── embedder/                 # Introduced in v0.0.4
 │   │   ├── embedder.go           # OpenAI-compatible embeddings client
 │   │   └── embedder_test.go
+│   ├── moderation/               # Introduced in v0.0.5
+│   │   ├── service.go            # The one approve/reject code path the CLI and the HTTP surface share
+│   │   └── service_test.go
 │   └── server/                   # Introduced in v0.0.3 & expanded in v0.0.5
 │       ├── webhook.go            # HMAC SHA-256 verification & event dispatcher
 │       ├── commands.go           # Parser for `@rumil` comment commands (v0.0.4+)
-│       ├── mod_ui.go             # HTMX + html/template moderation UI & REST API (v0.0.5+)
+│       ├── mod_ui.go             # html/template moderation UI & REST API, no JavaScript (v0.0.5+)
 │       └── server_test.go
 ├── Dockerfile
 ├── Dockerfile.release
@@ -138,8 +141,8 @@ database:                                         # Required in v0.0.3+
 
 moderation:                                       # Used in v0.0.4 / v0.0.5+
   accept_all: false                               # MUST default to false from v0.0.4 on: the bypass for the memory approval gate
-  auto_approve_associations: []                   # Optional e.g. ["OWNER"]
-  admin_token: "${RUMIL_ADMIN_TOKEN}"             # Bearer token auth for Moderation UI/API (constant-time compare)
+  auto_approve_associations: []                   # Optional e.g. ["OWNER", "MEMBER"]: these commenters record rules already APPROVED, and on a public repository the untrusted-commenter guard of v0.0.5 runs first, so only an association the guard accepts has an effect
+  admin_token: "${RUMIL_ADMIN_TOKEN}"             # Bearer token (or basic-auth password) for the Moderation UI/API; compared as a hash in constant time, and an unset token disables the surface
 ```
 
 ### GitHub App Credentials & Authentication Model
@@ -247,7 +250,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
 | :--- | :--- | :--- |
 | `search_memory` | `{"query": "string (required)", "file_path": "string (optional)", "limit": "int (default 5, max 15)"}` | Embeds `query` and runs a cosine similarity search against `memories` where `status = 'APPROVED'` AND `installation_id = $1` AND `org_name = $3` AND (`(scope = 'REPO' AND repo_name = $2)` OR `scope = 'ORG'`). `org_name` is required on **both** branches: repository names are unique per owner rather than globally, so tenant separation must not rest on `repo_name` alone. `path_glob` filters candidates — a `NULL` glob applies to every path, and a non-null one is matched against `file_path`. |
-| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`) within the same `installation_id`, `org_name` and `repo_name`, counting `PENDING` and `APPROVED` rows so a proposal still awaiting moderation is not duplicated either. Sets `status = 'APPROVED'` only when `moderation.accept_all == true`; otherwise `PENDING`, which waits for a human decision on the moderation surface. A `PENDING` row is inert: nothing retrieves it. `source_pr`, `source_comment` and `requested_by` are the `NOT NULL` columns the model does not supply — the tool is constructed with the triggering comment's context and fills them from it. Forces `scope = 'REPO'` until the org-scope work of v0.0.6 is enabled and authorized. |
+| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`) within the same `installation_id`, `org_name` and `repo_name`, counting `PENDING` and `APPROVED` rows so a proposal still awaiting moderation is not duplicated either. Sets `status = 'APPROVED'` only when the gate is off for this commenter — `moderation.accept_all == true`, or the commenter's `author_association` is on `moderation.auto_approve_associations`; otherwise `PENDING`, which waits for a human decision on the moderation surface. A `PENDING` row is inert: nothing retrieves it. `source_pr`, `source_comment` and `requested_by` are the `NOT NULL` columns the model does not supply — the tool is constructed with the triggering comment's context and fills them from it. Forces `scope = 'REPO'` until the org-scope work of v0.0.6 is enabled and authorized. |
 
 ---
 
@@ -349,7 +352,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * Run a synthesis prompt that distills the raw conversation (e.g., *"we don't use transactions here"*) into a self-contained rule (e.g., *"In `internal/billing/webhook.go`, database writes do not use explicit SQL transactions because handlers are idempotent single-statement upserts"*), then invokes `propose_memory`.
    * The **confirmation reply is posted by Go after the session**, not by a tool: no tool set has a comment-creation member, and handing the model one would widen its write surface for nothing. The reply names the memory's short id and its status, for example *"Memory proposal `#<short-id>` queued for maintainer moderation (`status: PENDING`)."*
    * The reply is posted by Go only when the command's own thread does not already hold Rumil's answer naming that memory id. An interrupted job returns to the queue and runs again (see Phase 3), so this check is what stops a retry from double-posting; a duplicate proposal still gets an answer, referring to the existing id, because the check is about the command's thread rather than about the id appearing anywhere on the pull request.
-   * *(Note: the approval gate is on from this phase, not from v0.0.5. `propose_memory` writes `PENDING` unless `moderation.accept_all == true`, and only `APPROVED` rows are retrieved, so a memory recorded here waits for the approval surface that arrives in v0.0.5. That leaves `accept_all: true` as the documented bypass: it is off by default, and an operator who turns it on has accepted that comment-derived text reaches the review prompt unvetted.)*
+   * *(Note: the approval gate is on from this phase, not from v0.0.5. `propose_memory` writes `PENDING` unless the gate is off for this commenter (`moderation.accept_all == true`, or their `author_association` listed in `moderation.auto_approve_associations`), and only `APPROVED` rows are retrieved, so a memory recorded here waits for the approval surface that arrives in v0.0.5. That leaves `accept_all: true` as the documented bypass: it is off by default, and an operator who turns it on has accepted that comment-derived text reaches the review prompt unvetted.)*
    * *(Known gap until v0.0.5: the comment handler accepts `@rumil remember` from any commenter, so an outsider can queue proposals and spend embedding credits. Nothing they propose reaches the prompt while the gate holds, and v0.0.5 adds the `author_association` guard.)*
 
 5. **Re-Review Continuity and Thread Resolution:**
@@ -378,10 +381,10 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 #### Scope & Deliverables
 1. **Moderation Surface for the v0.0.4 Gate:**
-   * The gate itself landed in `v0.0.4`: `propose_memory` writes `PENDING` unless `accept_all: true`, and `search_memory` queries `WHERE status = 'APPROVED'` only. This phase adds the surface that resolves a `PENDING` row, which is why `T-030-01` re-asserts that an unapproved rule stays invisible.
-   * Extend `moderation.auto_approve_associations`: a commenter whose GitHub `author_association` is explicitly listed stores `APPROVED` immediately, without `accept_all`.
+   * The gate itself landed in `v0.0.4`: `propose_memory` writes `PENDING` unless the gate is off for the commenter, and `search_memory` queries `WHERE status = 'APPROVED'` only. This phase adds the surface that resolves a `PENDING` row, which is why `T-030-01` re-asserts that an unapproved rule stays invisible.
+   * Extend `moderation.auto_approve_associations`: a commenter whose GitHub `author_association` is explicitly listed stores `APPROVED` immediately, without `accept_all`. The guard below runs first, so on a public repository only an association the guard accepts can reach this: listing `NONE` would have no effect, and the config comment in §3 says so.
    * A proposal that lands `PENDING` replies on the PR: *"Memory proposal `#<short-id>` queued for maintainer moderation (`status: PENDING`)."*
-   * Log a startup security warning when `accept_all: true` is configured.
+   * Log a startup security warning when `accept_all: true` is configured. The warning is emitted by every command that can record or resolve a rule (`serve`, `mod`).
 2. **Untrusted Commenter Guard:**
    * Reject `@rumil remember` commands from users with `author_association == "NONE"` or `"FIRST_TIME_CONTRIBUTOR"` on public repos so external actors cannot flood the moderation queue or burn embedding API credits.
    * The guard is an allow-list rather than those two names: a public repository accepts a command only from `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR`, so an association GitHub adds later, an unknown value, and an absent field all fail closed. The check runs in the webhook, so a dropped command never reaches the database, the model, or the embedder. A private repository needs no check: everybody who can comment on one already has access to it.
@@ -391,21 +394,27 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * `rumil mod reject <memory-id> [--moderator name]`
    * `<memory-id>` is the full UUID or the short id the confirmation reply named. `--moderator` defaults to `cli`, because nothing here reads the host's identity: `reviewed_by` records what the team says it is.
 4. **Web UI Moderation (`internal/server/mod_ui.go`):**
-   * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time via `subtle.ConstantTimeCompare`. No login page, no sessions, no cookies. An unset token disables the surface: every request is refused rather than served to anyone.
+   * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time. No login page, no sessions, no cookies. An unset token disables the surface: every request is answered `503` rather than served to anyone. Both sides of the comparison are hashed first, so the comparison is over two values of equal length and says nothing about the token's length; the scheme is matched case-insensitively, as the RFC defines it.
    * The token is also accepted as the password of a basic credential, because a browser cannot set an `Authorization` header of its own and basic auth is what lets a maintainer use the page without a login route, a cookie, or a line of JavaScript.
+   * That browser-facing credential is what makes a same-site check necessary: a browser attaches a cached basic credential to *any* request to this origin, including a form on a page somebody else wrote, and a cross-site form post is a CORS-safelisted content type that needs no preflight. So `POST /api/moderation/{id}/approve|reject` is refused with `403` unless the request's `Sec-Fetch-Site` is `same-origin`/`none` or its `Origin` is this host; a request carrying neither header is the CLI or a script, which chooses its own credential anyway. The page is also sent `X-Frame-Options: DENY` and `frame-ancestors 'none'`, since a decision taken through an overlaid frame comes *from* this origin and the header check cannot see it.
    * Serves server-rendered HTML (`html/template`) at `/ui/moderation` allowing maintainers to filter by repo/status, inline-edit `rule_text` and `path_glob`, and click **Approve** or **Reject**. The page needs no JavaScript: each action is a plain form post to `/api/moderation/{id}/approve|reject`, and the answer is a redirect back to the filtered list. HTMX was dropped deliberately — on a surface that can promote unvetted text into a review prompt, the less machinery between the operator and the decision the better, and it keeps the page working offline.
+   * `path_glob` is read as it arrived: a form that omits the field leaves the rule's scope alone, and the empty the page sends when a maintainer clears the box widens the rule to the whole repository. The CLI always omits it, so `approve` there rewrites the wording without touching the scope.
    * `POST /api/moderation/{id}/approve|reject` answers JSON to a client that does not ask for HTML, which is the API half of `T-030-06`.
+5. **Refusals a Moderator Can Act On:**
+   * A decision is computed against a rule the moderator read, and the row can move under it: a second moderator working the same queue, or a page left open. The store applies the text and its vector together and only when the decision brings the vector for the text it writes, so a decision computed against words that are no longer there matches no row and is refused with `409` (`ErrMemoryChanged`) instead of pairing one moderator's words with the other's vector.
+   * An ambiguous reference — a short id two rules share — is `409`, and an unknown one is `404`; a status filter that names no status is `400` with the three statuses named. None of these is a `500`, which would say the surface is broken rather than the request.
+   * A refusal answers JSON to a client that asked for JSON and text otherwise, and an unrecognized failure is logged with its cause and answered with a fixed sentence, so a database message is not handed to a client.
 
 #### Mandatory Verification Matrix — `v0.0.5`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
 | `T-030-01` | Security Gate | Default config (`accept_all: false`). Developer posts `@rumil remember ...`. | Row is inserted with `status = 'PENDING'`. Immediate subsequent PR review runs `search_memory` and does **not** retrieve the unapproved rule. |
-| `T-030-02` | Moderation Approval | Maintainer runs `rumil mod approve <id>` (or clicks Approve in Web UI). | Row status transitions to `APPROVED` with `reviewed_by` populated. Subsequent PR review immediately retrieves and applies the rule. |
-| `T-030-03` | Moderation Edit | Maintainer edits `rule_text` in Web UI before approving. | Server recomputes the vector embedding for the updated `rule_text` before saving `status = 'APPROVED'`. |
+| `T-030-02` | Moderation Approval | Maintainer runs `rumil mod approve <id>` (or clicks Approve in Web UI). | Row status transitions to `APPROVED` with `reviewed_by` populated. Subsequent PR review immediately retrieves and applies the rule. The same rule approved by the short id the confirmation reply named resolves to the same row. |
+| `T-030-03` | Moderation Edit | Maintainer edits `rule_text` in Web UI before approving. | Server recomputes the vector embedding for the updated `rule_text` before saving `status = 'APPROVED'`. The text and its vector are applied together, so a decision computed against wording the row no longer holds is refused (`409`) rather than written. |
 | `T-030-04` | Moderation Rejection | Maintainer runs `rumil mod reject <id>`. | Row status transitions to `REJECTED` and is excluded from RAG queries. |
-| `T-030-05` | Dangerous Flag Override | Config explicitly sets `moderation.accept_all: true`. | `propose_memory` inserts directly with `status = 'APPROVED'` and logs a startup security warning. |
-| `T-030-06` | Auth & Abuse Gate | Anonymous request to `/ui/moderation` or `/api/moderation/:id/approve` without valid `RUMIL_ADMIN_TOKEN`; OR random GitHub user (`author_association: NONE`) comments `@rumil remember`. | Web UI/API returns `401 Unauthorized`; random GitHub commenter is ignored before calling LLM/Embedder. |
+| `T-030-05` | Dangerous Flag Override | Config explicitly sets `moderation.accept_all: true`, or lists a commenter's `author_association` in `moderation.auto_approve_associations`. | `propose_memory` inserts directly with `status = 'APPROVED'` for either, logs a startup security warning when `accept_all` is set, and a commenter whose association is not listed still waits as `PENDING`. |
+| `T-030-06` | Auth & Abuse Gate | Anonymous or wrong-token request to `/ui/moderation` or `/api/moderation/:id/approve`; a request to a decision route whose `Sec-Fetch-Site`/`Origin` says another site sent it; an unset `moderation.admin_token`; OR a random GitHub user (`author_association: NONE`) comments `@rumil remember`. | Web UI/API returns `401 Unauthorized` for a missing or wrong token, `403` for a cross-site decision, `503` while no token is configured; the cross-site refusal leaves the row untouched; the random GitHub commenter is ignored before calling LLM/Embedder. |
 
 ---
 
