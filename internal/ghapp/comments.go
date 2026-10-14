@@ -46,7 +46,7 @@ func (c *Client) CommentsByAuthor(ctx context.Context, login string) ([]string, 
 			return nil, fmt.Errorf("listing review comments of %s/%s#%d: %w", c.owner, c.repo, c.number, err)
 		}
 		for _, comment := range page {
-			if user := comment.GetUser(); user != nil && sameLogin(user.GetLogin(), login) {
+			if user := comment.GetUser(); user != nil && SameLogin(user.GetLogin(), login) {
 				bodies = append(bodies, comment.GetBody())
 			}
 		}
@@ -63,7 +63,7 @@ func (c *Client) CommentsByAuthor(ctx context.Context, login string) ([]string, 
 			return nil, fmt.Errorf("listing conversation comments of %s/%s#%d: %w", c.owner, c.repo, c.number, err)
 		}
 		for _, comment := range page {
-			if user := comment.GetUser(); user != nil && sameLogin(user.GetLogin(), login) {
+			if user := comment.GetUser(); user != nil && SameLogin(user.GetLogin(), login) {
 				bodies = append(bodies, comment.GetBody())
 			}
 		}
@@ -98,7 +98,7 @@ func (c *Client) ThreadCommentBy(ctx context.Context, commentID int64, login str
 
 	current := byID[commentID]
 	for depth := 0; depth < threadDepthLimit && current.ID != 0; depth++ {
-		if sameLogin(current.Author, login) {
+		if SameLogin(current.Author, login) {
 			return current.Body, nil
 		}
 		current = byID[current.InReplyToID]

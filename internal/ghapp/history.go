@@ -62,30 +62,31 @@ func (c *Client) Reviews(ctx context.Context) ([]Review, error) {
 // submitted against, which is where a later round measures its delta from. It
 // returns "" when login has never reviewed the pull request.
 func (c *Client) LastReviewedCommit(ctx context.Context, login string) (string, error) {
-	if NormalizeLogin(login) == "" {
-		return "", fmt.Errorf("a login is required to find its last review")
-	}
-
 	reviews, err := c.Reviews(ctx)
 	if err != nil {
 		return "", err
 	}
+	return LastReviewedCommitOf(reviews, login), nil
+}
 
+// LastReviewedCommitOf is the same question asked of a review list a caller
+// already holds, so a session that reads the history does not read it twice.
+func LastReviewedCommitOf(reviews []Review, login string) string {
 	commit := ""
 	newest := time.Time{}
 	for _, review := range reviews {
-		if !sameLogin(review.Author, login) {
+		if !SameLogin(review.Author, login) {
 			continue
 		}
 		// The listing is oldest first, so the last one wins; the timestamp is
-		// only used when GitHub supplies it.
+		// only used to keep a fixture that claims otherwise from winning.
 		if review.SubmittedAt.Before(newest) {
 			continue
 		}
 		newest = review.SubmittedAt
 		commit = review.CommitID
 	}
-	return commit, nil
+	return commit
 }
 
 // ConversationComments returns the pull request's top-level comments, oldest

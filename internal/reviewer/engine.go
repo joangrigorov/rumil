@@ -128,7 +128,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		mu     sync.Mutex
 		result Result
 	)
-	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.logger)
+	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger)
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
 		defer mu.Unlock()

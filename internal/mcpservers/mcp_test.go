@@ -12,14 +12,15 @@ import (
 // TestSpecsPinTheToolSurface pins the tool surface the model sees: the names,
 // and the JSON Schema fields a valid call is built from.
 func TestSpecsPinTheToolSurface(t *testing.T) {
-	tools := mcpservers.NewGithubTools(nil, 4096, slog.New(slog.DiscardHandler))
+	tools := mcpservers.NewGithubTools(nil, 4096, "@rumil", slog.New(slog.DiscardHandler))
 	specs := tools.Specs()
 
 	wantNames := []string{
 		"get_pr_metadata",
 		"get_pr_diff",
 		"get_file_contents",
-		"list_existing_review_comments",
+		"list_pr_conversation",
+		"resolve_review_thread",
 		"submit_pr_review",
 	}
 	if len(specs) != len(wantNames) {
@@ -65,7 +66,23 @@ func TestSpecsPinTheToolSurface(t *testing.T) {
 	if !strings.Contains(string(byName["get_file_contents"].Schema), "file_path") {
 		t.Errorf("get_file_contents schema lost file_path: %s", byName["get_file_contents"].Schema)
 	}
-	if !strings.Contains(string(byName["get_pr_diff"].Schema), "page") {
-		t.Errorf("get_pr_diff schema lost page: %s", byName["get_pr_diff"].Schema)
+	for _, want := range []string{"page", "since", "file_path"} {
+		if !strings.Contains(string(byName["get_pr_diff"].Schema), want) {
+			t.Errorf("get_pr_diff schema lost %s: %s", want, byName["get_pr_diff"].Schema)
+		}
+	}
+	if !strings.Contains(byName["get_pr_metadata"].Description, "last_reviewed_commit") {
+		t.Errorf("get_pr_metadata does not advertise last_reviewed_commit: %s", byName["get_pr_metadata"].Description)
+	}
+	for _, want := range []string{"include_resolved", "path", "before", "limit"} {
+		if !strings.Contains(string(byName["list_pr_conversation"].Schema), want) {
+			t.Errorf("list_pr_conversation schema lost %s: %s", want, byName["list_pr_conversation"].Schema)
+		}
+	}
+	resolve := string(byName["resolve_review_thread"].Schema)
+	for _, want := range []string{"thread_id", "reason", `"required":["thread_id","reason"]`} {
+		if !strings.Contains(resolve, want) {
+			t.Errorf("resolve_review_thread schema lost %s: %s", want, resolve)
+		}
 	}
 }

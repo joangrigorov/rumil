@@ -13,7 +13,9 @@ func NormalizeLogin(handle string) string {
 	return login
 }
 
-// sameLogin reports whether two logins name the same account.
-func sameLogin(a, b string) bool {
+// SameLogin reports whether two logins name the same account. Comparing a
+// configured handle with a login GitHub reported is a question about GitHub
+// naming, so the one definition lives here.
+func SameLogin(a, b string) bool {
 	return NormalizeLogin(a) != "" && NormalizeLogin(a) == NormalizeLogin(b)
 }
