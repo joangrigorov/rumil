@@ -1,0 +1,13 @@
+.git
+.gitignore
+.dockerignore
+.github
+AGENTS.md
+walkthrough.md
+implementation_plan.md
+.agents
+dist
+*.tar.gz
+*.zip
+rumil.yaml
+.env

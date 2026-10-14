@@ -17,8 +17,10 @@
 * **Language:** Go 1.27+ (`mark3labs/kit` declares `go 1.27.0`)
 * **Agent Harness (In-Process SDK):** `github.com/mark3labs/kit/pkg/kit`
   * *Constraint:* Never shell out to external CLI binaries (`grok`, `claude`, `opencode`). Embed `pkg/kit` directly in Go.
-  * *Constraint:* Never expose built-in OS tools (`bash`, `write`, `edit`). Restrict the agent strictly to custom in-process MCP tools.
-* **MCP Framework:** `github.com/mark3labs/mcp-go` connected in-memory to `kit` via `client.NewInProcessClient(server)` (with optional `stdio` exposure via CLI subcommands for debugging/external use).
+  * *Constraint:* Never expose built-in OS tools (`bash`, `write`, `edit`). Register only Rumil's own tool set.
+* **Tool Definitions:** Every tool is one `Spec` (name, description, JSON Schema, handler) in `internal/mcpservers`, and it is the single definition used by both consumers below.
+* **Tool Registration:** The review session registers the specs as `kit` raw tools (`kit.NewRawTool`), so a tool call is a direct in-process Go call. kit's own MCP integration is not used: `MCPToolManager.GetTools` returns the tool slice without holding the mutex that the parallel server loader writes under, which the race detector reports in every session.
+* **MCP Framework:** `github.com/mark3labs/mcp-go` re-enters as a thin adapter over the same specs when `rumil mcp [github|memory]` publishes them over stdio for external clients and debugging.
 * **GitHub Integration:**
   * `github.com/google/go-github/v69/github` (or latest v60+)
   * `github.com/bradleyfalzon/ghinstallation/v2` for GitHub App JWT signing and Installation Access Token rotation.
@@ -41,7 +43,7 @@ rumil/
 │       ├── root.go               # Cobra root command + global flags
 │       ├── review.go             # `rumil review --repo owner/repo --pr 123` (v0.0.1)
 │       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.1.0+)
-│       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners
+│       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs)
 │       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.3.0+)
 ├── internal/
 │   ├── config/
@@ -53,8 +55,8 @@ rumil/
 │   │   ├── diff_parser.go        # Unified diff line-number mapper (validates right/left lines)
 │   │   └── client_test.go
 │   ├── mcpservers/
-│   │   ├── github_mcp.go         # mcp-go server exposing read-only repo + PR review tools
-│   │   ├── memory_mcp.go         # mcp-go server exposing RAG search & propose_memory (v0.2.0+)
+│   │   ├── github_mcp.go         # Specs for the read-only repo + PR review tools
+│   │   ├── memory_mcp.go         # Specs for RAG search & propose_memory (v0.2.0+)
 │   │   └── mcp_test.go
 │   ├── reviewer/
 │   │   ├── engine.go             # Orchestrates pre-fetch + pkg/kit session execution
@@ -205,11 +207,11 @@ DROP TYPE IF EXISTS memory_scope;
 
 ---
 
-## 5. MCP Server Tool Specifications
+## 5. Tool Specifications
 
-Both MCP servers are built with `github.com/mark3labs/mcp-go/server` and attached in-process to `pkg/kit` via `client.NewInProcessClient(srv)`.
+Both tool sets are defined as `Spec` values in `internal/mcpservers` and registered directly on the agent session (see §1). The same specs are published over stdio by `rumil mcp [github|memory]` for external MCP clients.
 
-### 5.1 `github` MCP Server (`internal/mcpservers/github_mcp.go`)
+### 5.1 `github` Tool Set (`internal/mcpservers/github_mcp.go`)
 Scoped strictly to a single `(installation_id, owner, repo, pr_number)` context per review session. It NEVER exposes tools that mutate branches, commits, or repository settings.
 
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
@@ -220,7 +222,7 @@ Scoped strictly to a single `(installation_id, owner, repo, pr_number)` context 
 | `list_existing_review_comments` | `{}` | Returns existing review comments on the PR so the agent does not post duplicate findings on subsequent pushes. |
 | `submit_pr_review` | `{"event": "ENUM('COMMENT', 'REQUEST_CHANGES', 'APPROVE')", "summary_body": "string", "comments": [{"path": "string", "line": "int", "side": "ENUM('RIGHT', 'LEFT')", "body": "string"}]}` | Validates that every `comments[i].line` actually exists in the parsed diff hunk for `path`. Any comment targeting a line outside the diff hunk is converted into a file-level or summary-level note instead of failing the GitHub API batch request. All three events are supported from `v0.0.1`; when GitHub rejects `APPROVE`/`REQUEST_CHANGES` (for example on a PR the App authored), the review is resubmitted as `COMMENT` with the intended event recorded in `summary_body` and a structured warning logged, so a rejected event never fails the whole review. |
 
-### 5.2 `memory` MCP Server (`internal/mcpservers/memory_mcp.go` — v0.2.0+)
+### 5.2 `memory` Tool Set (`internal/mcpservers/memory_mcp.go` — v0.2.0+)
 Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
@@ -234,15 +236,15 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 1: `v0.0.1` — Isolated Container Runner, BYOK Config & GitHub App MCP
+### Phase 1: `v0.0.1` — Isolated Container Runner, BYOK Config & GitHub App Tool Set
 
 #### Scope & Deliverables
 1. Implement `internal/config` to parse `rumil.yaml` and validate BYOK models and GitHub App credentials.
 2. Implement `internal/ghapp` to sign GitHub App JWTs, mint short-lived repository-scoped Installation Access Tokens for the configured `github.installation_id`, fetch PR diffs/files, parse diff hunks into line maps, and submit batch PR reviews.
-3. Implement `internal/mcpservers/github_mcp.go`.
+3. Implement `internal/mcpservers/github_mcp.go` as the tool specs of §5.1.
 4. Implement `internal/reviewer/engine.go` using `github.com/mark3labs/kit/pkg/kit`:
    * Initialize `kit` with all built-in OS tools (`bash`, `write`, `edit`, etc.) **disabled/omitted**.
-   * Register only the in-process `github` MCP client tools.
+   * Register only the `github` tool specs of §5.1.
    * Enforce `app.max_agent_turns`.
 5. Implement CLI entrypoint `rumil review --repo <owner/repo> --pr <id> --config <path>`.
 6. Create multi-stage `Dockerfile` running as non-root user (`uid: 65532`).
@@ -307,14 +309,14 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 4: `v0.2.0` — Vector Database (`pgvector`), `memory` MCP & Comment Commands
+### Phase 4: `v0.2.0` — Vector Database (`pgvector`), `memory` Tools & Comment Commands
 
 #### Scope & Deliverables
 1. Implement `internal/embedder` for generating 1536-dim vectors via the configured OpenAI-compatible embedding provider.
-2. Implement `internal/mcpservers/memory_mcp.go` exposing `search_memory` and `propose_memory`.
+2. Implement `internal/mcpservers/memory_mcp.go` exposing the `search_memory` and `propose_memory` specs.
 3. **Deterministic Pre-Retrieval + Agentic Search:**
    * At the start of every PR review, `engine.go` queries `memories` for `APPROVED` rules matching the repo and modified file paths, injecting the top matches into `<project_memories>` in the system prompt.
-   * The agent also has `search_memory` available via MCP to query specific domain questions mid-review.
+   * The agent also has `search_memory` available to query specific domain questions mid-review.
 4. **Comment Command Workflow (`@rumil` triggers):**
    * Extend `webhook.go` to listen for `issue_comment` (`created`) on PRs and `pull_request_review_comment` (`created`).
    * Ignore comments authored by bots (`user.type == "Bot"`) to prevent infinite self-reply loops.
@@ -410,10 +412,10 @@ LIMIT $5;
 ### 7.1 PR Reviewer System Prompt
 ```text
 You are Rumil, an automated, read-only Principal Code Reviewer for GitHub Pull Requests.
-Your objective is to identify genuine bugs, security vulnerabilities, race conditions, and violations of established repository or organization conventions.
+Your objective is to identify genuine bugs, security vulnerabilities, race conditions, architectural and design problems, and violations of established repository or organization conventions.
 
 STRICT OPERATING RULES:
-1. Prioritize high-signal, actionable defects. Do NOT nitpick formatting, minor naming preferences, or issues handled by standard linters unless explicitly instructed by <repository_review_guidelines> or <project_memories>.
+1. Prioritize high-signal, actionable defects.
 2. Always respect <repository_review_guidelines> (from REVIEW.md) and <project_memories> (verified institutional knowledge). If a pattern in the diff looks unusual, call `search_memory` before flagging it to verify whether it is an intentional project decision.
 3. If both an ORG-scoped memory and a REPO-scoped memory apply to the same code and conflict, the REPO-scoped memory takes precedence.
 4. Check `list_existing_review_comments` before submitting your review so you never repeat a finding that has already been posted.

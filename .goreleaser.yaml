@@ -56,6 +56,8 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - rumil.example.yaml
 
 checksum:
   name_template: checksums.txt
@@ -87,6 +89,30 @@ nfpms:
     priority: optional
     mtime: "{{ .CommitDate }}"
     umask: 0o755
+    contents:
+      - src: rumil.example.yaml
+        dst: /etc/rumil/rumil.example.yaml
+        type: config|noreplace
     # Signed packages are intentionally skipped: signing keys are not part of this
     # open source pipeline. macOS artifacts are likewise unsigned and un-notarized,
     # which is the free-code-signing limitation of this setup.
+
+# Container image built from the same multi-stage Dockerfile a developer builds
+# by hand, so releases and local builds produce the same image layout.
+dockers_v2:
+  - images:
+      - "ghcr.io/joangrigorov/rumil"
+    tags:
+      - "{{ .Tag }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - "latest"
+    dockerfile: Dockerfile
+    platforms:
+      - linux/amd64
+    build_args:
+      VERSION: "{{ .Version }}"
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: "{{ .GitURL }}"
