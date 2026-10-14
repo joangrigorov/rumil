@@ -6,8 +6,10 @@ package testutil
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -72,6 +74,12 @@ type FakeGitHub struct {
 	Diff     string
 	Files    []FileEntry
 	Contents map[string]string
+	// ContentsByRef overrides Contents for a specific ref, so a test can serve
+	// different text on the base SHA and the head SHA.
+	ContentsByRef map[string]map[string]string
+	// Blobs backs the git blobs endpoint. handleContents fills it for files the
+	// contents API declines to inline.
+	Blobs    map[string]string
 	Comments []CommentEntry
 
 	// MintStatus, when non-zero, is returned by the installation token
@@ -182,6 +190,8 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleReview(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/contents/"):
 		f.handleContents(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/git/blobs/"):
+		f.handleBlob(w, r)
 	default:
 		http.Error(w, fmt.Sprintf(`{"message":"unexpected %s %s"}`, r.Method, r.URL.Path), http.StatusNotFound)
 	}
@@ -220,22 +230,76 @@ func (f *FakeGitHub) handlePull(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// inlineContentLimit mirrors the contents API, which inlines a file body up to
+// 1 MB and returns an empty body with encoding "none" above that.
+const inlineContentLimit = 1 << 20
+
 func (f *FakeGitHub) handleContents(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, f.repoPath()+"/contents/")
-	content, ok := f.Contents[path]
+	ref := r.URL.Query().Get("ref")
+
+	f.mu.Lock()
+	source := f.Contents
+	if byRef, ok := f.ContentsByRef[ref]; ok {
+		source = byRef
+	}
+	content, ok := source[path]
+	f.mu.Unlock()
+
 	if !ok {
 		f.writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
 		return
 	}
-	// The contents API returns files inline, base64 encoded.
+
+	sha := blobSHA(content)
+	entry := map[string]any{
+		"type": "file",
+		"name": pathpkg.Base(path),
+		"path": path,
+		"size": len(content),
+		"sha":  sha,
+	}
+	if len(content) > inlineContentLimit {
+		f.mu.Lock()
+		if f.Blobs == nil {
+			f.Blobs = map[string]string{}
+		}
+		f.Blobs[sha] = content
+		f.mu.Unlock()
+		entry["encoding"] = "none"
+		entry["content"] = ""
+	} else {
+		// The contents API returns files inline, base64 encoded.
+		entry["encoding"] = "base64"
+		entry["content"] = base64.StdEncoding.EncodeToString([]byte(content))
+	}
+	f.writeJSON(w, http.StatusOK, entry)
+}
+
+func (f *FakeGitHub) handleBlob(w http.ResponseWriter, r *http.Request) {
+	sha := strings.TrimPrefix(r.URL.Path, f.repoPath()+"/git/blobs/")
+
+	f.mu.Lock()
+	content, ok := f.Blobs[sha]
+	f.mu.Unlock()
+
+	if !ok {
+		f.writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+		return
+	}
 	f.writeJSON(w, http.StatusOK, map[string]any{
-		"type":     "file",
-		"name":     pathpkg.Base(path),
-		"path":     path,
-		"encoding": "base64",
+		"sha":      sha,
 		"size":     len(content),
+		"encoding": "base64",
 		"content":  base64.StdEncoding.EncodeToString([]byte(content)),
 	})
+}
+
+// blobSHA is the git object hash of content: the API reports it on the contents
+// entry and keys the blob endpoint by it.
+func blobSHA(content string) string {
+	sum := sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(content), content)))
+	return hex.EncodeToString(sum[:])
 }
 
 func (f *FakeGitHub) handleReview(w http.ResponseWriter, r *http.Request) {

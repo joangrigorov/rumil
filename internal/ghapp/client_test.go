@@ -3,6 +3,7 @@ package ghapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -425,4 +426,115 @@ func TestVerifyReportsMissingInstallation(t *testing.T) {
 	if gh.MintCount() != 2 {
 		t.Errorf("mints = %d, want the initial failure and the successful retry", gh.MintCount())
 	}
+}
+
+// ReviewGuidelines walks REVIEW.md, .github/REVIEW.md, docs/REVIEW.md and
+// returns the first file it finds.
+func TestReviewGuidelines(t *testing.T) {
+	t.Run("priority order", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents["REVIEW.md"] = "root policy"
+		gh.Contents[".github/REVIEW.md"] = "github policy"
+		gh.Contents["docs/REVIEW.md"] = "docs policy"
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if path != "REVIEW.md" || text != "root policy" {
+			t.Errorf("got (%q, %q), want the root file to win", path, text)
+		}
+	})
+
+	t.Run("github directory fallback", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents[".github/REVIEW.md"] = "github policy"
+		gh.Contents["docs/REVIEW.md"] = "docs policy"
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if path != ".github/REVIEW.md" || text != "github policy" {
+			t.Errorf("got (%q, %q), want .github/REVIEW.md", path, text)
+		}
+	})
+
+	t.Run("docs fallback", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents["docs/REVIEW.md"] = "docs policy"
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if path != "docs/REVIEW.md" || text != "docs policy" {
+			t.Errorf("got (%q, %q), want docs/REVIEW.md", path, text)
+		}
+	})
+
+	t.Run("no guidelines is not an error", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents = map[string]string{}
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error for a repository without guidelines: %v", err)
+		}
+		if path != "" || text != "" {
+			t.Errorf("got (%q, %q), want empty results", path, text)
+		}
+	})
+
+	t.Run("reads the ref it is given", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.ContentsByRef = map[string]map[string]string{
+			gh.BaseSHA: {"REVIEW.md": "trusted"},
+			gh.HeadSHA: {"REVIEW.md": "untrusted"},
+		}
+
+		path, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.HeadSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if path != "REVIEW.md" || text != "untrusted" {
+			t.Errorf("got (%q, %q), want the head SHA copy", path, text)
+		}
+	})
+
+	t.Run("defaults to the base SHA", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.ContentsByRef = map[string]map[string]string{
+			gh.BaseSHA: {"REVIEW.md": "trusted"},
+			gh.HeadSHA: {"REVIEW.md": "untrusted"},
+		}
+
+		_, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), "")
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if text != "trusted" {
+			t.Errorf("text = %q, want the base SHA copy", text)
+		}
+	})
+
+	t.Run("truncates at the cap through the blob API", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.Contents["REVIEW.md"] = strings.Repeat("a", 5<<20)
+
+		_, text, err := newTestClient(t, gh).ReviewGuidelines(context.Background(), gh.BaseSHA)
+		if err != nil {
+			t.Fatalf("ReviewGuidelines returned error: %v", err)
+		}
+		if !strings.HasPrefix(text, strings.Repeat("a", MaxGuidelinesBytes)) {
+			t.Errorf("the guidelines do not start with %d bytes of the file", MaxGuidelinesBytes)
+		}
+		wantMarker := fmt.Sprintf("\n\n[truncated at %d bytes: the guidelines file is %d bytes]", MaxGuidelinesBytes, 5<<20)
+		if !strings.HasSuffix(text, wantMarker) {
+			t.Errorf("truncated text does not end with %q", wantMarker)
+		}
+		if !strings.Contains(strings.Join(gh.RequestLog(), "\n"), "/git/blobs/") {
+			t.Errorf("a 5 MB file should be read through the blob API, requests:\n%s", strings.Join(gh.RequestLog(), "\n"))
+		}
+	})
 }

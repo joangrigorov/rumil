@@ -18,6 +18,11 @@ github:
   private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use the GITHUB_PRIVATE_KEY environment variable instead
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.1.0 for webhook verification
 
+# Repository review guidelines are read before the first agent turn, from
+# REVIEW.md, .github/REVIEW.md, or docs/REVIEW.md, and capped at 32 KB.
+review:
+  guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
+
 models:
   default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider
   default_embedding: "text-embedding-3-small" # Required from v0.2.0
