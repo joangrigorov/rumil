@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -51,7 +52,7 @@ func NewWebhook(secret, botHandle string, jobs *store.DB, logger *slog.Logger) *
 	return &Webhook{
 		secret:   []byte(secret),
 		jobs:     jobs,
-		botLogin: normalizeBotLogin(botHandle),
+		botLogin: ghapp.NormalizeLogin(botHandle),
 		logger:   logger,
 	}
 }
@@ -194,21 +195,12 @@ func (w *Webhook) job(eventType string, d payload, prNumber int) store.Job {
 	}
 }
 
-// normalizeBotLogin turns the configured handle into the login GitHub reports:
-// "@rumil" and "rumil[bot]" both become "rumil".
-func normalizeBotLogin(handle string) string {
-	login := strings.ToLower(strings.TrimSpace(handle))
-	login = strings.TrimPrefix(login, "@")
-	login = strings.TrimSuffix(login, "[bot]")
-	return login
-}
-
 // isBotReviewer reports whether the payload asked Rumil to review.
 func isBotReviewer(botLogin string, requested *requestedReviewer) bool {
 	if requested == nil || botLogin == "" {
 		return false
 	}
-	return requested.Type == "Bot" && normalizeBotLogin(requested.Login) == botLogin
+	return requested.Type == "Bot" && ghapp.NormalizeLogin(requested.Login) == botLogin
 }
 
 type payload struct {

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	pathpkg "path"
@@ -41,6 +42,15 @@ type CommentEntry struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"user"`
+	// InReplyToID is zero for a comment that opened a thread.
+	InReplyToID int64 `json:"in_reply_to_id"`
+}
+
+// PostedComment is one comment Rumil posted: a reply inside a review thread, or
+// a conversation comment when InReplyTo is zero.
+type PostedComment struct {
+	Body      string `json:"body"`
+	InReplyTo int64  `json:"in_reply_to,omitempty"`
 }
 
 // SubmittedReview captures a POST to the reviews endpoint.
@@ -81,6 +91,12 @@ type FakeGitHub struct {
 	// contents API declines to inline.
 	Blobs    map[string]string
 	Comments []CommentEntry
+	// IssueComments are the conversation comments the pull request already
+	// carries.
+	IssueComments []CommentEntry
+	// Posted collects the comments Rumil posted through the reply and
+	// conversation endpoints.
+	Posted []PostedComment
 
 	// MintStatus, when non-zero, is returned by the installation token
 	// endpoint instead of a token (404 simulates an App that is not installed).
@@ -186,6 +202,12 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusOK, f.Files)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/comments":
 		f.writeJSON(w, http.StatusOK, f.Comments)
+	case r.Method == http.MethodPost && r.URL.Path == f.pullPath()+"/comments":
+		f.handlePostReviewComment(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == f.issuePath()+"/comments":
+		f.writeJSON(w, http.StatusOK, f.IssueComments)
+	case r.Method == http.MethodPost && r.URL.Path == f.issuePath()+"/comments":
+		f.handlePostIssueComment(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == f.pullPath()+"/reviews":
 		f.handleReview(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/contents/"):
@@ -348,6 +370,49 @@ func (f *FakeGitHub) repoPath() string {
 
 func (f *FakeGitHub) pullPath() string {
 	return f.repoPath() + "/pulls/" + strconv.Itoa(f.Number)
+}
+
+func (f *FakeGitHub) issuePath() string {
+	return f.repoPath() + "/issues/" + strconv.Itoa(f.Number)
+}
+
+// PostedComments returns a copy of the comments Rumil posted.
+func (f *FakeGitHub) PostedComments() []PostedComment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]PostedComment(nil), f.Posted...)
+}
+
+// handlePostReviewComment answers the reply endpoint, which GitHub serves as a
+// comment carrying in_reply_to.
+func (f *FakeGitHub) handlePostReviewComment(w http.ResponseWriter, r *http.Request) {
+	var post PostedComment
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&post); err != nil {
+		f.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "malformed comment"})
+		return
+	}
+
+	f.mu.Lock()
+	f.Posted = append(f.Posted, post)
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusCreated, map[string]any{"id": int64(len(f.Posted) + 1000), "body": post.Body})
+}
+
+func (f *FakeGitHub) handlePostIssueComment(w http.ResponseWriter, r *http.Request) {
+	var post struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&post); err != nil {
+		f.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "malformed comment"})
+		return
+	}
+
+	f.mu.Lock()
+	f.Posted = append(f.Posted, PostedComment{Body: post.Body})
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusCreated, map[string]any{"id": int64(len(f.Posted) + 2000), "body": post.Body})
 }
 
 func (f *FakeGitHub) writeJSON(w http.ResponseWriter, status int, body any) {
