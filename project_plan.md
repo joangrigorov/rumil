@@ -479,7 +479,7 @@ Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: wri
 ### 9.1 Version Policy (`0.*` series)
 * The project stays on `0.*`. `bump-minor-pre-major: true` makes a breaking change bump the minor version, so feature and fix PRs never produce `1.0.0`.
 * `feat:` bumps minor, `fix:` bumps patch, and `chore:`/`ci:`/`docs:`/`test:`/`refactor:`/`build:` produce no release.
-* A phase that must land on an exact version from §6 adds a `Release-As: 0.1.0` footer to its commit body.
+* A phase that must land on an exact version from §6 adds a `Release-As: x.y.z` footer to its **commit message**. Two mechanics make that easy to get wrong: Release Please attributes commits to a release path by the files they touch, so the footer is dropped with an empty commit before it is ever read; and a squash merge composes the message on `main` from the branch's commit messages, discarding the pull request description, so a footer written only in the PR body never arrives. Put the footer in the commit body on the branch, or make a commit that changes a file.
 * Leaving `0.x` (`Release-As: 1.0.0`) requires explicit maintainer approval.
 
 ### 9.2 Artifact Matrix
