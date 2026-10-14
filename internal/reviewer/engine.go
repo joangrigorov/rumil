@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	kit "github.com/mark3labs/kit/pkg/kit"
@@ -154,6 +155,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
+	// review.resolve_threads off takes the tool away, and the prompt rule that
+	// names it goes with it.
+	resolveThreads := e.cfg.Review.ThreadsResolvable()
+	if !resolveThreads {
+		specs = slices.DeleteFunc(specs, func(spec mcpservers.Spec) bool { return spec.Name == "resolve_review_thread" })
+	}
+
 	sessionTools, err := kitTools(specs, func(string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -163,7 +171,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock), sessionTools, e.cfg.App.MaxAgentTurns))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock, resolveThreads), sessionTools, e.cfg.App.MaxAgentTurns))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}

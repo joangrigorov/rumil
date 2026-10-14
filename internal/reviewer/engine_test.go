@@ -70,6 +70,9 @@ type harnessOpts struct {
 	dsn string
 	// embedding adds models.default_embedding, the other half.
 	embedding bool
+	// resolveThreads sets review.resolve_threads. Nil leaves it out, which is
+	// the default of true.
+	resolveThreads *bool
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -89,9 +92,17 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 		defaultChat = fmt.Sprintf("  default_chat: %q\n", opts.defaultChat)
 	}
 
-	top := ""
+	reviewFields := ""
 	if opts.guidelinesRef != "" {
-		top += fmt.Sprintf("review:\n  guidelines_ref: %q\n", opts.guidelinesRef)
+		reviewFields += fmt.Sprintf("  guidelines_ref: %q\n", opts.guidelinesRef)
+	}
+	if opts.resolveThreads != nil {
+		reviewFields += fmt.Sprintf("  resolve_threads: %t\n", *opts.resolveThreads)
+	}
+
+	top := ""
+	if reviewFields != "" {
+		top += "review:\n" + reviewFields
 	}
 	if opts.dsn != "" {
 		top += fmt.Sprintf("database:\n  dsn: %q\n  auto_migrate: true\n", opts.dsn)

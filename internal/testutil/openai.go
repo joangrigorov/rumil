@@ -119,6 +119,38 @@ func (f *FakeLLM) ToolNames() []string {
 	return f.requests[len(f.requests)-1].Tools
 }
 
+// ToolResults returns the tool messages the model received on its most recent
+// request, in the order they were answered, which is what a test asserts on when
+// it cares about what a tool said rather than that it was called.
+func (f *FakeLLM) ToolResults() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) == 0 {
+		return nil
+	}
+	return toolResultsFrom(f.requests[len(f.requests)-1].Raw)
+}
+
+func toolResultsFrom(raw []byte) []string {
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil
+	}
+
+	messages, _ := body["messages"].([]any)
+	var results []string
+	for _, m := range messages {
+		message, _ := m.(map[string]any)
+		if role, _ := message["role"].(string); role != "tool" {
+			continue
+		}
+		if content, ok := message["content"].(string); ok {
+			results = append(results, content)
+		}
+	}
+	return results
+}
+
 // OfferedToolNames returns the union of tools offered across all requests.
 func (f *FakeLLM) OfferedToolNames() []string {
 	f.mu.Lock()

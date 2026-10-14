@@ -37,30 +37,36 @@ Your objective is to identify genuine bugs, security vulnerabilities, race condi
 )
 
 // reviewerRules is the rule list in order, without the ones the session cannot
-// keep: recorded rules and search_memory are named only when memory is on.
-func reviewerRules(memory bool) []string {
+// keep: recorded rules and search_memory are named only when memory is on, and
+// resolving threads only when the operator left that on.
+func reviewerRules(memory, resolveThreads bool) []string {
 	rules := []string{rulePrioritize, ruleGuidelines}
 	if memory {
 		rules[1] += ruleMemory
 		rules = append(rules, rulePrecedence)
 	}
-	return append(rules, ruleHistory, ruleInline, ruleEvent, ruleResolve, ruleReadOnly, ruleFinish)
+	rules = append(rules, ruleHistory, ruleInline, ruleEvent)
+	if resolveThreads {
+		rules = append(rules, ruleResolve)
+	}
+	return append(rules, ruleReadOnly, ruleFinish)
 }
 
 // PRReviewerSystemPrompt is the prompt a review runs on when the repository has
-// no guidelines and the operator configured no memory.
-var PRReviewerSystemPrompt = SystemPrompt("", "")
+// no guidelines and the operator configured no memory: the default session, so
+// the threads it opens stay closable.
+var PRReviewerSystemPrompt = SystemPrompt("", "", true)
 
 // SystemPrompt returns the reviewer prompt for one session. Repository
 // guidelines are appended as the §7.1 <repository_review_guidelines> block that
 // rule 2 refers to, and the recorded rules as memoryBlock, which is already
 // rendered as <project_memories>. Either block is left out when it would be
-// empty.
-func SystemPrompt(guidelines, memoryBlock string) string {
+// empty, and so is every rule naming a tool the session does not have.
+func SystemPrompt(guidelines, memoryBlock string, resolveThreads bool) string {
 	var b strings.Builder
 	b.WriteString(reviewerIntro)
 	b.WriteString("\n\nSTRICT OPERATING RULES:\n")
-	for i, rule := range reviewerRules(memoryBlock != "") {
+	for i, rule := range reviewerRules(memoryBlock != "", resolveThreads) {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, rule)
 	}
 
