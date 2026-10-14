@@ -2,7 +2,7 @@
 
 > **Instructions for Coding Agents (Gemini Flash 3.8 / DeepSeek V4):**
 > 1. Treat this document as the single source of truth. Do not invent alternative frameworks, CLI subprocesses, or database engines.
-> 2. Implement strictly phase-by-phase (`v0.0.1` -> `v0.0.2` -> `v0.1.0` -> `v0.2.0` -> `v0.3.0` -> `v0.4.0`).
+> 2. Implement strictly phase-by-phase (`v0.0.1` -> `v0.0.2` -> `v0.0.3` -> `v0.0.4` -> `v0.0.5` -> `v0.0.6`).
 > 3. Every phase is **incomplete** until 100% of the tests in that phase's **Mandatory Verification Matrix** pass via `go test -race ./...`.
 > 4. Rumil is strictly **read-only** toward target repositories. It may only read repository contents/diffs and write GitHub PR reviews/comments and internal memory records.
 > 5. Deliver each phase in its own pull request against `main`: implement, run that phase's **Mandatory Verification Matrix**, open the PR, then **stop** and wait for maintainer review before starting the next phase. Version numbers attached to phases are indicative; the phase order and its matrices are mandatory.
@@ -25,7 +25,7 @@
   * `github.com/google/go-github/v69/github` (or latest v60+)
   * `github.com/bradleyfalzon/ghinstallation/v2` for GitHub App JWT signing and Installation Access Token rotation.
 * **Container & Runtime:** one static binary (`CGO_ENABLED=0`, `-trimpath`) on `gcr.io/distroless/static-debian12:nonroot`, pinned as `tag@sha256:…` so Dependabot follows it, running as uid `65532`. Distroless supplies the CA bundle that HTTPS to GitHub and the model provider needs, and a resolvable non-root uid, for about 2 MB. `scratch` plus a copied CA bundle is the alternative when a zero-CVE base matters more than that.
-* **Database (v0.1.0+):** PostgreSQL 16+ with `pgvector` (`github.com/jackc/pgx/v5/pgxpool` and `github.com/pgvector/pgvector-go`).
+* **Database (v0.0.3+):** PostgreSQL 16+ with `pgvector` (`github.com/jackc/pgx/v5/pgxpool` and `github.com/pgvector/pgvector-go`).
 * **Migrations:** `github.com/pressly/goose/v3` using Go `//go:embed` so the single `rumil` binary self-migrates on boot.
 * **CLI Framework:** `github.com/spf13/cobra`
 * **Configuration:** `gopkg.in/yaml.v3` with environment variable expansion (`os.ExpandEnv`).
@@ -43,9 +43,9 @@ rumil/
 │       ├── main.go               # Entrypoint
 │       ├── root.go               # Cobra root command + global flags
 │       ├── review.go             # `rumil review --repo owner/repo --pr 123` (v0.0.1)
-│       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.1.0+)
+│       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.0.3+)
 │       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs)
-│       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.3.0+)
+│       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.0.5+)
 ├── internal/
 │   ├── config/
 │   │   ├── config.go             # YAML loader, env interpolation, validation
@@ -57,25 +57,25 @@ rumil/
 │   │   └── client_test.go
 │   ├── mcpservers/
 │   │   ├── github_mcp.go         # Specs for the read-only repo + PR review tools
-│   │   ├── memory_mcp.go         # Specs for RAG search & propose_memory (v0.2.0+)
+│   │   ├── memory_mcp.go         # Specs for RAG search & propose_memory (v0.0.4+)
 │   │   └── mcp_test.go
 │   ├── reviewer/
 │   │   ├── engine.go             # Orchestrates pre-fetch + pkg/kit session execution
 │   │   ├── prompts.go            # System prompt templates for review & memory distillation
 │   │   └── engine_test.go
-│   ├── store/                    # Introduced in v0.1.0 / v0.2.0
+│   ├── store/                    # Introduced in v0.0.3 / v0.0.4
 │   │   ├── migrations/           # Embedded SQL files (*.sql)
 │   │   ├── db.go                 # pgxpool init + goose auto-migrator
 │   │   ├── jobs.go               # Webhook idempotency & async worker queue
 │   │   ├── memories.go           # pgvector CRUD, hybrid search, moderation state machine
 │   │   └── store_test.go
-│   ├── embedder/                 # Introduced in v0.2.0
+│   ├── embedder/                 # Introduced in v0.0.4
 │   │   ├── embedder.go           # OpenAI-compatible embeddings client
 │   │   └── embedder_test.go
-│   └── server/                   # Introduced in v0.1.0 & expanded in v0.3.0
+│   └── server/                   # Introduced in v0.0.3 & expanded in v0.0.5
 │       ├── webhook.go            # HMAC SHA-256 verification & event dispatcher
-│       ├── commands.go           # Parser for `@rumil` comment commands (v0.2.0+)
-│       ├── mod_ui.go             # HTMX + html/template moderation UI & REST API (v0.3.0+)
+│       ├── commands.go           # Parser for `@rumil` comment commands (v0.0.4+)
+│       ├── mod_ui.go             # HTMX + html/template moderation UI & REST API (v0.0.5+)
 │       └── server_test.go
 ├── Dockerfile
 ├── Dockerfile.release
@@ -101,20 +101,20 @@ github:
   app_id: 123456
   installation_id: 98765432                       # Installation of the operator's own GitHub App
   private_key_path: "/run/secrets/github_app_pem" # Or inline via GITHUB_PRIVATE_KEY env
-  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"      # Required in v0.1.0+
+  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"      # Required in v0.0.3+
 
 review:                                           # v0.0.2+
   guidelines_ref: "base"                          # "base" reads RUMIL.md from the PR base SHA; "head" trusts the PR branch
 
-worker:                                           # v0.1.0+
+worker:                                           # v0.0.3+
   concurrency: 4                                  # review jobs processed in parallel; an idle worker polls every 250ms
 
-server:                                           # v0.1.0+
+server:                                           # v0.0.3+
   listen: ":8080"                                 # HTTP address for `rumil serve`, overridden by --listen
 
 models:
   default_chat: "deepseek-v4-flash"
-  default_embedding: "text-embedding-3-small"     # Required in v0.2.0+
+  default_embedding: "text-embedding-3-small"     # Required in v0.0.4+
   providers:
     - id: "deepseek-v4-flash"
       provider: "openai-compatible"
@@ -130,12 +130,12 @@ models:
       api_key: "${OPENAI_API_KEY}"
       dimensions: 1536
 
-database:                                         # Required in v0.1.0+
+database:                                         # Required in v0.0.3+
   dsn: "${DATABASE_URL}"                          # postgres://user:pass@db:5432/rumil?sslmode=disable
   auto_migrate: true
 
-moderation:                                       # Used in v0.2.0 / v0.3.0+
-  accept_all: false                               # MUST default to false in v0.3.0+
+moderation:                                       # Used in v0.0.4 / v0.0.5+
+  accept_all: false                               # MUST default to false in v0.0.5+
   auto_approve_associations: []                   # Optional e.g. ["OWNER"]
   admin_token: "${RUMIL_ADMIN_TOKEN}"             # Bearer token auth for Moderation UI/API (constant-time compare)
 ```
@@ -145,7 +145,7 @@ Rumil ships no centralized GitHub App. Because it is open source, every operator
 1. At startup, validate that all three values are present and that the private key parses and can sign an app JWT; otherwise fail fast with a descriptive configuration error.
 2. Mint an installation access token for the configured `installation_id`, cache it until shortly before expiry, and rotate it.
 3. A `404`/`403` while minting the token means the App is not installed for that installation ID: fail before initializing the LLM session, log `github app not installed for installation <id>`, and exit non-zero.
-4. `github.webhook_secret` remains required from `v0.1.0` for webhook HMAC verification.
+4. `github.webhook_secret` remains required from `v0.0.3` for webhook HMAC verification.
 
 ### Model Selection Rule
 1. If `models.default_chat` is set, look up the matching `id` in `models.providers`.
@@ -158,7 +158,7 @@ Rumil ships no centralized GitHub App. Because it is open source, every operator
 
 ## 4. Database Schema (`internal/store/migrations/001_init.sql`)
 
-Even though vector memory launches in `v0.2.0`, moderation in `v0.3.0`, and org-scoping in `v0.4.0`, the database schema MUST include all columns from the moment Postgres is introduced so later phases require zero destructive migrations. Every table includes `installation_id` to support future multi-tenant SaaS hosting.
+Even though vector memory launches in `v0.0.4`, moderation in `v0.0.5`, and org-scoping in `v0.0.6`, the database schema MUST include all columns from the moment Postgres is introduced so later phases require zero destructive migrations. Every table includes `installation_id` to support future multi-tenant SaaS hosting.
 
 ```sql
 -- +goose Up
@@ -237,13 +237,13 @@ Scoped strictly to a single `(installation_id, owner, repo, pr_number)` context 
 | `list_existing_review_comments` | `{}` | Returns existing review comments on the PR so the agent does not post duplicate findings on subsequent pushes. |
 | `submit_pr_review` | `{"event": "ENUM('COMMENT', 'REQUEST_CHANGES', 'APPROVE')", "summary_body": "string", "comments": [{"path": "string", "line": "int", "side": "ENUM('RIGHT', 'LEFT')", "body": "string"}]}` | Validates that every `comments[i].line` actually exists in the parsed diff hunk for `path`. Any comment targeting a line outside the diff hunk is converted into a file-level or summary-level note instead of failing the GitHub API batch request. All three events are supported from `v0.0.1`; when GitHub rejects `APPROVE`/`REQUEST_CHANGES` (for example on a PR the App authored), the review is resubmitted as `COMMENT` with the intended event recorded in `summary_body` and a structured warning logged, so a rejected event never fails the whole review. |
 
-### 5.2 `memory` Tool Set (`internal/mcpservers/memory_mcp.go` — v0.2.0+)
+### 5.2 `memory` Tool Set (`internal/mcpservers/memory_mcp.go` — v0.0.4+)
 Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
 | :--- | :--- | :--- |
 | `search_memory` | `{"query": "string (required)", "file_path": "string (optional)", "limit": "int (default 5, max 15)"}` | Embeds `query` and runs a cosine similarity search against `memories` where `status = 'APPROVED'` AND `installation_id = $1` AND (`(scope = 'REPO' AND repo_name = $2)` OR `(scope = 'ORG' AND org_name = $3)`). Filters or boosts results whose `path_glob` matches `file_path`. |
-| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`). Determines `status`: in v0.2.0 (or if `moderation.accept_all == true`), sets `APPROVED`; in v0.3.0+ with `accept_all == false`, sets `PENDING`. In v0.2.0–v0.3.0, forces `scope = 'REPO'` unless v0.4.0 org-scope is enabled and authorized. |
+| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`). Determines `status`: in v0.0.4 (or if `moderation.accept_all == true`), sets `APPROVED`; in v0.0.5+ with `accept_all == false`, sets `PENDING`. In v0.0.4–v0.0.5, forces `scope = 'REPO'` unless v0.0.6 org-scope is enabled and authorized. |
 
 ---
 
@@ -297,7 +297,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 3: `v0.1.0` — Webhook Server Stack & Async Worker Queue
+### Phase 3: `v0.0.3` — Webhook Server Stack & Async Worker Queue
 
 #### Scope & Deliverables
 1. Implement `internal/store` with `pgxpool` and automatic `goose` migration on startup.
@@ -312,7 +312,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 3. Implement an in-process worker pool (`worker.concurrency`, §3; 4 by default) polling `webhook_jobs` via `SELECT ... FOR UPDATE SKIP LOCKED`, executing the review engine, and updating job status to `COMPLETED` or `FAILED`. Job pickup is a 250ms poll, and a failed job records `last_error` and its `attempts` count.
 4. Provide `docker-compose.yml` bundling `rumil` and `pgvector/pgvector:pg16`.
 
-#### Mandatory Verification Matrix — `v0.1.0`
+#### Mandatory Verification Matrix — `v0.0.3`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
@@ -324,7 +324,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 4: `v0.2.0` — Vector Database (`pgvector`), `memory` Tools & Comment Commands
+### Phase 4: `v0.0.4` — Vector Database (`pgvector`), `memory` Tools & Comment Commands
 
 #### Scope & Deliverables
 1. Implement `internal/embedder` for generating 1536-dim vectors via the configured OpenAI-compatible embedding provider.
@@ -341,9 +341,9 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
      2. Rumil's prior comment in the thread,
      3. The user's `@rumil remember ...` comment.
    * Run a synthesis prompt that distills the raw conversation (e.g., *"we don't use transactions here"*) into a self-contained rule (e.g., *"In `internal/billing/webhook.go`, database writes do not use explicit SQL transactions because handlers are idempotent single-statement upserts"*), invokes `propose_memory`, and replies to the PR comment confirming the memory record ID.
-   * *(Note: In `v0.2.0`, `propose_memory` saves with `status = 'APPROVED'` by default until `v0.3.0` locks the gate).*
+   * *(Note: In `v0.0.4`, `propose_memory` saves with `status = 'APPROVED'` by default until `v0.0.5` locks the gate).*
 
-#### Mandatory Verification Matrix — `v0.2.0`
+#### Mandatory Verification Matrix — `v0.0.4`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
@@ -355,7 +355,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 5: `v0.3.0` — Security Gate, Moderation Queue, CLI & Web UI
+### Phase 5: `v0.0.5` — Security Gate, Moderation Queue, CLI & Web UI
 
 #### Scope & Deliverables
 1. **Flip the Security Gate:**
@@ -373,7 +373,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time via `subtle.ConstantTimeCompare`. No login page, no sessions, no cookies.
    * Serves lightweight server-rendered HTML (`html/template` + HTMX) at `/ui/moderation` allowing maintainers to filter by repo/status, inline-edit `rule_text` and `path_glob`, and click **Approve** or **Reject**.
 
-#### Mandatory Verification Matrix — `v0.3.0`
+#### Mandatory Verification Matrix — `v0.0.5`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
@@ -386,7 +386,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 ---
 
-### Phase 6: `v0.4.0` — Cross-Project Organization Memory
+### Phase 6: `v0.0.6` — Cross-Project Organization Memory
 
 #### Scope & Deliverables
 1. Extend the comment command parser (`internal/server/commands.go`) to recognize organization-scoped commands:
@@ -411,7 +411,7 @@ ORDER BY score DESC
 LIMIT $5;
 ```
 
-#### Mandatory Verification Matrix — `v0.4.0`
+#### Mandatory Verification Matrix — `v0.0.6`
 
 | Test ID | Category | Scenario / Condition | Expected Outcome & Assertion |
 | :--- | :--- | :--- | :--- |
@@ -438,7 +438,7 @@ STRICT OPERATING RULES:
 6. Choose the review event deliberately: `REQUEST_CHANGES` only for defects that must be fixed before merge, `APPROVE` only when the PR contains no substantive findings, and `COMMENT` in every other case.
 ```
 
-### 7.2 Memory Distillation System Prompt (v0.2.0+)
+### 7.2 Memory Distillation System Prompt (v0.0.4+)
 ```text
 You are Rumil's Memory Synthesizer. A developer has tagged @rumil in a Pull Request comment to record project or organization context.
 
@@ -463,7 +463,7 @@ Rewrite the developer's note into a clear, self-contained engineering rule that 
 1. **Deterministic Testing without Live APIs:**
    * All verification matrix tests (`T-001-*` through `T-040-*`) MUST run hermetic integration tests using:
      * `httptest.NewServer` to mock GitHub REST API endpoints and OpenAI-compatible LLM/Embedding responses.
-     * A `pgvector/pgvector:pg16` service for all `v0.1.0+` database tests. The harness reads its URL from `TEST_DATABASE_URL` and skips those tests when the variable is unset. Each test package names its own schema through the DSN so `go test ./...` never lets two packages share a table.
+     * A `pgvector/pgvector:pg16` service for all `v0.0.3+` database tests. The harness reads its URL from `TEST_DATABASE_URL` and skips those tests when the variable is unset. Each test package names its own schema through the DSN so `go test ./...` never lets two packages share a table.
 2. **Error Handling & Observability:**
    * Use standard library `log/slog` with structured JSON output. Every log line during a job must carry `delivery_id`, `installation_id`, `repo`, and `pr`.
    * Wrap all errors with context (`fmt.Errorf("fetching diff for %s#%d: %w", repo, pr, err)`).
@@ -486,11 +486,13 @@ Two tools split the work inside the single workflow `.github/workflows/release.y
 
 Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: write`, `pull-requests: write`), so no PAT and no GitHub App is needed. Artifact publishing waits on the §8 CI gates.
 
-### 9.1 Version Policy (`0.*` series)
-* The project stays on `0.*`. `bump-minor-pre-major: true` makes a breaking change bump the minor version, so feature and fix PRs never produce `1.0.0`.
-* `feat:` bumps minor, `fix:` bumps patch, and `chore:`/`ci:`/`docs:`/`test:`/`refactor:`/`build:` produce no release.
+### 9.1 Version Policy (`0.0.*` series)
+* Every phase ships a **patch** bump of `0.0.x`: Phase 3 is `v0.0.3`, Phase 4 `v0.0.4`, Phase 5 `v0.0.5`, Phase 6 `v0.0.6`. The patch follows from the phase PR, and no phase writes a version by hand.
+* `release-please-config.json` selects `"versioning": "always-bump-patch"`, which decides the bump without consulting commit types. That is what holds the series on `0.0.*`: a `feat!` or `BREAKING CHANGE` marker cannot propose `0.1.0` or `1.0.0`, which the pre-major rules of the `default` strategy would. For the same reason the config sets neither `bump-minor-pre-major` nor `bump-patch-for-minor-pre-major`; `always-bump-patch` ignores both.
+* `chore:`, `ci:`, `docs:`, `test:`, `refactor:` and `build:` commits produce no release at all, because release-please counts only releasable commits: `feat`, `fix`, and breaking changes.
+* Leaving `0.0.x` is a maintainer decision, never a side effect of a phase landing. `0.1.0` is cut by putting a `Release-As: 0.1.0` footer on a commit that changes a file: the footer is read before the versioning strategy runs, so it overrides `always-bump-patch`. Nothing is tagged until the maintainer merges the release PR, which is where an unintended version is caught.
 * A phase that must land on an exact version from §6 adds a `Release-As: x.y.z` footer to its **commit message**. Two mechanics make that easy to get wrong: Release Please attributes commits to a release path by the files they touch, so the footer is dropped with an empty commit before it is ever read; and a squash merge composes the message on `main` from the branch's commit messages, discarding the pull request description, so a footer written only in the PR body never arrives. Put the footer in the commit body on the branch, or make a commit that changes a file.
-* Leaving `0.x` (`Release-As: 1.0.0`) requires explicit maintainer approval.
+* Reaching `1.0.0` and beyond (`Release-As: 1.0.0`) requires explicit maintainer approval.
 
 ### 9.2 Artifact Matrix
 | Target | Artifacts |
