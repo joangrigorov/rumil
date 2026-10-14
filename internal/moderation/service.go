@@ -27,6 +27,12 @@ type Embedder interface {
 // provider configured; approving the text as it was proposed still works.
 var ErrNoEmbedder = errors.New("editing a rule needs a configured embedding provider")
 
+// ErrUnknownStatus reports a status filter that names something a rule cannot
+// be. It is checked before the query rather than left to the enum cast in the
+// statement, so a typo is answered with what the three statuses are instead of
+// a database error.
+var ErrUnknownStatus = errors.New("status takes pending, approved or rejected")
+
 // Service resolves pending memories for one installation.
 type Service struct {
 	store          *store.DB
@@ -44,10 +50,28 @@ func NewService(db *store.DB, embedder Embedder, installationID int64, logger *s
 	return &Service{store: db, embedder: embedder, installationID: installationID, logger: logger}
 }
 
-// List returns the rules a moderator is looking at.
+// List returns the rules a moderator is looking at. The status filter is
+// normalized here, which is the one place both the CLI and the HTTP surface
+// pass through, so neither can hand the statement a value the enum will reject.
 func (s *Service) List(ctx context.Context, filter store.MemoryFilter) ([]store.Memory, error) {
+	status, err := normalizeStatus(filter.Status)
+	if err != nil {
+		return nil, err
+	}
+	filter.Status = status
 	filter.InstallationID = s.installationID
 	return s.store.ListMemories(ctx, filter)
+}
+
+// normalizeStatus turns a moderator's filter into one of the three statuses, or
+// into no filter at all when nothing was asked for.
+func normalizeStatus(status string) (string, error) {
+	switch status = strings.ToUpper(strings.TrimSpace(status)); status {
+	case "", "PENDING", "APPROVED", "REJECTED":
+		return status, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownStatus, status)
+	}
 }
 
 // Decision is one moderator's answer about one rule, as the CLI and the HTTP

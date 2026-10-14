@@ -291,6 +291,16 @@ func TestModDecisionsNeedAnExistingRule(t *testing.T) {
 	if out, err := runModCmd(t, configPath, "list", "--repo", "payments"); err == nil {
 		t.Errorf("a repository that is not owner/name was accepted: %s", out)
 	}
+
+	// A status the enum does not have is the operator's typo, and it is answered
+	// with what the statuses are rather than with a database error.
+	out, err = runModCmd(t, configPath, "list", "--status", "approve")
+	if err == nil {
+		t.Fatalf("an unknown status was accepted: %s", out)
+	}
+	if !strings.Contains(err.Error(), "pending, approved or rejected") {
+		t.Errorf("error = %v, want the three statuses", err)
+	}
 }
 
 // T-030-05 (warning half): turning the approval gate off is reported on every
