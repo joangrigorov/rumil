@@ -70,7 +70,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
-			pool := server.NewPool(db, engine, cfg.Worker.Concurrency, logger)
+			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
 			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, db, logger)
 			httpServer := &http.Server{
 				Addr:              address,

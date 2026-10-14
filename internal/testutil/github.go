@@ -53,6 +53,18 @@ type PostedComment struct {
 	InReplyTo int64  `json:"in_reply_to,omitempty"`
 }
 
+// ReviewComment builds a comment fixture for the fake's comment endpoints. The
+// reported type follows the login, so a bot fixture looks like one.
+func ReviewComment(id, inReplyTo int64, login, body string) CommentEntry {
+	entry := CommentEntry{ID: id, Path: "main.go", Body: body, InReplyToID: inReplyTo}
+	entry.User.Login = login
+	entry.User.Type = "User"
+	if strings.HasSuffix(login, "[bot]") {
+		entry.User.Type = "Bot"
+	}
+	return entry
+}
+
 // SubmittedReview captures a POST to the reviews endpoint.
 type SubmittedReview struct {
 	Event    string `json:"event"`
@@ -97,6 +109,9 @@ type FakeGitHub struct {
 	// Posted collects the comments Rumil posted through the reply and
 	// conversation endpoints.
 	Posted []PostedComment
+	// BotLogin is the login the fake reports for the comments it records a post
+	// as, so a later listing sees them exactly as GitHub would serve them.
+	BotLogin string
 
 	// MintStatus, when non-zero, is returned by the installation token
 	// endpoint instead of a token (404 simulates an App that is not installed).
@@ -394,9 +409,13 @@ func (f *FakeGitHub) handlePostReviewComment(w http.ResponseWriter, r *http.Requ
 
 	f.mu.Lock()
 	f.Posted = append(f.Posted, post)
+	// GitHub serves a posted comment on the next listing, and a retry that
+	// cannot see its own answer would post it twice.
+	entry := ReviewComment(1000+int64(len(f.Posted)), post.InReplyTo, f.botLogin(), post.Body)
+	f.Comments = append(f.Comments, entry)
 	f.mu.Unlock()
 
-	f.writeJSON(w, http.StatusCreated, map[string]any{"id": int64(len(f.Posted) + 1000), "body": post.Body})
+	f.writeJSON(w, http.StatusCreated, map[string]any{"id": entry.ID, "body": post.Body})
 }
 
 func (f *FakeGitHub) handlePostIssueComment(w http.ResponseWriter, r *http.Request) {
@@ -410,9 +429,19 @@ func (f *FakeGitHub) handlePostIssueComment(w http.ResponseWriter, r *http.Reque
 
 	f.mu.Lock()
 	f.Posted = append(f.Posted, PostedComment{Body: post.Body})
+	entry := ReviewComment(2000+int64(len(f.Posted)), 0, f.botLogin(), post.Body)
+	f.IssueComments = append(f.IssueComments, entry)
 	f.mu.Unlock()
 
-	f.writeJSON(w, http.StatusCreated, map[string]any{"id": int64(len(f.Posted) + 2000), "body": post.Body})
+	f.writeJSON(w, http.StatusCreated, map[string]any{"id": entry.ID, "body": post.Body})
+}
+
+// botLogin is the login a recorded post is attributed to.
+func (f *FakeGitHub) botLogin() string {
+	if f.BotLogin != "" {
+		return f.BotLogin
+	}
+	return "rumil[bot]"
 }
 
 func (f *FakeGitHub) writeJSON(w http.ResponseWriter, status int, body any) {

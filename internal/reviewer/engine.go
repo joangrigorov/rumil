@@ -163,7 +163,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock), sessionTools))
+	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(guidelines, memoryBlock), sessionTools, e.cfg.App.MaxAgentTurns))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -198,9 +198,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 }
 
 // sessionOptions builds the kit session configuration: isolated from host
-// state, no core tools (no shell, no file writes), and only the GitHub tool set
-// registered.
-func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool) *kit.Options {
+// state, no core tools (no shell, no file writes), and only the tool set the
+// caller passes. maxSteps bounds the tool loop.
+func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool, maxSteps int) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)
 	kit.WithModel(modelString(provider))(options)
@@ -217,7 +217,7 @@ func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, 
 		options.Temperature = &temperature
 	}
 
-	options.MaxSteps = e.cfg.App.MaxAgentTurns
+	options.MaxSteps = maxSteps
 	options.Quiet = true
 	options.ExtraTools = tools
 	return options

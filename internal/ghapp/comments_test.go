@@ -10,10 +10,7 @@ import (
 
 // comment builds a fixture entry the fake serves on the comments endpoints.
 func comment(id, inReplyTo int64, author, body string) testutil.CommentEntry {
-	entry := testutil.CommentEntry{ID: id, Path: "main.go", Line: 12, Body: body, InReplyToID: inReplyTo}
-	entry.User.Login = author
-	entry.User.Type = "User"
-	return entry
+	return testutil.ReviewComment(id, inReplyTo, author, body)
 }
 
 func TestNormalizeLogin(t *testing.T) {
@@ -111,7 +108,9 @@ func TestThreadCommentByWalksUpTheThread(t *testing.T) {
 	client := newTestClient(t, gh)
 
 	t.Run("a reply two levels down still finds Rumil's root", func(t *testing.T) {
-		body, err := client.ThreadCommentBy(context.Background(), 3, "@rumil")
+		// The command sits on comment 3 and replies to comment 2, which is the
+		// chain the walk starts from.
+		body, err := client.ThreadCommentBy(context.Background(), 2, "@rumil")
 		if err != nil {
 			t.Fatalf("ThreadCommentBy returned error: %v", err)
 		}
@@ -128,7 +127,7 @@ func TestThreadCommentByWalksUpTheThread(t *testing.T) {
 		}
 		client := newTestClient(t, gh)
 
-		body, err := client.ThreadCommentBy(context.Background(), 2, "@rumil")
+		body, err := client.ThreadCommentBy(context.Background(), 1, "@rumil")
 		if err != nil {
 			t.Fatalf("ThreadCommentBy returned error: %v", err)
 		}

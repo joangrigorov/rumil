@@ -76,9 +76,15 @@ func (c *Client) CommentsByAuthor(ctx context.Context, login string) ([]string, 
 	return bodies, nil
 }
 
-// ThreadCommentBy returns the body of the closest comment above commentID that
-// login wrote, or "" when the thread holds none. The walk follows in_reply_to,
-// so it finds Rumil's own comment however deep the person replied.
+// ThreadCommentBy returns the body of the first comment in the chain that
+// starts at commentID, inclusive, and was written by login. A caller passes the
+// comment a command replied to, so the answer is Rumil's own finding in that
+// thread. It returns "" when the chain holds nothing of Rumil's.
+//
+// The chain comes from in_reply_to, so it finds the comment however deep the
+// reply sits. The comment the caller starts from is passed in rather than
+// looked up, because the payload already names it and a listing that has not
+// caught up would otherwise hide it.
 func (c *Client) ThreadCommentBy(ctx context.Context, commentID int64, login string) (string, error) {
 	comments, err := c.ExistingReviewComments(ctx)
 	if err != nil {
@@ -91,15 +97,11 @@ func (c *Client) ThreadCommentBy(ctx context.Context, commentID int64, login str
 	}
 
 	current := byID[commentID]
-	for depth := 0; depth < threadDepthLimit && current.InReplyToID != 0; depth++ {
-		parent, ok := byID[current.InReplyToID]
-		if !ok {
-			break
+	for depth := 0; depth < threadDepthLimit && current.ID != 0; depth++ {
+		if sameLogin(current.Author, login) {
+			return current.Body, nil
 		}
-		if sameLogin(parent.Author, login) {
-			return parent.Body, nil
-		}
-		current = parent
+		current = byID[current.InReplyToID]
 	}
 	return "", nil
 }

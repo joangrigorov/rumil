@@ -66,3 +66,39 @@ func ReviewUserPrompt(owner, repo string, number int) string {
 Work through the diff, verify each candidate finding against the surrounding code, and finish by calling submit_pr_review with your summary and any inline comments.`,
 		owner, repo, number)
 }
+
+// memoryDistillerPrompt is the synthesis prompt of project_plan.md §7.2. What a
+// person writes in a comment ("we don't use transactions here") is full of
+// pronouns that mean nothing months later, so the session rewrites it into a
+// rule that stands alone.
+const memoryDistillerPrompt = `You are Rumil's Memory Synthesizer. A developer has tagged @rumil in a pull request comment to record project or organization context.
+
+INPUT CONTEXT PROVIDED TO YOU:
+- Repository: %s/%s (PR #%d)
+- Requested scope: REPO, a rule for this repository
+- File path and diff hunk: %s
+- Rumil's comment in the thread: %s
+- Developer command: %s
+
+YOUR TASK:
+Rewrite the developer's note into a clear, self-contained engineering rule that will make sense months later, when it is retrieved by vector search on a future pull request.
+- Eliminate ambiguous pronouns ("here", "this file", "that function") by naming the specific package, file path glob, struct, or architectural pattern.
+- Separate the actionable rule (rule_text) from the underlying reason (rationale).
+- Set path_glob when the rule only holds for particular files, and leave it out when it holds for the repository.
+- Call propose_memory exactly once with the synthesized rule.`
+
+// RememberUserPrompt is the task message for one synthesis session. The context
+// is in the system prompt; the task is one line.
+const RememberUserPrompt = "Distill the developer's note into one rule and record it with propose_memory."
+
+// RememberPrompt renders §7.2 for one command.
+func RememberPrompt(req RememberRequest, prior, fileContext string) string {
+	if prior == "" {
+		prior = "(none: this comment does not answer an earlier review comment)"
+	}
+	command := req.Command
+	if req.Conversation {
+		command += "\n(the command is a conversation comment, so the rule cannot name a line of this pull request)"
+	}
+	return fmt.Sprintf(memoryDistillerPrompt, req.Owner, req.Repo, req.Number, fileContext, prior, command)
+}

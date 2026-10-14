@@ -51,6 +51,13 @@ models:
       base_url: %q
       model_name: "test-model"
       api_key: "chat-key"
+    - id: "embed"
+      provider: "openai-compatible"
+      base_url: %q
+      model_name: "test-embedding"
+      api_key: "embed-key"
+      dimensions: 1536
+%s
 database:
   dsn: %q
   auto_migrate: true
@@ -58,6 +65,7 @@ database:
 
 type harness struct {
 	db     *store.DB
+	dsn    string
 	cfg    *config.Config
 	logs   *bytes.Buffer
 	logger *slog.Logger
@@ -78,7 +86,13 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 		t.Fatalf("writing the test key: %v", err)
 	}
 
-	doc := fmt.Sprintf(testConfigTemplate, keyPath, webhookSecret, opts.concurrency, llm.URL()+"/v1", dsn)
+	models := ""
+	if opts.embedding {
+		models = "  default_embedding: \"embed\"\n"
+	}
+
+	doc := fmt.Sprintf(testConfigTemplate, keyPath, webhookSecret, opts.concurrency,
+		llm.URL()+"/v1", llm.URL()+"/v1", models, dsn)
 	cfg, err := config.Parse([]byte(doc), "server_test.yaml")
 	if err != nil {
 		t.Fatalf("parsing the test config: %v", err)
@@ -96,11 +110,11 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	return &harness{db: db, cfg: cfg, logs: logs, logger: logger}
+	return &harness{db: db, dsn: dsn, cfg: cfg, logs: logs, logger: logger}
 }
 
-// truncateJobs empties the queue through its own connection, so a test does
-// not need a handle on the store's pool.
+// truncateJobs empties the queue and the memory table through its own
+// connection, so a test does not need a handle on the store's pool.
 func truncateJobs(t *testing.T, dsn string) {
 	t.Helper()
 
@@ -111,13 +125,16 @@ func truncateJobs(t *testing.T, dsn string) {
 	}
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, `TRUNCATE webhook_jobs`); err != nil {
-		t.Fatalf("truncating webhook_jobs: %v", err)
+	if _, err := pool.Exec(ctx, `TRUNCATE webhook_jobs, memories`); err != nil {
+		t.Fatalf("truncating the test tables: %v", err)
 	}
 }
 
 type harnessOpts struct {
 	concurrency int
+	// embedding adds models.default_embedding, which together with
+	// database.dsn is what turns memory on.
+	embedding bool
 }
 
 func (h *harness) webhook() *server.Webhook {
@@ -239,7 +256,7 @@ func TestT010_01_ReviewRequestedIsQueuedAndReviewed(t *testing.T) {
 		t.Errorf("job coordinates = %+v, want acme/payments#42", job)
 	}
 
-	pool := server.NewPool(h.db, h.engine(t, gh), 1, h.logger)
+	pool := server.NewPool(h.db, h.engine(t, gh), "@rumil", 1, h.logger)
 	poolCtx, stopPool := context.WithCancel(context.Background())
 	pool.Start(poolCtx)
 
@@ -329,7 +346,7 @@ func TestT010_03_DuplicateDeliveryIsAbsorbed(t *testing.T) {
 	}
 
 	// A worker runs one review, not two.
-	pool := server.NewPool(h.db, h.engine(t, gh), 1, h.logger)
+	pool := server.NewPool(h.db, h.engine(t, gh), "@rumil", 1, h.logger)
 	poolCtx, stopPool := context.WithCancel(context.Background())
 	pool.Start(poolCtx)
 	waitFor(t, "the job to complete", func() bool {

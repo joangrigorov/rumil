@@ -24,7 +24,14 @@ import (
 const (
 	eventPullRequest  = "pull_request"
 	eventIssueComment = "issue_comment"
+	// eventReviewComment is a reply inside a review thread. Its payload carries
+	// the diff hunk the comment hangs on, which the issue comment payload does
+	// not have.
+	eventReviewComment = "pull_request_review_comment"
 )
+
+// commandRemember is the one command the conversation supports.
+const commandRemember = "remember"
 
 // signatureHeader carries the HMAC of the raw webhook body.
 const signatureHeader = "X-Hub-Signature-256"
@@ -172,13 +179,41 @@ func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
 		}
 		return w.job(eventType, d, d.PullRequest.Number), ""
 
-	case eventIssueComment:
-		// GitHub Issues are out of scope: only a comment on a pull request
-		// carries the number the queue needs.
-		if d.Issue == nil || !d.Issue.isPullRequest() {
-			return store.Job{}, "comment is not on a pull request"
+	case eventIssueComment, eventReviewComment:
+		if d.Action != "created" {
+			return store.Job{}, fmt.Sprintf("%s action %q is not a new comment", eventType, d.Action)
 		}
-		return w.job(eventType, d, d.Issue.Number), ""
+		if d.Comment == nil {
+			return store.Job{}, "the payload carries no comment"
+		}
+		if d.Comment.User.Type == "Bot" {
+			// Rumil's own comments, and every other bot's, are dropped here:
+			// otherwise a comment that quotes the command would answer itself.
+			return store.Job{}, "the comment was written by a bot"
+		}
+		command, ok := parseCommand(w.botLogin, d.Comment.Body)
+		if !ok {
+			return store.Job{}, fmt.Sprintf("the comment carries no @%s command", w.botLogin)
+		}
+		if command.Verb != commandRemember {
+			return store.Job{}, fmt.Sprintf("command %q is not supported", command.Verb)
+		}
+		if command.Instruction == "" {
+			return store.Job{}, "the command carries no instruction"
+		}
+
+		if eventType == eventIssueComment {
+			// GitHub Issues are out of scope: only a comment on a pull request
+			// carries the number the queue needs.
+			if d.Issue == nil || !d.Issue.isPullRequest() {
+				return store.Job{}, "comment is not on a pull request"
+			}
+			return w.job(eventType, d, d.Issue.Number), ""
+		}
+		if d.PullRequest == nil {
+			return store.Job{}, "the payload carries no pull request"
+		}
+		return w.job(eventType, d, d.PullRequest.Number), ""
 
 	default:
 		return store.Job{}, fmt.Sprintf("event %q is not handled", eventType)
@@ -217,6 +252,26 @@ type payload struct {
 	PullRequest       *pullRequest       `json:"pull_request"`
 	RequestedReviewer *requestedReviewer `json:"requested_reviewer"`
 	Issue             *issue             `json:"issue"`
+	Comment           *comment           `json:"comment"`
+}
+
+// comment is the comment a command arrives on, which is a review-thread reply
+// or a conversation comment depending on the event.
+type comment struct {
+	ID   int64  `json:"id"`
+	Body string `json:"body"`
+	User struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
+	// AuthorAssociation is the commenter's standing in the repository. It is
+	// recorded for the untrusted-commenter guard of v0.0.5.
+	AuthorAssociation string `json:"author_association"`
+	HTMLURL           string `json:"html_url"`
+	// The next three are set on a review-thread reply only.
+	Path        string `json:"path"`
+	DiffHunk    string `json:"diff_hunk"`
+	InReplyToID int64  `json:"in_reply_to_id"`
 }
 
 type pullRequest struct {
