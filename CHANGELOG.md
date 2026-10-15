@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.6](https://github.com/joangrigorov/rumil/compare/v0.0.5...v0.0.6) (2026-10-15)
+
+
+### Features
+
+* **memory:** organization-wide rules, one hybrid query and moderation scope ([#11](https://github.com/joangrigorov/rumil/issues/11)) ([b84c7b9](https://github.com/joangrigorov/rumil/commit/b84c7b948425d03294ef95e6a58604d187e37d31))
+
 ## [0.0.5](https://github.com/joangrigorov/rumil/compare/v0.0.4...v0.0.5) (2026-10-14)
 
 
