@@ -29,6 +29,10 @@ type RememberRequest struct {
 	Number int
 	// Command is the person's own words, the raw material of the rule.
 	Command string
+	// OrgScoped is true when the command asked for an organization-wide rule
+	// (`--org` or the `org` shorthand). It is the only thing that lets the
+	// synthesis session record one.
+	OrgScoped bool
 	// CommentID identifies the comment the answer goes under, when it is a
 	// review-thread reply.
 	CommentID int64
@@ -110,6 +114,8 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 	}
 
 	result := &RememberResult{}
+	// The synthesis session gets ProposeSpecs alone, so the boosting weight a
+	// search ranks with is left off: nothing in this session ranks anything.
 	memoryTools := mcpservers.NewMemoryTools(e.memory.store, e.memory.embedder, mcpservers.MemorySession{
 		InstallationID: e.memory.installationID,
 		OrgName:        req.Owner,
@@ -118,6 +124,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 		SourceComment:  req.SourceComment,
 		RequestedBy:    req.RequestedBy,
 		AutoApprove:    e.cfg.Moderation.AutoApproves(req.AuthorAssociation),
+		OrgScoped:      req.OrgScoped,
 	}, e.logger)
 	memoryTools.OnMemoryProposed = func(memory store.Memory, inserted bool) {
 		if result.Proposed {
@@ -222,16 +229,22 @@ func (e *Engine) answeredWith(ctx context.Context, client *ghapp.Client, req Rem
 
 // confirmationReply is the answer posted under the command. It names the short
 // id, so a maintainer can paste it into a moderation command, and the status,
-// so the person knows whether the rule can be retrieved yet.
+// so the person knows whether the rule can be retrieved yet. An
+// organization-wide rule says so: the person who typed `--org` should not have
+// to open the moderation page to find out what was recorded.
 func confirmationReply(memory store.Memory, inserted bool) string {
 	short := "#" + memory.ShortID()
+	scope := ""
+	if memory.Scope == store.ScopeOrg {
+		scope = ", scope: ORG"
+	}
 	switch {
 	case !inserted:
-		return fmt.Sprintf("Memory `%s` already covers this (`status: %s`).", short, memory.Status)
+		return fmt.Sprintf("Memory `%s` already covers this (`status: %s`%s).", short, memory.Status, scope)
 	case memory.Status == store.MemoryApproved:
-		return fmt.Sprintf("Memory `%s` recorded (`status: %s`).", short, memory.Status)
+		return fmt.Sprintf("Memory `%s` recorded (`status: %s`%s).", short, memory.Status, scope)
 	default:
-		return fmt.Sprintf("Memory proposal `%s` queued for maintainer moderation (`status: %s`).", short, memory.Status)
+		return fmt.Sprintf("Memory proposal `%s` queued for maintainer moderation (`status: %s`%s).", short, memory.Status, scope)
 	}
 }
 

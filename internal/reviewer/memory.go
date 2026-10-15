@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 
 	"github.com/joangrigorov/rumil/internal/config"
@@ -45,6 +44,11 @@ type memory struct {
 	store          *store.DB
 	embedder       mcpservers.Embedder
 	installationID int64
+	// repoScopeBoost is the weight a repository's own rule gets over an
+	// organization rule when the candidates are ranked (project_plan.md §6
+	// Phase 6). It is a configuration value, so a team that wants organization
+	// rules to win outright can set it to zero.
+	repoScopeBoost float64
 	logger         *slog.Logger
 }
 
@@ -73,6 +77,7 @@ func newMemory(cfg *config.Config, db *store.DB, logger *slog.Logger) (*memory, 
 		store:          db,
 		embedder:       client,
 		installationID: cfg.GitHub.InstallationID,
+		repoScopeBoost: cfg.Memory.RepoScopeWeight(),
 		logger:         logger,
 	}, nil
 }
@@ -95,6 +100,7 @@ func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetada
 		OrgName:        req.Owner,
 		RepoName:       req.Repo,
 		Embedding:      embedding,
+		RepoScopeBoost: m.repoScopeBoost,
 		Limit:          maxMemoryRules,
 	})
 	if err != nil {
@@ -114,6 +120,7 @@ func (m *memory) tools(req Request) []mcpservers.Spec {
 		OrgName:        req.Owner,
 		RepoName:       req.Repo,
 		PRNumber:       req.Number,
+		RepoScopeBoost: m.repoScopeBoost,
 	}
 	return mcpservers.NewMemoryTools(m.store, m.embedder, session, m.logger).SearchSpecs()
 }
@@ -138,13 +145,11 @@ func retrieveQuery(meta *ghapp.PRMetadata) string {
 // <repository_review_guidelines> block, which a repository without a RUMIL.md
 // does not have.
 func renderMemories(matches []store.MemoryMatch, hasGuidelines bool) string {
-	// A repository's own rule outranks an organization-wide one when both
-	// match, so a project exception is not overridden by a general default.
-	// Until v0.0.6 only repository rules exist; the configurable weight the plan
-	// gives the SQL query arrives with the organization work.
-	sort.SliceStable(matches, func(i, j int) bool {
-		return matches[i].Scope == store.ScopeRepo && matches[j].Scope != store.ScopeRepo
-	})
+	// The order is the query's: a repository's own rule is ranked above an
+	// organization-wide one that came back at a similar distance, by the
+	// configurable weight SearchMemories applies, so a project exception is not
+	// overridden by a general default. Each rule also says which scope it came
+	// from, which is what lets the model apply rule 3 of the system prompt.
 
 	header := memoryBlockHeader
 	if hasGuidelines {

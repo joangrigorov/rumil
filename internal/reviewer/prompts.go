@@ -125,7 +125,7 @@ const memoryDistillerPrompt = `You are Rumil's Memory Synthesizer. A developer h
 
 INPUT CONTEXT PROVIDED TO YOU:
 - Repository: %s/%s (PR #%d)
-- Requested scope: REPO, a rule for this repository
+- Requested scope: %s
 - File path and diff hunk: %s
 - Rumil's comment in the thread: %s
 - Developer command: %s
@@ -135,6 +135,7 @@ Rewrite the developer's note into a clear, self-contained engineering rule that 
 - Eliminate ambiguous pronouns ("here", "this file", "that function") by naming the specific package, file path glob, struct, or architectural pattern.
 - Separate the actionable rule (rule_text) from the underlying reason (rationale).
 - Set path_glob when the rule only holds for particular files, and leave it out when it holds for the repository.
+- Record the scope the command asked for, and only narrow it: an organization-wide rule names no repository, so a rule that mentions this repository's own files or its own service name belongs to this repository instead.
 - Call propose_memory exactly once with the synthesized rule.`
 
 // RememberUserPrompt is the task message for one synthesis session. The context
@@ -150,5 +151,15 @@ func RememberPrompt(req RememberRequest, prior, fileContext string) string {
 	if req.Conversation {
 		command += "\n(the command is a conversation comment, so the rule cannot name a line of this pull request)"
 	}
-	return fmt.Sprintf(memoryDistillerPrompt, req.Owner, req.Repo, req.Number, fileContext, prior, command)
+	return fmt.Sprintf(memoryDistillerPrompt, req.Owner, req.Repo, req.Number, requestedScope(req), fileContext, prior, command)
+}
+
+// requestedScope is how the prompt names the scope the command asked for. An
+// organization rule is described as such, because the rule text has to stand
+// alone without this repository's name in it.
+func requestedScope(req RememberRequest) string {
+	if req.OrgScoped {
+		return "ORG, a rule for every repository in " + req.Owner
+	}
+	return "REPO, a rule for this repository"
 }

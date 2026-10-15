@@ -48,15 +48,22 @@ func vectorFor(text string) []float32 {
 	return vector
 }
 
-// seedMemory records a pending rule and returns it.
+// seedMemory records a pending repository rule and returns it.
 func seedMemory(t *testing.T, h *harness, rule string) store.Memory {
+	t.Helper()
+	return seedScopedMemory(t, h, rule, store.ScopeRepo)
+}
+
+// seedScopedMemory records a pending rule in one of the two scopes, with the
+// repository it was proposed from on the row either way.
+func seedScopedMemory(t *testing.T, h *harness, rule, scope string) store.Memory {
 	t.Helper()
 
 	memory, _, err := h.db.ProposeMemory(context.Background(), store.Proposal{
 		InstallationID: 98765432,
 		OrgName:        "acme",
 		RepoName:       "payments",
-		Scope:          store.ScopeRepo,
+		Scope:          scope,
 		RuleText:       rule,
 		Rationale:      "the author confirmed it in review",
 		SourcePR:       42,
@@ -422,7 +429,7 @@ func TestT030_06_ModerationRefusesACrossSiteDecision(t *testing.T) {
 	}
 }
 
-// An absent path_glob leaves the rule's scope alone, which is what a client
+// An absent path_glob leaves the rule's glob alone, which is what a client
 // that only meant to reword a rule expects; the empty one the page sends when a
 // maintainer clears the box widens it to the whole repository.
 func TestModerationKeepsTheGlobWhenTheFormOmitsIt(t *testing.T) {
@@ -462,6 +469,103 @@ func TestModerationKeepsTheGlobWhenTheFormOmitsIt(t *testing.T) {
 	}
 	if stored.PathGlob != "" {
 		t.Errorf("path_glob = %q, want it widened to the repository", stored.PathGlob)
+	}
+}
+
+// T-040-04: the page badges the two scopes, so a maintainer can tell a rule
+// that reaches the whole organization from one that reaches a repository, and a
+// decision can narrow an organization-wide proposal to the repository it was
+// proposed from before it is approved.
+func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	orgRule := seedScopedMemory(t, h, "All Go services in the organization log with log/slog", store.ScopeOrg)
+	repoRule := seedScopedMemory(t, h, "legacy-worker keeps logrus and is exempt from the migration", store.ScopeRepo)
+
+	page := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+
+	// The organization rule says what it applies to and where it came from; the
+	// repository rule names the repository it applies to.
+	if !strings.Contains(body, `<span class="scope org">ORG</span> acme`) {
+		t.Errorf("the organization rule is not badged as one:\n%s", body)
+	}
+	if !strings.Contains(body, "proposed in payments") {
+		t.Errorf("the organization rule does not show the repository it was proposed in:\n%s", body)
+	}
+	if !strings.Contains(body, `<span class="scope repo">REPO</span> acme/payments`) {
+		t.Errorf("the repository rule is not badged as one:\n%s", body)
+	}
+
+	// Only the organization rule's form offers a scope: a repository rule has
+	// nothing to narrow, and the page is not where one is widened.
+	if !strings.Contains(body, `<option value="ORG" selected>`) {
+		t.Errorf("the organization rule's form does not offer the scope it has:\n%s", body)
+	}
+	if !strings.Contains(body, `<option value="REPO">REPO — this repository, payments</option>`) {
+		t.Errorf("the organization rule's form does not offer the narrower scope:\n%s", body)
+	}
+	if count := strings.Count(body, `name="scope"`); count != 1 {
+		t.Errorf("the page carries %d scope controls, want one, on the organization rule:\n%s", count, body)
+	}
+
+	// A scope the enum does not have is refused before the write.
+	refused := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+repoRule.ID+"/approve", adminToken,
+		url.Values{"scope": {"GLOBAL"}}, "application/json")
+	if refused.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", refused.Code, refused.Body.String())
+	}
+	if !strings.Contains(refused.Body.String(), "scope takes REPO or ORG") {
+		t.Errorf("the refusal does not say what the scopes are: %s", refused.Body.String())
+	}
+	if stored, err := h.db.MemoryByID(context.Background(), 98765432, repoRule.ID); err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	} else if stored.Status != store.MemoryPending || stored.Scope != store.ScopeRepo {
+		t.Errorf("a refused scope changed the row: %+v", stored)
+	}
+
+	// Widening is the other direction, and it is refused as well: one click
+	// would turn a rule that reaches this repository into one that reaches the
+	// whole organization.
+	widened := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+repoRule.ID+"/approve", adminToken,
+		url.Values{"scope": {"ORG"}}, "application/json")
+	if widened.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", widened.Code, widened.Body.String())
+	}
+	if !strings.Contains(widened.Body.String(), "is not widened") {
+		t.Errorf("the refusal does not say what the set of scopes is for: %s", widened.Body.String())
+	}
+	if stored, err := h.db.MemoryByID(context.Background(), 98765432, repoRule.ID); err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	} else if stored.Scope != store.ScopeRepo || stored.Status != store.MemoryPending {
+		t.Errorf("a refused widening changed the row: %+v", stored)
+	}
+
+	// Narrowing the organization rule to the repository keeps the repository it
+	// was proposed from, which is the rule's new reach.
+	response := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+orgRule.ID+"/approve", adminToken,
+		url.Values{"scope": {"REPO"}}, "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("approve returned %d, want 200 (body: %s)", response.Code, response.Body.String())
+	}
+	stored, err := h.db.MemoryByID(context.Background(), 98765432, orgRule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.Scope != store.ScopeRepo {
+		t.Errorf("scope = %s, want %s after a moderator narrowed it", stored.Scope, store.ScopeRepo)
+	}
+	if stored.Status != store.MemoryApproved {
+		t.Errorf("status = %s, want %s", stored.Status, store.MemoryApproved)
+	}
+	if stored.OrgName != "acme" || stored.RepoName != "payments" {
+		t.Errorf("the narrowed rule applies to %s/%s, want the repository it was proposed from", stored.OrgName, stored.RepoName)
 	}
 }
 

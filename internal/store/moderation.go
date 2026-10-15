@@ -151,6 +151,11 @@ type MemoryDecision struct {
 	// PathGlob replaces the stored glob when it is not nil, so a moderator can
 	// widen a rule to the whole repository by clearing it.
 	PathGlob *string
+	// Scope replaces the stored scope when it is not empty. It is how a
+	// moderator narrows an organization-wide proposal to the repository it came
+	// from, which is the decision the moderation page offers for an ORG row
+	// (project_plan.md §6 Phase 6).
+	Scope string
 	// Embedding is the vector for RuleText, and is required when RuleText is an
 	// edit: the store does not call an embedding provider, and keeping the old
 	// vector would leave a rule that no longer matches what a search looks for
@@ -190,24 +195,31 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 	// The text, the glob and the vector are only replaced when the decision
 	// carries them, so a rejection cannot erase what was proposed.
 	//
-	// The last condition is what makes an edit atomic against a second
-	// moderator. It reads rule_text as it is now, and it only lets the statement
-	// replace the text when the decision brings the vector for that replacement,
-	// so a decision computed before the text changed matches nothing instead of
-	// overwriting the words and leaving the other moderator's vector behind.
+	// The last two conditions are what make a decision atomic against a second
+	// moderator. The text one reads rule_text as it is now, and only lets the
+	// statement replace the text when the decision brings the vector for that
+	// replacement, so a decision computed before the text changed matches
+	// nothing instead of overwriting the words and leaving the other
+	// moderator's vector behind. The scope one reads the scope as it is now and
+	// refuses to record a repository rule for the whole organization, so a
+	// decision computed while another moderator was narrowing the same rule
+	// cannot widen it afterwards: the write matches no row rather than reaching
+	// every repository in the organization.
 	rows, err := d.pool.Query(ctx, `
 		UPDATE memories
 		SET status = $3::memory_status,
 		    rule_text = coalesce(nullif($4, ''), rule_text),
 		    path_glob = coalesce($5, path_glob),
 		    embedding = CASE WHEN $4 <> '' AND $4 <> rule_text THEN $6::vector ELSE embedding END,
+		    scope = coalesce(nullif($8, '')::memory_scope, scope),
 		    reviewed_by = nullif($7, ''),
 		    updated_at = now()
 		WHERE installation_id = $1 AND id = $2
 		  AND ($4 = '' OR $4 = rule_text OR $6::vector IS NOT NULL)
+		  AND (coalesce(nullif($8, '')::memory_scope, scope) <> 'ORG' OR scope = 'ORG')
 		RETURNING `+memoryColumns,
 		installationID, resolved.ID, status, decision.RuleText, decision.PathGlob,
-		vectorLiteralOrNull(decision.Embedding), decision.ReviewedBy)
+		vectorLiteralOrNull(decision.Embedding), decision.ReviewedBy, decision.Scope)
 	if err != nil {
 		return Memory{}, fmt.Errorf("updating memory %s: %w", id, err)
 	}

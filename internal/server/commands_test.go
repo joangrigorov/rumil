@@ -190,6 +190,72 @@ func TestT020_01_RememberCommandRecordsARuleAndAnswers(t *testing.T) {
 	}
 }
 
+// T-040-01 (first half): `--org` makes the rule the organization's. The
+// synthesis session is told what was asked for, the row keeps the repository
+// the command was written on as its origin, and the confirmation says what the
+// rule reaches.
+func TestT040_01_OrgScopedCommandRecordsAnOrganizationRule(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		testutil.ReviewComment(101, 0, "rumil[bot]", "This package logs with logrus while the rest of the organization moved on."),
+	}
+
+	const rule = "All Go services in the organization log with log/slog rather than logrus"
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueToolCall("propose_memory", map[string]any{
+		"rule_text": rule,
+		"rationale": "the platform team agreed on one logger for every service",
+		"scope":     store.ScopeOrg,
+	})
+	llm.QueueText("Recorded.")
+
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	body := reviewCommentPayload("created", "octocat", "User",
+		"@rumil remember --org all Go services must use log/slog instead of logrus", 202, 101)
+	if response := h.deliver(t, handler, "pull_request_review_comment", "d-org", body, sign(webhookSecret, body)); response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "d-org"))
+
+	rules := storedMemories(t, h.dsn)
+	if len(rules) != 1 {
+		t.Fatalf("stored %d rules, want 1: %+v", len(rules), rules)
+	}
+	if rules[0].Scope != store.ScopeOrg {
+		t.Errorf("scope = %s, want %s", rules[0].Scope, store.ScopeOrg)
+	}
+	if rules[0].OrgName != testOrg {
+		t.Errorf("org_name = %q, want %q", rules[0].OrgName, testOrg)
+	}
+	// The origin repository stays on the row: an organization rule is still
+	// recorded somewhere, and that is what an audit reads.
+	if rules[0].RepoName != testRepo {
+		t.Errorf("repo_name = %q, want the origin repository %q kept on the row", rules[0].RepoName, testRepo)
+	}
+	if rules[0].Status != store.MemoryPending {
+		t.Errorf("status = %s, want %s while the gate is on", rules[0].Status, store.MemoryPending)
+	}
+
+	prompt := synthesisPrompt(t, llm)
+	if !strings.Contains(prompt, "Requested scope: ORG, a rule for every repository in "+testOrg) {
+		t.Errorf("the synthesis prompt does not name the requested scope:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "instead of logrus") {
+		t.Errorf("the person's own words did not reach the synthesis prompt:\n%s", prompt)
+	}
+
+	posted := gh.PostedComments()
+	if len(posted) != 1 {
+		t.Fatalf("posted %d comments, want one confirmation: %+v", len(posted), posted)
+	}
+	if !strings.Contains(posted[0].Body, "scope: ORG") {
+		t.Errorf("the confirmation %q does not say what the rule reaches", posted[0].Body)
+	}
+}
+
 // T-030-01: with the gate on, a rule a command records waits, and the next
 // review of the same pull request does not retrieve it.
 func TestT030_01_PendingRuleStaysOutOfTheNextReview(t *testing.T) {

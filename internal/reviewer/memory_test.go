@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
@@ -72,6 +74,37 @@ func seedRuleFor(t *testing.T, dsn, org, repo, rule string, vector []float32, ap
 		Approved:       approved,
 		Embedding:      vector,
 	})
+}
+
+// seedOrgRule stores an organization-wide rule, with the repository it was
+// proposed from kept as the origin the schema records.
+func seedOrgRule(t *testing.T, dsn, org, origin, rule string, vector []float32, approved bool) {
+	t.Helper()
+	seedRuleProposal(t, dsn, store.Proposal{
+		InstallationID: testInstallationID,
+		OrgName:        org,
+		RepoName:       origin,
+		Scope:          store.ScopeOrg,
+		RuleText:       rule,
+		Rationale:      "the platform team agreed on one logger",
+		SourcePR:       42,
+		SourceComment:  "https://github.com/" + org + "/" + origin + "/pull/42#discussion_r1",
+		RequestedBy:    "octocat",
+		Approved:       approved,
+		Embedding:      vector,
+	})
+}
+
+// vectorLike returns a unit vector whose cosine similarity to BasisVector(0) is
+// cos, leaning on axis. Two of them on different axes are nothing like each
+// other however close each is to the query, which is what the reranking test
+// needs: two rules at a chosen distance from the query that are not
+// near-duplicates, so both are stored.
+func vectorLike(cos float64, axis int) []float32 {
+	vector := make([]float32, config.EmbeddingDimensions)
+	vector[0] = float32(cos)
+	vector[axis] = float32(math.Sqrt(1 - cos*cos))
+	return vector
 }
 
 // seedRuleProposal stores one proposal, verbatim.
@@ -197,6 +230,103 @@ func TestPreRetrievalKeepsAnotherTenantsRulesAway(t *testing.T) {
 	}
 }
 
+// T-040-01 (second half): a rule the organization approved in one repository
+// reaches a review of another repository in the same organization.
+func TestT040_01_OrgRuleReachesAnotherRepository(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Repo = "inventory-service"
+	llm := testutil.NewFakeLLM(t)
+	dsn := testMemoryDSN(t)
+
+	const rule = "All Go services in the organization log with log/slog rather than logrus"
+	seedOrgRule(t, dsn, testOrg, testRepo, rule, testutil.BasisVector(0), true)
+	// The same organization's rule for the origin repository alone, which is
+	// what the organization rule has to be told apart from.
+	const localRule = "Payments buffers settlement writes for a second before committing"
+	seedRule(t, dsn, localRule, testutil.BasisVector(1), true)
+	llm.QueueEmbedding(testutil.BasisVector(0))
+	submitComment(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{dsn: dsn, embedding: true})
+	if _, err := h.review(t); err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+
+	prompt := systemPrompt(t, llm)
+	if !strings.Contains(prompt, rule) {
+		t.Fatalf("the organization's rule, proposed in %s, did not reach the review of %s:\n%s", testRepo, gh.Repo, prompt)
+	}
+	// The label is what lets the model apply rule 3 of the system prompt when
+	// the repository has a rule of its own.
+	if !strings.Contains(prompt, "- organization-wide: ") {
+		t.Errorf("the rule is not labelled as organization-wide:\n%s", prompt)
+	}
+	// Cross-repository recall is the scope's doing: a rule for the repository
+	// the organization rule came from stays there.
+	if strings.Contains(prompt, localRule) {
+		t.Errorf("a rule recorded for %s reached the review of %s:\n%s", testRepo, gh.Repo, prompt)
+	}
+}
+
+// T-040-02 from the reviewer's side: both rules reach the prompt and the
+// repository's own leads it, so a project exception is not overridden by the
+// organization's default. The weight is the operator's: a team that wants the
+// organization's rule to win outright sets memory.repo_scope_boost to zero.
+func TestT040_02_RepoRuleLeadsTheBlock(t *testing.T) {
+	const (
+		orgRule  = "All Go services in the organization log with log/slog rather than logrus"
+		repoRule = "legacy-worker keeps logrus and is exempt from the log/slog migration"
+	)
+
+	for _, tc := range []struct {
+		name  string
+		boost string
+		// leader is the rule that has to come first in the block. The
+		// organization's rule sits at cosine 0.60 from the query and
+		// legacy-worker's at 0.57, so the default boost is what lifts the
+		// repository's rule over it and a zero boost is what puts the distance
+		// back in charge.
+		leader string
+	}{
+		{"the default boost lifts the repository's rule", "", repoRule},
+		{"no boost leaves the ranking to the distance", "memory:\n  repo_scope_boost: 0\n", orgRule},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := testutil.NewFakeGitHub(t)
+			gh.Repo = "legacy-worker"
+			llm := testutil.NewFakeLLM(t)
+			dsn := testMemoryDSN(t)
+
+			seedOrgRule(t, dsn, testOrg, testRepo, orgRule, vectorLike(0.60, 1), true)
+			seedRuleFor(t, dsn, testOrg, gh.Repo, repoRule, vectorLike(0.57, 2), true)
+			llm.QueueEmbedding(testutil.BasisVector(0))
+			submitComment(llm)
+
+			h := newHarness(t, gh, llm, harnessOpts{dsn: dsn, embedding: true, memory: tc.boost})
+			if _, err := h.review(t); err != nil {
+				t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+			}
+
+			prompt := systemPrompt(t, llm)
+			// Both are in the block: the repository rule does not hide the
+			// organization's, it is ranked above it.
+			for _, rule := range []string{orgRule, repoRule} {
+				if !strings.Contains(prompt, rule) {
+					t.Fatalf("a matching rule is missing from the block:\n%s", prompt)
+				}
+			}
+			leader := strings.Index(prompt, tc.leader)
+			follower := strings.Index(prompt, orgRule)
+			if tc.leader == orgRule {
+				follower = strings.Index(prompt, repoRule)
+			}
+			if leader > follower {
+				t.Errorf("the block leads with the wrong rule:\n%s", prompt)
+			}
+		})
+	}
+}
+
 // Memory is opt-in: with no embedding provider configured there is no block, no
 // search_memory tool, and one warning saying so (project_plan.md §3 rule 6).
 func TestMemoryIsOptIn(t *testing.T) {
@@ -267,18 +397,32 @@ func TestRenderMemories(t *testing.T) {
 		}
 	})
 
-	t.Run("repository rules come before organization rules", func(t *testing.T) {
+	t.Run("organization rules are labelled and the query's order is kept", func(t *testing.T) {
+		// The order is the query's: SearchMemories ranks a repository rule and
+		// an organization rule by the score the boost produces, so rendering
+		// must not re-sort by scope and undo it. The organization rule is given
+		// first place here precisely because a scope-based sort would move it.
 		org := rule("organization default")
 		org.Scope = store.ScopeOrg
-		got := renderMemories([]store.MemoryMatch{org, rule("repository exception")}, false)
+		org.Similarity = 0.90
+		repository := rule("repository exception")
+		repository.Similarity = 0.80
 
-		repository := strings.Index(got, "repository exception")
-		organization := strings.Index(got, "organization default")
-		if repository < 0 || organization < 0 || repository > organization {
-			t.Errorf("repository rules do not come first:\n%s", got)
+		got := renderMemories([]store.MemoryMatch{org, repository}, false)
+
+		first := strings.Index(got, "organization default")
+		second := strings.Index(got, "repository exception")
+		if first < 0 || second < 0 {
+			t.Fatalf("a rule is missing from the block:\n%s", got)
 		}
-		if !strings.Contains(got, "organization-wide") {
+		if first > second {
+			t.Errorf("the order the query ranked in was not kept:\n%s", got)
+		}
+		if !strings.Contains(got, "organization-wide: organization default") {
 			t.Errorf("an organization rule is not labelled as one:\n%s", got)
+		}
+		if strings.Contains(got, "organization-wide: repository exception") {
+			t.Errorf("a repository rule is labelled organization-wide:\n%s", got)
 		}
 	})
 

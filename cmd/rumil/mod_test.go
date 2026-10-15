@@ -95,8 +95,15 @@ func ruleVector(rule string) []float32 {
 	return testutil.BasisVector(int(hash.Sum32() % config.EmbeddingDimensions))
 }
 
-// seedModerationRule records a pending rule.
+// seedModerationRule records a pending repository rule.
 func seedModerationRule(t *testing.T, dsn, rule string) store.Memory {
+	t.Helper()
+	return seedScopedModerationRule(t, dsn, rule, store.ScopeRepo)
+}
+
+// seedScopedModerationRule records a pending rule in one of the two scopes,
+// with the repository it was proposed from on the row either way.
+func seedScopedModerationRule(t *testing.T, dsn, rule, scope string) store.Memory {
 	t.Helper()
 
 	ctx := context.Background()
@@ -110,7 +117,7 @@ func seedModerationRule(t *testing.T, dsn, rule string) store.Memory {
 		InstallationID: 98765432,
 		OrgName:        "acme",
 		RepoName:       "payments",
-		Scope:          store.ScopeRepo,
+		Scope:          scope,
 		RuleText:       rule,
 		Rationale:      "the author confirmed it in review",
 		SourcePR:       42,
@@ -236,6 +243,66 @@ func TestModApproveReEmbedsAnEditedRule(t *testing.T) {
 	}
 	if texts := llm.EmbeddedTexts(); len(texts) != 1 || texts[0] != edited {
 		t.Errorf("embedded %v, want exactly the edited wording", texts)
+	}
+}
+
+// T-040-04 (CLI half): the list says which scope a rule has and what an
+// organization rule reaches, and --scope narrows one to the repository it was
+// proposed from before it is approved.
+func TestModScopesAnOrganizationRule(t *testing.T) {
+	dsn := modDatabase(t)
+	llm := testutil.NewFakeLLM(t)
+	configPath := modConfig(t, dsn, llm.URL())
+
+	org := seedScopedModerationRule(t, dsn, "All Go services in the organization log with log/slog", store.ScopeOrg)
+	repo := seedModerationRule(t, dsn, "Settlements are retried with a bounded budget")
+
+	out, err := runModCmd(t, configPath, "list")
+	if err != nil {
+		t.Fatalf("list returned error: %v (output: %s)", err, out)
+	}
+	header, _, _ := strings.Cut(out, "\n")
+	if !strings.Contains(header, "SCOPE") {
+		t.Errorf("the list header does not name the scope column: %q", header)
+	}
+	if !strings.Contains(out, "acme (proposed in payments)") {
+		t.Errorf("an organization rule is not shown as reaching the organization:\n%s", out)
+	}
+	if !strings.Contains(out, "acme/payments") {
+		t.Errorf("a repository rule is not shown as reaching its repository:\n%s", out)
+	}
+
+	out, err = runModCmd(t, configPath, "approve", org.ID[:8], "--scope", "REPO")
+	if err != nil {
+		t.Fatalf("approve --scope returned error: %v (output: %s)", err, out)
+	}
+	if !strings.Contains(out, store.ScopeRepo) {
+		t.Errorf("the answer does not name the scope it approved with: %s", out)
+	}
+	stored := readModerationRule(t, dsn, org.ID)
+	if stored.Scope != store.ScopeRepo || stored.Status != store.MemoryApproved {
+		t.Errorf("row is %+v, want an approved %s rule", stored, store.ScopeRepo)
+	}
+	if stored.RepoName != "payments" {
+		t.Errorf("repo_name = %q, want the repository it was proposed from", stored.RepoName)
+	}
+
+	// A scope that is not one a rule can have is answered with the two that are.
+	if out, err = runModCmd(t, configPath, "approve", repo.ID[:8], "--scope", "GLOBAL"); err == nil {
+		t.Fatalf("an unknown scope was accepted: %s", out)
+	} else if !strings.Contains(err.Error(), "scope takes REPO or ORG") {
+		t.Errorf("error = %v, want the two scopes", err)
+	}
+
+	// Narrowing is the only direction: a repository rule is not widened to the
+	// whole organization from a moderation decision.
+	if out, err = runModCmd(t, configPath, "approve", repo.ID[:8], "--scope", "ORG"); err == nil {
+		t.Fatalf("a repository rule was widened to the organization: %s", out)
+	} else if !strings.Contains(err.Error(), "is not widened") {
+		t.Errorf("error = %v, want the narrowing rule stated", err)
+	}
+	if stored := readModerationRule(t, dsn, repo.ID); stored.Scope != store.ScopeRepo || stored.Status != store.MemoryPending {
+		t.Errorf("a refused widening changed the row: %+v", stored)
 	}
 }
 

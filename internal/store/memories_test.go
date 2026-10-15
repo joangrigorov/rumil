@@ -26,9 +26,18 @@ func embeddingAt(index int) []float32 {
 // embeddingTilted returns a vector whose cosine similarity to embeddingAt(0) is
 // cos, so the near-duplicate threshold can be probed from either side.
 func embeddingTilted(cos float64) []float32 {
+	return embeddingLike(cos, 1)
+}
+
+// embeddingLike returns a unit vector at cosine cos from embeddingAt(0),
+// leaning on axis. Two of them on different axes are far from each other
+// however close each is to the query, which is what a ranking test needs: two
+// rules that both sit at a chosen distance from the query without being
+// near-duplicates of one another.
+func embeddingLike(cos float64, axis int) []float32 {
 	v := make([]float32, config.EmbeddingDimensions)
 	v[0] = float32(cos)
-	v[1] = float32(math.Sqrt(1 - cos*cos))
+	v[axis] = float32(math.Sqrt(1 - cos*cos))
 	return v
 }
 
@@ -243,6 +252,217 @@ func TestSearchMemoriesSeparatesTenants(t *testing.T) {
 	}
 }
 
+// A repository proposal is compared against everything a review of that
+// repository would already retrieve, the organization's rules included: the
+// same rule asked for twice, once for the organization and once for a
+// repository, is one rule rather than two bullets in the same prompt.
+func TestProposeMemoryDoesNotRepeatAnOrganizationRule(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	org := testProposal("All services in the organization log with log/slog", embeddingAt(0))
+	org.Scope, org.Approved = ScopeOrg, true
+	stored, _, err := db.ProposeMemory(ctx, org)
+	if err != nil {
+		t.Fatalf("ProposeMemory(organization rule) returned error: %v", err)
+	}
+
+	// The same rule, this time asked for in a repository, worded differently
+	// and at cosine 0.95.
+	repo := testProposal("Services log with log/slog in this organization", embeddingTilted(0.95))
+	repo.RepoName = "inventory-service"
+	duplicate, inserted, err := db.ProposeMemory(ctx, repo)
+	if err != nil {
+		t.Fatalf("ProposeMemory(repository proposal) returned error: %v", err)
+	}
+	if inserted {
+		t.Error("the organization's rule was stored a second time for the repository")
+	}
+	if duplicate.ID != stored.ID {
+		t.Errorf("answered with %s, want the organization's rule %s", duplicate.ID, stored.ID)
+	}
+	if got := countMemories(t, db); got != 1 {
+		t.Errorf("memories = %d, want 1", got)
+	}
+
+	// The other direction is a widening, which is a rule to record rather than
+	// a duplicate to report: a repository's rule says nothing about the rest of
+	// the organization.
+	local := testProposal("Payments buffers settlement writes for a second", embeddingAt(1))
+	local.Approved = true
+	if _, _, err := db.ProposeMemory(ctx, local); err != nil {
+		t.Fatalf("ProposeMemory(repository rule) returned error: %v", err)
+	}
+	widened := testProposal("Payments buffers settlement writes for a second", embeddingAt(1))
+	widened.Scope = ScopeOrg
+	if _, inserted, err := db.ProposeMemory(ctx, widened); err != nil {
+		t.Fatalf("ProposeMemory(organization proposal) returned error: %v", err)
+	} else if !inserted {
+		t.Error("asking for the organization's own rule was answered with the repository's")
+	}
+	if got := countMemories(t, db); got != 3 {
+		t.Errorf("memories = %d, want 3", got)
+	}
+}
+
+// T-040-03: an organization rule is the organization's. Another organization's
+// query returns nothing for it, and the same query from a second repository of
+// the owning organization returns it, so the absence is the filter rather than
+// a rule that never matched.
+func TestT040_03_OrgRulesStayInTheirOrganization(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	org := testProposal("All services in the organization log with log/slog", embeddingAt(0))
+	org.Scope, org.PathGlob, org.Approved = ScopeOrg, "", true
+	stored, _, err := db.ProposeMemory(ctx, org)
+	if err != nil {
+		t.Fatalf("ProposeMemory returned error: %v", err)
+	}
+
+	query := MemoryQuery{
+		InstallationID: 98765432,
+		OrgName:        "globex",
+		RepoName:       "api",
+		Embedding:      embeddingAt(0),
+	}
+	matches, err := db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("globex/api search returned %d of acme's organization rules, want none: %+v", len(matches), matches)
+	}
+
+	// A repository that has no rule of its own, in the organization that does.
+	query.OrgName, query.RepoName = testOrg, "inventory-service"
+	matches, err = db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories for the owning organization returned error: %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != stored.ID {
+		t.Fatalf("acme/inventory-service search returned %+v, want the organization rule %s", matches, stored.ID)
+	}
+	if matches[0].Scope != ScopeOrg {
+		t.Errorf("the match reports scope %s, want %s", matches[0].Scope, ScopeOrg)
+	}
+}
+
+// T-040-02: when a repository's own rule and the organization's both match, the
+// repository's is ranked higher, so a project exception is not overridden by a
+// general default. The weight belongs to the caller, so no boost returns the
+// ranking to the distance alone, and the number a caller reads back stays the
+// distance either way.
+func TestT040_02_RepoScopeOutranksOrgScope(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// The two rules sit at cosine 0.60 and 0.57 from the query, on different
+	// axes so they are nothing like each other: close enough that only the
+	// boost can decide between them, far enough apart that both are stored
+	// rather than one being a duplicate of the other.
+	org := testProposal("All services in the organization log with log/slog", embeddingLike(0.60, 1))
+	org.Scope, org.PathGlob, org.Approved = ScopeOrg, "", true
+	if _, _, err := db.ProposeMemory(ctx, org); err != nil {
+		t.Fatalf("ProposeMemory(organization rule) returned error: %v", err)
+	}
+
+	repo := testProposal("legacy-worker keeps logrus and is exempt from the migration", embeddingLike(0.57, 2))
+	repo.PathGlob, repo.Approved = "", true
+	if _, _, err := db.ProposeMemory(ctx, repo); err != nil {
+		t.Fatalf("ProposeMemory(repository rule) returned error: %v", err)
+	}
+
+	query := MemoryQuery{
+		InstallationID: 98765432,
+		OrgName:        testOrg,
+		RepoName:       testRepo,
+		Embedding:      embeddingAt(0),
+		RepoScopeBoost: config.DefaultRepoScopeBoost,
+	}
+	matches, err := db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("search returned %d rules, want both candidates: %+v", len(matches), matches)
+	}
+	if matches[0].Scope != ScopeRepo {
+		t.Errorf("the default boost of %v leads with the %s rule (similarities %v, %v), want the repository's own",
+			config.DefaultRepoScopeBoost, matches[0].Scope, matches[0].Similarity, matches[1].Similarity)
+	}
+	// The boost decides the order and nothing else: the number the caller reads
+	// back is the distance the embedding has, or a caller that ranks its own
+	// results would be ranking on a score it cannot reproduce.
+	if math.Abs(matches[0].Similarity-0.57) > 1e-5 {
+		t.Errorf("the boosted rule reports similarity %v, want the distance 0.57 rather than the score", matches[0].Similarity)
+	}
+
+	query.RepoScopeBoost = 0
+	matches, err = db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories without a boost returned error: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("search without a boost returned %d rules, want both candidates: %+v", len(matches), matches)
+	}
+	if matches[0].Scope != ScopeOrg {
+		t.Errorf("without a boost the ranking leads with the %s rule, want the closer one", matches[0].Scope)
+	}
+	if matches[0].Similarity <= matches[1].Similarity {
+		t.Errorf("similarities are %v, want the first above the second", matches)
+	}
+}
+
+// The boost ranks the candidates the query returns rather than a page that was
+// already cut by the limit, so a repository rule that scores into the top five
+// takes the place of the organization rule it overtakes (T-040-02).
+func TestSearchMemoriesRanksBeforeTheLimit(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// Five organization rules at 0.90 down to 0.86, and a repository rule at
+	// 0.845. Unboosted the repository rule is sixth, so a limit of five would
+	// drop it; boosted it scores 0.895 and the 0.86 rule is the one that falls
+	// outside instead.
+	for i, cos := range []float64{0.90, 0.89, 0.88, 0.87, 0.86} {
+		rule := testProposal("organization rule "+string(rune('a'+i)), embeddingLike(cos, i+1))
+		rule.Scope, rule.PathGlob, rule.Approved = ScopeOrg, "", true
+		if _, _, err := db.ProposeMemory(ctx, rule); err != nil {
+			t.Fatalf("ProposeMemory(organization rule %d) returned error: %v", i, err)
+		}
+	}
+	exception := testProposal("legacy-worker is exempt and keeps logrus", embeddingLike(0.845, 9))
+	exception.PathGlob, exception.Approved = "", true
+	if _, _, err := db.ProposeMemory(ctx, exception); err != nil {
+		t.Fatalf("ProposeMemory(repository rule) returned error: %v", err)
+	}
+
+	query := MemoryQuery{
+		InstallationID: 98765432,
+		OrgName:        testOrg,
+		RepoName:       testRepo,
+		Embedding:      embeddingAt(0),
+		RepoScopeBoost: config.DefaultRepoScopeBoost,
+		Limit:          5,
+	}
+	matches, err := db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 5 {
+		t.Fatalf("search returned %d rules, want the limit of 5", len(matches))
+	}
+	if matches[1].Scope != ScopeRepo {
+		t.Errorf("the repository's rule is in position %d (%s), want second: %+v", 1, matches[1].Scope, matches)
+	}
+	for _, match := range matches {
+		if strings.Contains(match.RuleText, "organization rule e") {
+			t.Errorf("the rule the repository's own overtook is still in the window: %+v", matches)
+		}
+	}
+}
+
 func TestSearchMemoriesOrdersClosestFirst(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -289,14 +509,17 @@ func TestSearchMemoriesFiltersByGlob(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 
+	// The three rules sit at three different distances from the query, so the
+	// ranking is decided by the embedding rather than by which id sorts first:
+	// what this test is about is the glob, and a tie would test that instead.
 	for _, rule := range []struct {
 		text string
 		glob string
 		vec  []float32
 	}{
 		{"docs only", "docs/**", embeddingAt(0)},
-		{"payments only", "internal/payments/**", embeddingAt(1)},
-		{"everywhere", "", embeddingAt(2)},
+		{"payments only", "internal/payments/**", embeddingTilted(0.9)},
+		{"everywhere", "", embeddingTilted(0.5)},
 	} {
 		p := testProposal(rule.text, rule.vec)
 		p.PathGlob = rule.glob

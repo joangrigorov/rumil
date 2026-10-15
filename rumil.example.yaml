@@ -24,6 +24,9 @@ review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
   resolve_threads: true           # the reviewer resolves its own review threads once it verifies the finding is gone
 
+memory:                           # Used from v0.0.6
+  repo_scope_boost: 0.05          # added to a repository rule's similarity when ranking, so a project exception outranks a general organization rule; 0 ranks by similarity alone
+
 # `rumil serve` drains this queue.
 worker:
   concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms

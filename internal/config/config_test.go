@@ -161,6 +161,53 @@ models:
 	}
 }
 
+// The ranking weight is a configuration value with a default, so a team that
+// never mentions it gets the documented 0.05 while one that writes 0 gets a
+// ranking that is the similarity alone.
+func TestRepoScopeBoostDefaultsToTheDocumentedWeight(t *testing.T) {
+	doc := func(memory string) []byte {
+		return []byte(memory + `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		memory string
+		want   float64
+	}{
+		// The literal is the weight §3 of the plan and rumil.example.yaml
+		// document: the test pins the number an operator reads, not the
+		// constant the code happens to carry.
+		{name: "unset takes the documented weight", memory: "", want: 0.05},
+		{name: "the configured value is used", memory: "memory:\n  repo_scope_boost: 0.2\n", want: 0.2},
+		{name: "an explicit zero survives", memory: "memory:\n  repo_scope_boost: 0\n", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse(doc(tc.memory), "test.yaml")
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := cfg.Memory.RepoScopeWeight(); got != tc.want {
+				t.Errorf("RepoScopeWeight() = %v, want %v", got, tc.want)
+			}
+			if DefaultRepoScopeBoost != 0.05 {
+				t.Errorf("DefaultRepoScopeBoost = %v, want the documented 0.05", DefaultRepoScopeBoost)
+			}
+		})
+	}
+}
+
 // The approval gate is per association as well as global: a team lets its own
 // members record rules while strangers queue for moderation.
 func TestAutoApprovesByAssociation(t *testing.T) {
@@ -428,6 +475,63 @@ models:
       dimensions: 1536
 `,
 			wantSub: "embedding provider",
+		},
+		{
+			name: "a repo_scope_boost above 1",
+			doc: `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+memory:
+  repo_scope_boost: 1.5
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "memory.repo_scope_boost must be between 0 and 1",
+		},
+		{
+			name: "a negative repo_scope_boost",
+			doc: `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+memory:
+  repo_scope_boost: -0.1
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "memory.repo_scope_boost must be between 0 and 1",
+		},
+		{
+			name: "a repo_scope_boost that is not a number",
+			doc: `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+memory:
+  repo_scope_boost: .nan
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "memory.repo_scope_boost must be between 0 and 1",
 		},
 		{
 			name: "only embedding providers and no default_chat",

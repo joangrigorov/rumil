@@ -33,6 +33,15 @@ type MemorySession struct {
 	// moderation.auto_approve_associations. With it off, comment text waits for
 	// a human decision before it can reach a review prompt.
 	AutoApprove bool
+	// OrgScoped is true when the command that opened this session asked for an
+	// organization-wide rule. It is what makes scope=ORG available to the
+	// model: the model never decides who a rule belongs to, and a repository
+	// command cannot record a rule that reaches the whole organization by
+	// getting the model to say so (project_plan.md §6 Phase 6).
+	OrgScoped bool
+	// RepoScopeBoost is the weight a REPO-scoped rule gets over an ORG-scoped one
+	// when a search ranks candidates.
+	RepoScopeBoost float64
 }
 
 // MemoryTools holds the dependencies of the memory tool set.
@@ -69,15 +78,49 @@ func (t *MemoryTools) SearchSpecs() []Spec {
 // distilled from a comment. A session that records rules has no reason to
 // search them, and the session that reads them has no reason to write one, so
 // the two surfaces stay apart.
+//
+// The scope the model may ask for is built from the session: a command that did
+// not ask for an organization rule is not offered one, so the tool cannot be
+// talked into recording a rule that reaches every repository in the
+// organization.
 func (t *MemoryTools) ProposeSpecs() []Spec {
 	return []Spec{
 		{
 			Name:        "propose_memory",
-			Description: "Record one engineering rule distilled from a review conversation, with the reason it exists. The rule is stored against this repository and moderated unless the operator turned moderation off.",
-			Schema:      json.RawMessage(`{"type":"object","properties":{"rule_text":{"type":"string","description":"The rule as one self-contained sentence, stating what to do rather than what happened in the conversation."},"rationale":{"type":"string","description":"Why the rule exists."},"path_glob":{"type":"string","description":"Optional glob limiting the rule to the files it applies to, for example 'internal/payments/**'."},"scope":{"type":"string","enum":["REPO","ORG"],"description":"REPO keeps the rule in this repository. ORG is not available yet."}},"required":["rule_text","rationale"],"additionalProperties":false}`),
+			Description: t.proposeDescription(),
+			Schema:      json.RawMessage(t.proposeSchema()),
 			Handle:      t.proposeMemory,
 		},
 	}
+}
+
+// proposeDescription says what the tool does, including the scope this session
+// may record for. The default it names is the one the handler applies: a
+// command that asked for an organization rule records one unless the model says
+// otherwise, because that is what the person asked for, and the schema and the
+// description have to tell the model the same story.
+func (t *MemoryTools) proposeDescription() string {
+	description := "Record one engineering rule distilled from a review conversation, with the reason it exists. " +
+		"The rule is stored and moderated unless the operator turned moderation off."
+	if t.session.OrgScoped {
+		return description + " This command asked for an organization-wide rule: ORG, the default, records a rule that " +
+			"holds for every repository in " + t.session.OrgName + "; pass REPO for one that only holds here."
+	}
+	return description + " The rule applies to the repository it was recorded in."
+}
+
+// proposeSchema is the tool schema for this session. The scope property is only
+// offered when the command asked for an organization rule, and then both values
+// are allowed: the distiller may find that what the person described is really
+// about this repository.
+func (t *MemoryTools) proposeSchema() string {
+	scope := `{"type":"string","enum":["REPO"],"description":"REPO, the default, keeps the rule in this repository."}`
+	required := `"required":["rule_text","rationale"],`
+	if t.session.OrgScoped {
+		scope = `{"type":"string","enum":["REPO","ORG"],"description":"ORG, the default for this command, records the rule for every repository in the organization. REPO keeps it in this one."}`
+	}
+	return `{"type":"object","properties":{"rule_text":{"type":"string","description":"The rule as one self-contained sentence, stating what to do rather than what happened in the conversation."},"rationale":{"type":"string","description":"Why the rule exists."},"path_glob":{"type":"string","description":"Optional glob limiting the rule to the files it applies to, for example 'internal/payments/**'."},"scope":` +
+		scope + `},` + required + `"additionalProperties":false}`
 }
 
 func (t *MemoryTools) searchMemory(ctx context.Context, args map[string]any) (string, error) {
@@ -98,6 +141,7 @@ func (t *MemoryTools) searchMemory(ctx context.Context, args map[string]any) (st
 		RepoName:       t.session.RepoName,
 		Embedding:      embedding,
 		FilePath:       filePath,
+		RepoScopeBoost: t.session.RepoScopeBoost,
 		Limit:          intArg(args, "limit"),
 	})
 	if err != nil {
@@ -144,15 +188,25 @@ func (t *MemoryTools) proposeMemory(ctx context.Context, args map[string]any) (s
 
 	var notes []string
 	scope, _ := args["scope"].(string)
-	switch scope {
-	case "", store.ScopeRepo:
-		scope = store.ScopeRepo
+	switch scope = strings.ToUpper(strings.TrimSpace(scope)); scope {
+	case "":
+		if t.session.OrgScoped {
+			// The command asked for an organization rule, so that is what an
+			// unstated scope means; the schema says so too.
+			scope = store.ScopeOrg
+		} else {
+			scope = store.ScopeRepo
+		}
+	case store.ScopeRepo:
 	case store.ScopeOrg:
-		// Organization-wide rules and the command that asks for one arrive with
-		// v0.0.6. Until then the row is this repository's, and the result says
-		// so rather than leaving the model to assume otherwise.
-		notes = append(notes, "org-scoped rules are not available yet, so the rule is recorded for "+t.session.OrgName+"/"+t.session.RepoName)
-		scope = store.ScopeRepo
+		if !t.session.OrgScoped {
+			// The model was not offered ORG in this session, so it is going
+			// beyond its brief. Recording the rule for the repository instead
+			// would look like a success while storing something the person did
+			// not ask for, so the call fails and the session has to answer for
+			// it.
+			return "", fmt.Errorf("scope ORG needs a command that asked for an organization rule, which this one did not")
+		}
 	default:
 		return "", fmt.Errorf("scope must be REPO or ORG, got %q", scope)
 	}

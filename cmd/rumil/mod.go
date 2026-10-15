@@ -74,12 +74,13 @@ func newModListCmd(configPath *string) *cobra.Command {
 			}
 
 			writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(writer, "ID\tSTATUS\tREPO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
+			_, _ = fmt.Fprintln(writer, "ID\tSCOPE\tSTATUS\tAPPLIES TO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
 			for _, memory := range memories {
-				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					memory.ShortID(),
+					memory.Scope,
 					memory.Status,
-					memory.OrgName+"/"+memory.RepoName,
+					moderationTarget(memory),
 					orDash(memory.PathGlob),
 					memory.RequestedBy,
 					memory.CreatedAt.UTC().Format(time.RFC3339),
@@ -99,6 +100,7 @@ func newModListCmd(configPath *string) *cobra.Command {
 func newModApproveCmd(configPath *string) *cobra.Command {
 	var (
 		ruleText  string
+		scope     string
 		moderator string
 	)
 
@@ -107,7 +109,10 @@ func newModApproveCmd(configPath *string) *cobra.Command {
 		Short: "Approve a rule, so later reviews can retrieve it",
 		Long: "Approve one rule. The id is the short id a confirmation reply named, or the full UUID.\n" +
 			"Passing --rule-text replaces the proposed wording; the replacement is re-embedded, so it is\n" +
-			"found by the words that were approved.",
+			"found by the words that were approved. Passing --scope REPO records an organization-wide rule\n" +
+			"for the repository it was proposed in, which is the way to keep a general rule from reaching a\n" +
+			"repository it does not fit. The scope is not widened the other way: a repository rule is not\n" +
+			"promoted to the whole organization from here.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service, _, closeDB, err := openModeration(*configPath)
@@ -118,18 +123,20 @@ func newModApproveCmd(configPath *string) *cobra.Command {
 
 			memory, err := service.Approve(cmd.Context(), args[0], moderation.Decision{
 				RuleText:  ruleText,
+				Scope:     scope,
 				Moderator: moderator,
 			})
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s/%s, %s)\n",
-				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Status)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s/%s, %s, %s)\n",
+				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Scope, memory.Status)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&ruleText, "rule-text", "", "replace the proposed wording before approving")
+	cmd.Flags().StringVar(&scope, "scope", "", "record an organization rule for its repository: REPO narrows it, and a repository rule is not widened to ORG")
 	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who made the decision, recorded as reviewed_by")
 	return cmd
 }
@@ -160,6 +167,16 @@ func newModRejectCmd(configPath *string) *cobra.Command {
 
 	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who made the decision, recorded as reviewed_by")
 	return cmd
+}
+
+// moderationTarget names what a rule applies to, which is the organization for an
+// ORG-scoped rule and the repository it was recorded in otherwise. The origin
+// repository is worth showing for an org rule: that is where the comment was.
+func moderationTarget(memory store.Memory) string {
+	if memory.Scope == store.ScopeOrg {
+		return memory.OrgName + " (proposed in " + memory.RepoName + ")"
+	}
+	return memory.OrgName + "/" + memory.RepoName
 }
 
 // openModeration builds the service a moderation command needs: the configured

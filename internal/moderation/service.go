@@ -33,6 +33,16 @@ var ErrNoEmbedder = errors.New("editing a rule needs a configured embedding prov
 // a database error.
 var ErrUnknownStatus = errors.New("status takes pending, approved or rejected")
 
+// ErrUnknownScope reports a scope that is not one a rule can have.
+var ErrUnknownScope = errors.New("scope takes REPO or ORG")
+
+// ErrScopeWidened reports a decision that would widen a repository rule to the
+// whole organization. Moderation narrows: an organization-wide proposal can be
+// recorded for the repository it was proposed in, and a rule that reaches one
+// repository is not promoted to every repository from a moderation surface
+// (project_plan.md §6 Phase 6).
+var ErrScopeWidened = errors.New("a decision narrows a rule: ORG can be recorded as REPO, and REPO is not widened to ORG")
+
 // Service resolves pending memories for one installation.
 type Service struct {
 	store          *store.DB
@@ -82,6 +92,10 @@ type Decision struct {
 	RuleText string
 	// PathGlob replaces the stored glob when it is not nil.
 	PathGlob *string
+	// Scope replaces the stored scope when it is set, which is how a moderator
+	// narrows an organization-wide proposal to the repository it was proposed
+	// from. Empty keeps the scope the proposal asked for.
+	Scope string
 	// Moderator is recorded as reviewed_by.
 	Moderator string
 }
@@ -94,6 +108,19 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 	current, err := s.store.MemoryByID(ctx, s.installationID, id)
 	if err != nil {
 		return store.Memory{}, err
+	}
+
+	scope, err := normalizeScope(decision.Scope)
+	if err != nil {
+		return store.Memory{}, err
+	}
+	// Narrowing is the operation the surface offers. An approval that would
+	// widen a repository rule to the whole organization is refused rather than
+	// carried out: one click on a page turns a rule that reaches one repository
+	// into one that reaches every repository, and no reviewer asked for that.
+	if scope == store.ScopeOrg && current.Scope != store.ScopeOrg {
+		return store.Memory{}, fmt.Errorf("%w: %s is recorded for %s/%s",
+			ErrScopeWidened, current.ShortID(), current.OrgName, current.RepoName)
 	}
 
 	text := strings.TrimSpace(decision.RuleText)
@@ -112,6 +139,7 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 	approved, err := s.store.ApproveMemory(ctx, s.installationID, id, store.MemoryDecision{
 		RuleText:   text,
 		PathGlob:   decision.PathGlob,
+		Scope:      scope,
 		Embedding:  embedding,
 		ReviewedBy: decision.Moderator,
 	})
@@ -122,11 +150,23 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 		"memory", approved.ID,
 		"short_id", approved.ShortID(),
 		"repo", approved.OrgName+"/"+approved.RepoName,
+		"scope", approved.Scope,
 		"moderator", decision.Moderator,
 		"edited", edited,
 		"path_glob", approved.PathGlob,
 	)
 	return approved, nil
+}
+
+// normalizeScope turns a moderator's scope choice into one of the two a rule can
+// have, or into no change at all when they did not pick one.
+func normalizeScope(scope string) (string, error) {
+	switch scope = strings.ToUpper(strings.TrimSpace(scope)); scope {
+	case "", store.ScopeRepo, store.ScopeOrg:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownScope, scope)
+	}
 }
 
 // Reject drops a rule from every read. The row stays for the record.
