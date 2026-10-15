@@ -20,12 +20,12 @@
   * *Constraint:* Never expose built-in OS tools (`bash`, `write`, `edit`). Register only Rumil's own tool set.
 * **Tool Definitions:** Every tool is one `Spec` (name, description, JSON Schema, handler) in `internal/mcpservers`, and it is the single definition used by both consumers below.
 * **Tool Registration:** The review session registers the specs as `kit` raw tools (`kit.NewRawTool`), so a tool call is a direct in-process Go call. kit's own MCP integration is not used: `MCPToolManager.GetTools` returns the tool slice without holding the mutex that the parallel server loader writes under, which the race detector reports in every session.
-* **MCP Framework:** `github.com/mark3labs/mcp-go` re-enters as a thin adapter over the same specs when `rumil mcp [github|memory]` publishes them over stdio for external clients and debugging.
+* **MCP Framework:** `github.com/mark3labs/mcp-go` re-enters as a thin adapter over the same specs when `rumil mcp [github|memory]` publishes them over stdio for external clients and debugging. That adapter is not built yet (§10 item 6), and until it is, `mcp-go` is present only as an indirect dependency of `kit`.
 * **GitHub Integration:**
   * `github.com/google/go-github/v69/github` (or latest v60+)
   * `github.com/bradleyfalzon/ghinstallation/v2` for GitHub App JWT signing and Installation Access Token rotation.
 * **Container & Runtime:** one static binary (`CGO_ENABLED=0`, `-trimpath`) on `gcr.io/distroless/static-debian12:nonroot`, pinned as `tag@sha256:…` so Dependabot follows it, running as uid `65532`. Distroless supplies the CA bundle that HTTPS to GitHub and the model provider needs, and a resolvable non-root uid, for about 2 MB. `scratch` plus a copied CA bundle is the alternative when a zero-CVE base matters more than that.
-* **Database (v0.0.3+):** PostgreSQL 16+ with `pgvector` (`github.com/jackc/pgx/v5/pgxpool` and `github.com/pgvector/pgvector-go`).
+* **Database (v0.0.3+):** PostgreSQL 16+ with `pgvector`, reached through `github.com/jackc/pgx/v5/pgxpool` and nothing else: an embedding is bound as the text literal pgvector parses (`[..]`) with an explicit `::vector` cast, so no vector codec is needed and `github.com/pgvector/pgvector-go` is deliberately not a dependency.
 * **GitHub API:** `github.com/google/go-github/v69` over REST for every read and for submitting reviews. Review-thread state is the exception: `isResolved` and `isOutdated`, and the mutation that resolves a thread, exist only in GraphQL, so `internal/ghapp` issues two hand-rolled requests through `client.NewRequest` and `encoding/json` rather than taking `shurcooL/githubv4` as a dependency.
 * **Migrations:** `github.com/pressly/goose/v3` using Go `//go:embed` so the single `rumil` binary self-migrates on boot.
 * **CLI Framework:** `github.com/spf13/cobra`
@@ -35,7 +35,7 @@
 
 ## 2. Repository Directory Structure
 
-Maintain this exact package layout across all phases:
+Maintain this exact package layout across all phases. The listing names the packages and the load-bearing files rather than every file: it grew as the phases landed, and where it disagrees with the tree, the tree is what runs. A package's tests sit beside it (`config_test.go`, and `*_internal_test.go` where a test needs an unexported name).
 
 ```text
 rumil/
@@ -45,7 +45,7 @@ rumil/
 │       ├── root.go               # Cobra root command + global flags
 │       ├── review.go             # `rumil review --repo owner/repo --pr 123` (v0.0.1)
 │       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.0.3+)
-│       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs)
+│       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs) — not built, §10 item 6
 │       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.0.5+)
 ├── internal/
 │   ├── config/
@@ -55,20 +55,30 @@ rumil/
 │   │   ├── auth.go               # App JWT & repo-scoped Installation Token minting
 │   │   ├── client.go             # Wrapper for Diff, File, PR Review, & Comment APIs
 │   │   ├── diff_parser.go        # Unified diff line-number mapper (validates right/left lines)
+│   │   ├── comments.go           # Review-thread replies & conversation comments (v0.0.4+)
+│   │   ├── graphql.go            # The two GraphQL operations: thread state, and resolving a thread (v0.0.4+)
+│   │   ├── history.go            # Prior reviews, their threads, and the commit each was submitted against (v0.0.4+)
+│   │   ├── logins.go             # The login forms a bot handle is written in
 │   │   └── client_test.go
 │   ├── mcpservers/
 │   │   ├── github_mcp.go         # Specs for the read-only repo + PR review tools
 │   │   ├── memory_mcp.go         # Specs for RAG search & propose_memory (v0.0.4+)
+│   │   ├── conversation.go       # The conversation tool's paging and byte budget (v0.0.4+)
 │   │   └── mcp_test.go
 │   ├── reviewer/
 │   │   ├── engine.go             # Orchestrates pre-fetch + pkg/kit session execution
 │   │   ├── prompts.go            # System prompt templates for review & memory distillation
+│   │   ├── tools.go              # Specs to kit raw tools, and the tool set one session gets
+│   │   ├── memory.go             # Pre-retrieval of recorded rules and the <project_memories> block (v0.0.4+)
+│   │   ├── remember.go           # The comment command's synthesis session (v0.0.4+)
+│   │   ├── history.go            # The <prior_reviews> context a later round reads (v0.0.4+)
 │   │   └── engine_test.go
 │   ├── store/                    # Introduced in v0.0.3 / v0.0.4
 │   │   ├── migrations/           # Embedded SQL files (*.sql)
 │   │   ├── db.go                 # pgxpool init + goose auto-migrator
 │   │   ├── jobs.go               # Webhook idempotency & async worker queue
 │   │   ├── memories.go           # pgvector CRUD, hybrid search, moderation state machine
+│   │   ├── moderation.go         # List/resolve/decide the rules waiting for a decision (v0.0.5+)
 │   │   └── store_test.go
 │   ├── embedder/                 # Introduced in v0.0.4
 │   │   ├── embedder.go           # OpenAI-compatible embeddings client
@@ -76,11 +86,17 @@ rumil/
 │   ├── moderation/               # Introduced in v0.0.5
 │   │   ├── service.go            # The one approve/reject code path the CLI and the HTTP surface share
 │   │   └── service_test.go
-│   └── server/                   # Introduced in v0.0.3 & expanded in v0.0.5
-│       ├── webhook.go            # HMAC SHA-256 verification & event dispatcher
-│       ├── commands.go           # Parser for `@rumil` comment commands (v0.0.4+)
-│       ├── mod_ui.go             # html/template moderation UI & REST API, no JavaScript (v0.0.5+)
-│       └── server_test.go
+│   ├── server/                   # Introduced in v0.0.3 & expanded in v0.0.5
+│   │   ├── webhook.go            # HMAC SHA-256 verification & event dispatcher
+│   │   ├── commands.go           # Parser for `@rumil` comment commands (v0.0.4+)
+│   │   ├── worker.go             # The queue worker: claims a job, decides the command, runs it (v0.0.3+)
+│   │   ├── mod_ui.go             # html/template moderation UI & REST API, no JavaScript (v0.0.5+)
+│   │   └── server_test.go
+│   └── testutil/                 # Introduced in v0.0.2: the hermetic doubles §8 requires
+│       ├── database.go           # TEST_DATABASE_URL, one schema per test package
+│       ├── github.go             # httptest-backed GitHub REST + GraphQL stand-in
+│       ├── openai.go             # httptest-backed chat endpoint with a scripted queue
+│       └── embedding.go          # Queued embeddings and basis vectors
 ├── Dockerfile
 ├── Dockerfile.release
 ├── docker-compose.yml
@@ -104,7 +120,8 @@ app:
 github:
   app_id: 123456
   installation_id: 98765432                       # Installation of the operator's own GitHub App
-  private_key_path: "/run/secrets/github_app_pem" # Or inline via GITHUB_PRIVATE_KEY env
+  private_key_path: "/run/secrets/github_app_pem" # Wins when two of the three are set
+  private_key: "${GITHUB_PRIVATE_KEY}"            # Or the PEM itself; the environment variable is read directly when neither is set
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"      # Required in v0.0.3+
 
 review:                                           # v0.0.2+
@@ -233,7 +250,7 @@ DROP TYPE IF EXISTS memory_scope;
 
 ## 5. Tool Specifications
 
-Both tool sets are defined as `Spec` values in `internal/mcpservers` and registered directly on the agent session (see §1). The same specs are published over stdio by `rumil mcp [github|memory]` for external MCP clients.
+Both tool sets are defined as `Spec` values in `internal/mcpservers` and registered directly on the agent session (see §1). The same specs are meant to be published over stdio by `rumil mcp [github|memory]` for external MCP clients; that adapter does not exist yet (§10 item 6).
 
 ### 5.1 `github` Tool Set (`internal/mcpservers/github_mcp.go`)
 Scoped strictly to a single `(installation_id, owner, repo, pr_number)` context per review session. It NEVER exposes tools that mutate branches, commits, or repository settings.
@@ -252,8 +269,8 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 
 | Tool Name | Parameters (JSON Schema) | Behavior & Constraints |
 | :--- | :--- | :--- |
-| `search_memory` | `{"query": "string (required)", "file_path": "string (optional)", "limit": "int (default 5, max 15)"}` | Embeds `query` and runs a cosine similarity search against `memories` where `status = 'APPROVED'` AND `installation_id = $1` AND `org_name = $3` AND (`(scope = 'REPO' AND repo_name = $2)` OR `scope = 'ORG'`). `org_name` is required on **both** branches: repository names are unique per owner rather than globally, so tenant separation must not rest on `repo_name` alone. `path_glob` filters candidates — a `NULL` glob applies to every path, and a non-null one is matched against `file_path`. |
-| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`) within the same `installation_id`, `org_name` and `repo_name`, counting `PENDING` and `APPROVED` rows so a proposal still awaiting moderation is not duplicated either. Sets `status = 'APPROVED'` only when the gate is off for this commenter — `moderation.accept_all == true`, or the commenter's `author_association` is on `moderation.auto_approve_associations`; otherwise `PENDING`, which waits for a human decision on the moderation surface. A `PENDING` row is inert: nothing retrieves it. `source_pr`, `source_comment` and `requested_by` are the `NOT NULL` columns the model does not supply — the tool is constructed with the triggering comment's context and fills them from it. Forces `scope = 'REPO'` until the org-scope work of v0.0.6 is enabled and authorized. |
+| `search_memory` | `{"query": "string (required)", "file_path": "string (optional)", "limit": "int (default 5, max 15)"}` | Embeds `query` and runs a cosine similarity search against `memories` where `status = 'APPROVED'` AND `installation_id = $1` AND `org_name = $3` AND (`(scope = 'REPO' AND repo_name = $2)` OR `scope = 'ORG'`). `org_name` is required on **both** branches: repository names are unique per owner rather than globally, so tenant separation must not rest on `repo_name` alone. Candidates are ranked by cosine similarity plus `memory.repo_scope_boost` for a `REPO`-scoped rule (v0.0.6), so a repository's own rule wins a tie against its organization's; the boost decides the order only, and the similarity a caller reads back is the distance, not the score. It is applied before the `LIMIT`, so a repository rule that scores into the top `limit` takes the place of the organization rule it overtakes. `path_glob` filters candidates — a `NULL` glob applies to every path, and a non-null one is matched against `file_path`. |
+| `propose_memory` | `{"rule_text": "string (required)", "rationale": "string (required)", "path_glob": "string (optional)", "scope": "ENUM('REPO', 'ORG')"}` | Checks for near-duplicate memories (`cosine_similarity > 0.92`) within the same `installation_id` and `org_name`, counting `PENDING` and `APPROVED` rows so a proposal still awaiting moderation is not duplicated either. What a proposal is compared against is what a review of that repository would already retrieve (v0.0.6): a `REPO` proposal against the repository's rules and its organization's, and an `ORG` proposal against the organization's alone, because a repository rule says nothing about the rest of the organization and asking for the wider rule is a request to record. Sets `status = 'APPROVED'` only when the gate is off for this commenter — `moderation.accept_all == true`, or the commenter's `author_association` is on `moderation.auto_approve_associations`; otherwise `PENDING`, which waits for a human decision on the moderation surface. A `PENDING` row is inert: nothing retrieves it. `source_pr`, `source_comment` and `requested_by` are the `NOT NULL` columns the model does not supply — the tool is constructed with the triggering comment's context and fills them from it. `scope = 'ORG'` is offered only to a session whose command asked for it (`@rumil remember --org`, v0.0.6) and is refused in any other session rather than quietly recorded for the repository; for a session that did ask, an unstated scope means `ORG`, which is what the tool's own description and schema say. |
 
 ---
 
