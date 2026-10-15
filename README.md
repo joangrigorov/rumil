@@ -1,119 +1,132 @@
 # Rumil
 
-Rumil is a self-hosted GitHub App that reviews your pull requests. It reads a pull request, posts a normal GitHub review with inline comments, and — if you turn it on — remembers the engineering rules your team states in the conversation, so later reviews stop flagging deliberate decisions as mistakes.
+Rumil is a self-hosted GitHub App that reviews pull requests. It reads the change, posts one GitHub review with inline comments, and — with memory turned on — records the engineering rules your team states in review, so a later round stops flagging a deliberate decision as a mistake.
 
-It is **read-only**: the only things it writes are the review itself, the replies and resolutions on the review threads it opened, and the confirmation it posts when it records a rule. It cannot push, edit files, or change repository settings.
+It is read-only: the review, the replies in the threads it opened, and the confirmation it posts for a recorded rule are everything it writes.
 
-It **never reviews on its own**: nothing happens when a pull request opens or gains commits. A review starts when the App is *requested as a reviewer*, and that is the only trigger it accepts.
-
-It ships **no hosted service and no shared App**. You register your own GitHub App, so your code, your rules, and your tokens stay in your account and on your infrastructure. You also bring your own model provider: any OpenAI-compatible chat endpoint that supports tool calling works.
+| Command | What it does |
+| :--- | :--- |
+| `rumil review` | Review one pull request and exit. No server, no queue. |
+| `rumil serve` | Run the webhook server and the queue that reviews on request. |
+| `rumil mod` | List the recorded rules, and approve or reject them. |
 
 ## Contents
 
-- [How a review happens](#how-a-review-happens)
 - [Requirements](#requirements)
 - [Install](#install)
-- [Create the GitHub App](#create-the-github-app)
-- [Configuration](#configuration)
-- [Using Rumil](#using-rumil)
+- [Configure](#configure)
+- [Review one pull request from the command line](#review-one-pull-request-from-the-command-line)
+- [Run the webhook server](#run-the-webhook-server)
+- [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
-## How a review happens
-
-1. GitHub delivers a webhook to your Rumil instance. Rumil verifies the signature and queues the job in Postgres.
-2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
-3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it resolves that thread with a one-line reason, so a resolution is never silent.
-
-The review is a single agent session with a tool set scoped to that one pull request. The model can read the pull request and the repository, and search the rules you have approved; it has no tool that writes to the repository.
-
 ## Requirements
 
-- **A Postgres 16+ database with the `pgvector` extension.** The `pgvector/pgvector:pg16` image is the easiest way to get one. Rumil creates its own tables on boot when `database.auto_migrate` is on, so its database user needs the right to create extensions. On a managed Postgres, check that before you start; the failure appears on the first boot.
-- **A GitHub App of your own**, installed on the repositories Rumil should review.
-- **An OpenAI-compatible chat endpoint** and an API key for it. The endpoint has to support OpenAI-style tool calling: a review is an agent session that calls tools, and an endpoint that answers chat completions without them produces no review.
+- **An OpenAI-compatible chat endpoint** and an API key for it. It has to support OpenAI-style tool calling: a review is an agent session that calls tools, and an endpoint that answers chat completions without them produces no review.
+- **A GitHub App of your own**, installed on the repositories Rumil should review. [Configure](#configure) creates it.
+- **A Postgres 16+ database with the `pgvector` extension** — for `rumil serve` only. The `pgvector/pgvector:pg16` image is the easiest way to get one. Rumil creates its own tables on boot when `database.auto_migrate` is on, so its database user needs the right to create extensions; on a managed Postgres, check that before you start.
 - **Optionally, an embedding provider** with 1536-dimension embeddings. That is what turns on recorded rules; without it Rumil reviews normally and has no memory.
-- **Inbound HTTPS** from GitHub to your instance, for webhook deliveries. Any reverse proxy works; a local run needs a tunnel that GitHub can reach.
+- **Inbound HTTPS to your instance** — for `rumil serve` only, so that GitHub can deliver webhooks. Any reverse proxy works; a local run needs a tunnel that GitHub can reach.
 
 Every review spends tokens on your chat provider, and recording or retrieving a rule spends them on your embedding provider. Nobody bills you but your provider.
 
 ## Install
 
-Whichever way you install it, Rumil needs the values that [Create the GitHub App](#create-the-github-app) produces: the App ID, the installation ID, the private key and the webhook secret. Create the App first, or read that section alongside this one.
-
-### Docker Compose
-
-The repository ships a compose file with Rumil and Postgres with `pgvector`:
+Every release publishes static binaries and packages for Linux, macOS and Windows, plus a container image. Downloads are on the [releases page](https://github.com/joangrigorov/rumil/releases/latest). The commands below read the version from these two variables, so set them once:
 
 ```bash
-git clone https://github.com/joangrigorov/rumil.git
-cd rumil
-
-cp rumil.example.yaml rumil.yaml     # then fill in app_id, installation_id and the rest
-export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/your-app.pem
-export GITHUB_WEBHOOK_SECRET=...     # the secret you set on the App
-export OPENAI_API_KEY=...
-export DEEPSEEK_API_KEY=...
-export RUMIL_ADMIN_TOKEN=...         # optional: turns on the moderation page and API
-
-docker compose up
+VERSION=0.0.8                                    # the current release
+BASE=https://github.com/joangrigorov/rumil/releases/download/v$VERSION
 ```
 
-Compose builds the image from source and starts both services. Rumil listens on `:8080`; the webhook endpoint is `POST /webhooks/github` and the health check is `GET /healthz`.
-
-The compose file insists on both provider keys, because the example config names a DeepSeek chat provider and an OpenAI embedding provider. Drop the one you do not use from `rumil.yaml` and from `docker-compose.yml` together, and put your own endpoint in the `models.providers` block.
-
-### Released binaries and packages
-
-Every release publishes static binaries and packages for Linux, macOS and Windows:
-
-- `rumil_<version>_linux_x86_64.tar.gz`, `_linux_arm64`, `_linux_armv7`, `_darwin_x86_64`, `_darwin_arm64`, `_windows_x86_64.zip`, `_windows_arm64.zip` — each archive holds the `rumil` binary, a commented `rumil.example.yaml` and the license text
-- `.deb`, `.rpm`, `.apk` and `.pkg.tar.zst` packages for the common Linux distributions, which install the binary to `/usr/bin/rumil`, the example config to `/etc/rumil/rumil.example.yaml` and the license to `/usr/share/licenses/rumil/LICENSE`
-- `checksums.txt` with the SHA-256 of every artifact
-
-Download them from the [releases page](https://github.com/joangrigorov/rumil/releases/latest) and verify against `checksums.txt`. From an extracted archive:
+Download `checksums.txt` from the same base and check what you downloaded:
 
 ```bash
-cp rumil.example.yaml rumil.yaml     # then fill it in
-./rumil serve --config ./rumil.yaml
+curl -LO $BASE/checksums.txt
+sha256sum -c checksums.txt --ignore-missing      # shasum -a 256 -c checksums.txt on macOS
 ```
 
-From a package, `rumil` is on `PATH` already and the example config is installed for you:
+Packages and macOS binaries are unsigned, so the checksum is what a download is checked against.
+
+### Linux
+
+The packages install the binary to `/usr/bin/rumil` and the example config to `/etc/rumil/rumil.example.yaml`.
+
+Debian and Ubuntu:
 
 ```bash
-cp /etc/rumil/rumil.example.yaml /etc/rumil/rumil.yaml   # then fill it in
-rumil serve --config /etc/rumil/rumil.yaml
+curl -LO $BASE/rumil_${VERSION}_amd64.deb        # arm64 and armhf are published too
+sudo dpkg -i rumil_${VERSION}_amd64.deb
 ```
+
+Fedora, RHEL and openSUSE:
+
+```bash
+curl -LO $BASE/rumil-${VERSION}-1.x86_64.rpm     # aarch64 and armv7hl are published too
+sudo rpm -i rumil-${VERSION}-1.x86_64.rpm
+```
+
+Alpine:
+
+```bash
+curl -LO $BASE/rumil_${VERSION}_x86_64.apk       # aarch64 and armv7 are published too
+sudo apk add --allow-untrusted rumil_${VERSION}_x86_64.apk
+```
+
+Arch:
+
+```bash
+curl -LO $BASE/rumil-${VERSION}-1-x86_64.pkg.tar.zst   # aarch64 and armv7h are published too
+sudo pacman -U rumil-${VERSION}-1-x86_64.pkg.tar.zst
+```
+
+Any other Linux, from a static tarball that holds the binary, the example config and the license:
+
+```bash
+curl -LO $BASE/rumil_${VERSION}_linux_x86_64.tar.gz    # arm64 and armv7 are published too
+tar -xzf rumil_${VERSION}_linux_x86_64.tar.gz
+sudo install -m 0755 rumil /usr/local/bin/rumil
+```
+
+### macOS
+
+```bash
+curl -LO $BASE/rumil_${VERSION}_darwin_arm64.tar.gz    # darwin_x86_64 for Intel
+tar -xzf rumil_${VERSION}_darwin_arm64.tar.gz
+sudo install -m 0755 rumil /usr/local/bin/rumil
+```
+
+The macOS binaries are unsigned and un-notarized. If macOS refuses a copy that a browser downloaded, clear the quarantine flag:
+
+```bash
+xattr -d com.apple.quarantine /usr/local/bin/rumil
+```
+
+### Windows
+
+Download `rumil_<version>_windows_x86_64.zip` (or `_windows_arm64.zip`) from the [releases page](https://github.com/joangrigorov/rumil/releases/latest), unzip it, and put the directory holding `rumil.exe` on your `PATH`.
 
 ### Container image
 
-A prebuilt image is published to `ghcr.io/joangrigorov/rumil`, tagged with the version, the minor version and `latest`:
-
 ```bash
-docker run --rm -p 8080:8080 \
-  -e DATABASE_URL='postgres://rumil:rumil@<db-host>:5432/rumil?sslmode=disable' \
-  -e GITHUB_WEBHOOK_SECRET=... \
-  -e GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github_app.pem \
-  -e OPENAI_API_KEY=... \
-  -v /etc/rumil/rumil.yaml:/etc/rumil/rumil.yaml:ro \
-  -v /path/to/your-app.pem:/run/secrets/github_app.pem:ro \
-  ghcr.io/joangrigorov/rumil:latest serve --config /etc/rumil/rumil.yaml
+docker run --rm ghcr.io/joangrigorov/rumil:latest --help
 ```
 
-The `${VAR}` placeholders are expanded inside the container, so every variable the config names has to arrive with `-e`. An unexpanded one becomes an empty string, and Rumil then refuses to start on the missing value instead of serving without it.
+The image is `linux/amd64` and holds the binary alone. It is the same binary the packages install, so mount a config and pass the environment it reads — [Run the webhook server](#run-the-webhook-server) shows the full command.
 
-The published image is `linux/amd64`. On another architecture, use `docker compose up`, which compiles Rumil for the host.
+## Configure
 
-## Create the GitHub App
+Rumil reads one YAML file, `rumil.yaml` by default; `--config` or `-c` points somewhere else. Before the YAML is parsed, `${VAR}` placeholders are expanded from the environment, so secrets never have to live in the file. `rumil.example.yaml` documents every key: it is in the repository, and a package installs it to `/etc/rumil/rumil.example.yaml`.
 
-Rumil authenticates as a GitHub App you own. Nothing here is shared with anyone else.
+### Create the GitHub App
 
-1. Go to **Settings → Developer settings → GitHub Apps → New GitHub App** (for an organization, use the organization's settings). Give it a name; its slug becomes the handle people type in comments (for example an App named `Acme Rumil` answers to `acme-rumil`).
+Rumil authenticates as a GitHub App you own. Both ways of running it need the App; only the server needs a webhook.
+
+1. Go to **Settings → Developer settings → GitHub Apps → New GitHub App** (for an organization, in the organization's settings). The App's name decides the slug people type in comments: an App named `Acme Rumil` answers to `acme-rumil`.
 2. **Homepage URL**: anything, for example your Rumil instance's address.
-3. **Webhook URL**: `https://<your-rumil-host>/webhooks/github`.
-4. **Webhook secret**: a long random string. Put the same value in `github.webhook_secret`.
-5. **Repository permissions**:
+3. **Repository permissions**:
 
    | Permission | Access | Why |
    | :--- | :--- | :--- |
@@ -122,16 +135,13 @@ Rumil authenticates as a GitHub App you own. Nothing here is shared with anyone 
    | Pull requests | Read and write | Read metadata, diffs, reviews and review threads; submit the review, reply to review comments, and resolve threads |
    | Metadata | Read | Always required by GitHub |
 
-6. **Subscribe to events**: *Pull request*, *Issue comment*, and *Pull request review comment*.
-7. Create the App, then **Generate a private key** and download the `.pem`. Point `github.private_key_path` at it, or put its contents in the `GITHUB_PRIVATE_KEY` environment variable.
-8. Note the **App ID** on the App's settings page, which is `github.app_id`.
-9. **Install** the App on the account that owns the repositories it should review, choosing either all repositories or a selection. The installation's ID is the number at the end of the URL after installing (`.../installations/<id>`); that is `github.installation_id`.
+4. Create the App, then **Generate a private key** and download the `.pem`. Point `github.private_key_path` at it, or put its contents in the `GITHUB_PRIVATE_KEY` environment variable.
+5. Note the **App ID** on the App's settings page: that is `github.app_id`.
+6. **Install** the App on the account that owns the repositories it should review, all of them or a selection. The installation's ID is the number at the end of the URL after installing (`.../installations/<id>`): that is `github.installation_id`.
 
-To review a pull request, open it and use **Reviewers → request the App**. Rumil starts working within a second or two and posts the review when the session finishes.
+The webhook URL, the webhook secret and the subscribed events are only needed to run the server. [Run the webhook server](#run-the-webhook-server) covers those.
 
-## Configuration
-
-Rumil reads one YAML file, `rumil.yaml` by default; `--config` or `-c` points somewhere else. Before the YAML is parsed, `${VAR}` placeholders are expanded from the environment, so secrets never have to live in the file. `rumil.example.yaml` documents every key: it is in the repository, and an installed package puts it at `/etc/rumil/rumil.example.yaml`.
+### The configuration file
 
 A minimal configuration that reviews pull requests with OpenAI:
 
@@ -143,7 +153,7 @@ github:
   app_id: 123456
   installation_id: 98765432
   private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}"
-  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"   # rumil serve only
 
 models:
   default_chat: "gpt-4o-mini"       # any OpenAI-compatible endpoint
@@ -154,7 +164,7 @@ models:
       model_name: "gpt-4o-mini"
       api_key: "${OPENAI_API_KEY}"
 
-database:
+database:                            # rumil serve only
   dsn: "${DATABASE_URL}"
   auto_migrate: true                # create and update the tables on boot
 ```
@@ -192,29 +202,88 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
 | `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. Unset means both refuse every request |
 
-## Using Rumil
+## Review one pull request from the command line
 
-### Request a review
-
-Open a pull request and request the App under **Reviewers**. Rumil reviews the pull request as it stands and posts one review. To review a new push, request it again.
-
-Rumil answers each round with the state of the review: what earlier rounds raised, what is still open, what this round found, and what it withdrew and why. It does not repeat a finding an open thread already covers.
-
-### Repository guidelines
-
-If a repository keeps a `RUMIL.md` at its root, Rumil reads it before the review and treats it as that repository's own policy — it outranks everything else Rumil has been told, including remembered rules, unless a maintainer promotes a rule above it (below). It is capped at 32 KB.
-
-This is where a team writes down the conventions it wants enforced: "we do not use an ORM in this service", "every exported function needs a doc comment", "money is always `decimal`, never `float`". Write it as instructions to a reviewer; that is exactly how Rumil reads it.
-
-### One-off review from the command line
-
-`rumil review` reviews a single pull request and submits the review, with no webhook and no queue:
+`rumil review` is the shortest way to a review: no server, no queue, no webhook, no database.
 
 ```bash
 rumil review --config rumil.yaml --repo acme/payments --pr 42
 ```
 
-It needs the App credentials and a chat provider. With `database.dsn` and an embedding provider set, it also uses the rules you have approved; without both, it reviews with no memory and logs a warning saying so.
+It needs the App credentials and a chat provider, and it submits the review as the App. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so.
+
+## Run the webhook server
+
+`rumil serve` is what puts Rumil into the pull request flow: it receives GitHub's webhooks, queues them, and reviews when someone requests the App as a reviewer. It needs Postgres and the App's webhook settings, which the command line path above does not.
+
+### Point the App at your server
+
+In the App's settings:
+
+1. **Webhook URL**: `https://<your-rumil-host>/webhooks/github`
+2. **Webhook secret**: a long random string, and the same value as `github.webhook_secret`
+3. **Subscribe to events**: *Pull request*, *Issue comment* and *Pull request review comment*
+
+### Docker Compose
+
+The repository ships a compose file with Rumil and Postgres with `pgvector`:
+
+```bash
+git clone https://github.com/joangrigorov/rumil.git
+cd rumil
+
+cp rumil.example.yaml rumil.yaml     # then fill in app_id, installation_id and the rest
+export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/your-app.pem
+export GITHUB_WEBHOOK_SECRET=...     # the secret you set on the App
+export OPENAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
+export RUMIL_ADMIN_TOKEN=...         # optional: turns on the moderation page and API
+
+docker compose up
+```
+
+Compose builds the image from source and starts both services. Rumil listens on `:8080`; the webhook endpoint is `POST /webhooks/github` and the health check is `GET /healthz`.
+
+The compose file insists on both provider keys, because the example config names a DeepSeek chat provider and an OpenAI embedding provider. Drop the one you do not use from `rumil.yaml` and from `docker-compose.yml` together, and put your own endpoint in the `models.providers` block.
+
+### The container image
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL='postgres://rumil:rumil@<db-host>:5432/rumil?sslmode=disable' \
+  -e GITHUB_WEBHOOK_SECRET=... \
+  -e GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github_app.pem \
+  -e OPENAI_API_KEY=... \
+  -v /etc/rumil/rumil.yaml:/etc/rumil/rumil.yaml:ro \
+  -v /path/to/your-app.pem:/run/secrets/github_app.pem:ro \
+  ghcr.io/joangrigorov/rumil:latest serve --config /etc/rumil/rumil.yaml
+```
+
+The `${VAR}` placeholders are expanded inside the container, so every variable the config names has to arrive with `-e`. An unexpanded one becomes an empty string, and Rumil then refuses to start on the missing value instead of serving without it.
+
+The published image is `linux/amd64`. On another architecture, use `docker compose up`, which compiles Rumil for the host.
+
+### The installed binary
+
+```bash
+rumil serve --config /etc/rumil/rumil.yaml
+```
+
+It serves on `server.listen` (`:8080` unless the config or `--listen` says otherwise). The database at `database.dsn` has to exist with the `pgvector` extension in it; with `database.auto_migrate: true` Rumil creates and updates its own tables at startup.
+
+### What a review does
+
+1. GitHub delivers a webhook. Rumil verifies the signature and queues the job in Postgres.
+2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
+3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it resolves that thread with a one-line reason, so a resolution is never silent.
+
+To start one, open a pull request and request the App under **Reviewers**. A later push is not reviewed on its own; request the App again to review it.
+
+## Repository guidelines
+
+If a repository keeps a `RUMIL.md` at its root, Rumil reads it before the review and treats it as that repository's own policy — it outranks everything else Rumil has been told, including remembered rules, unless a maintainer promotes a rule above it (below). It is capped at 32 KB.
+
+This is where a team writes down the conventions it wants enforced: "we do not use an ORM in this service", "every exported function needs a doc comment", "money is always `decimal`, never `float`". Write it as instructions to a reviewer; that is exactly how Rumil reads it.
 
 ## Teaching Rumil your conventions
 
