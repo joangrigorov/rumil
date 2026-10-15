@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -55,6 +56,7 @@ type Config struct {
 	App        App        `yaml:"app"`
 	GitHub     GitHub     `yaml:"github"`
 	Review     Review     `yaml:"review"`
+	Memory     Memory     `yaml:"memory"`
 	Worker     Worker     `yaml:"worker"`
 	Server     Server     `yaml:"server"`
 	Models     Models     `yaml:"models"`
@@ -128,6 +130,29 @@ type Review struct {
 // threads. It may, unless the operator turned that off.
 func (r Review) ThreadsResolvable() bool {
 	return r.ResolveThreads == nil || *r.ResolveThreads
+}
+
+// Memory tunes how recorded rules are ranked (used from v0.0.6).
+type Memory struct {
+	// RepoScopeBoost is added to a REPO-scoped rule's similarity when the
+	// candidates for a review are ranked, so a project-specific rule outranks a
+	// general organization rule that came back at a similar distance.
+	RepoScopeBoost *float64 `yaml:"repo_scope_boost"`
+}
+
+// DefaultRepoScopeBoost is the weight a repository's own rule gets over an
+// organization rule. It is small on purpose: a repository exception should win
+// a tie against the general rule, not outrank a rule that is a much better
+// match.
+const DefaultRepoScopeBoost = 0.05
+
+// RepoScopeWeight is the boost the queries rank with, defaulted when the
+// operator left it out.
+func (m Memory) RepoScopeWeight() float64 {
+	if m.RepoScopeBoost == nil {
+		return DefaultRepoScopeBoost
+	}
+	return *m.RepoScopeBoost
 }
 
 // Database is used from v0.0.3 on.
@@ -243,6 +268,16 @@ func (c *Config) Validate() error {
 
 	if c.Worker.Concurrency < 1 {
 		return fmt.Errorf("worker.concurrency must be at least 1, got %d", c.Worker.Concurrency)
+	}
+
+	// A negative weight would rank an organization rule above the repository's
+	// own, which is the opposite of what the setting is for, and a weight above
+	// one would let any repository rule outrank every organization rule
+	// whatever the distance. A NaN is refused too: it compares false against
+	// both bounds, and Postgres orders it above every number, which would rank
+	// every repository rule first.
+	if boost := c.Memory.RepoScopeWeight(); math.IsNaN(boost) || boost < 0 || boost > 1 {
+		return fmt.Errorf("memory.repo_scope_boost must be between 0 and 1, got %v", boost)
 	}
 
 	if err := c.GitHub.validate(); err != nil {

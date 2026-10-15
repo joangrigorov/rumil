@@ -73,6 +73,9 @@ type harnessOpts struct {
 	// resolveThreads sets review.resolve_threads. Nil leaves it out, which is
 	// the default of true.
 	resolveThreads *bool
+	// memory is a memory block to splice into the configuration, for example
+	// `memory:\n  repo_scope_boost: 0\n`.
+	memory string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -110,6 +113,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	if opts.embedding {
 		defaultChat += "  default_embedding: \"embed\"\n"
 	}
+	top += opts.memory
 
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
 		llm.URL()+"/v1", llm.URL()+"/v1", llm.URL()+"/v1")

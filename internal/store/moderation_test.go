@@ -122,6 +122,68 @@ func TestApproveMemoryMakesTheRuleRetrievable(t *testing.T) {
 	}
 }
 
+// T-040-04 (store half): a decision that narrows an organization rule to the
+// repository it was proposed in changes what the rule reaches, which is the
+// whole point of the operation: another repository in the organization stops
+// retrieving it, and the repository it was narrowed to still does.
+func TestApproveMemoryNarrowsAnOrganizationRule(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	proposal := testProposal("Every service logs with log/slog and never with logrus", embeddingAt(0))
+	proposal.Scope, proposal.PathGlob, proposal.Approved = ScopeOrg, "", true
+	stored, _, err := db.ProposeMemory(ctx, proposal)
+	if err != nil {
+		t.Fatalf("ProposeMemory returned error: %v", err)
+	}
+
+	query := MemoryQuery{
+		InstallationID: proposal.InstallationID,
+		OrgName:        testOrg,
+		RepoName:       "inventory-service",
+		Embedding:      embeddingAt(0),
+	}
+	// The proposal reaches every repository of the organization to begin with,
+	// which is what makes the narrowing visible.
+	matches, err := db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("search before the decision returned %+v, want the organization rule", matches)
+	}
+
+	narrowed, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Scope: ScopeRepo, ReviewedBy: "octocat",
+	})
+	if err != nil {
+		t.Fatalf("ApproveMemory returned error: %v", err)
+	}
+	if narrowed.Scope != ScopeRepo || narrowed.Status != MemoryApproved {
+		t.Errorf("row is %+v, want an approved %s rule", narrowed, ScopeRepo)
+	}
+	if narrowed.RepoName != testRepo {
+		t.Errorf("repo_name = %q, want the repository it was proposed from", narrowed.RepoName)
+	}
+
+	matches, err = db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("the narrowed rule still reaches inventory-service: %+v", matches)
+	}
+
+	query.RepoName = testRepo
+	matches, err = db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != stored.ID {
+		t.Errorf("search returned %+v, want the narrowed rule in the repository it was proposed in", matches)
+	}
+}
+
 // T-030-03: an edited rule is approved against the vector for the edited text,
 // not the one the proposal arrived with.
 func TestApproveMemoryReEmbedsAnEditedRule(t *testing.T) {
@@ -281,6 +343,55 @@ func TestReviewMemoryRefusesADecisionAgainstStaleText(t *testing.T) {
 	}
 	if len(matches) != 1 || matches[0].ID != stored.ID {
 		t.Errorf("the rule is no longer found by the words it says: %+v", matches)
+	}
+}
+
+// T-040-04 (store half): the statement itself refuses to record a repository
+// rule for the whole organization. Two moderators who both read a rule as an
+// organization rule, where the first narrows it, must not leave the second's
+// widening behind: the rule would then reach every repository, which is what
+// the narrowing was for. The second decision here was computed before the first
+// landed, which is the shape that race takes when it is written down.
+func TestReviewMemoryRefusesADecisionAgainstAStaleScope(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	proposal := testProposal("Every service logs with log/slog", embeddingAt(0))
+	proposal.Scope, proposal.PathGlob, proposal.Approved = ScopeOrg, "", true
+	stored, _, err := db.ProposeMemory(ctx, proposal)
+	if err != nil {
+		t.Fatalf("ProposeMemory returned error: %v", err)
+	}
+
+	// Approving an organization rule as an organization rule is the ordinary
+	// decision on such a row, and is not what the guard refuses.
+	if _, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Scope: ScopeOrg, ReviewedBy: "hubot",
+	}); err != nil {
+		t.Fatalf("approving an organization rule as one returned error: %v", err)
+	}
+
+	// The first moderator reads the rule as an organization rule and narrows it.
+	if _, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Scope: ScopeRepo, ReviewedBy: "octocat",
+	}); err != nil {
+		t.Fatalf("the narrowing returned error: %v", err)
+	}
+
+	// The second moderator's decision was computed before that write, so it
+	// asks to record the rule for the organization again.
+	if _, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Scope: ScopeOrg, ReviewedBy: "hubot",
+	}); !errors.Is(err, ErrMemoryChanged) {
+		t.Fatalf("a decision against the old scope returned %v, want %v", err, ErrMemoryChanged)
+	}
+
+	after, err := db.MemoryByID(ctx, proposal.InstallationID, stored.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if after.Scope != ScopeRepo || after.ReviewedBy != "octocat" {
+		t.Errorf("the refused decision changed the row: %+v", after)
 	}
 }
 

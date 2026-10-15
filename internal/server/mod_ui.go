@@ -205,6 +205,7 @@ func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
 	memory, err := m.service.Approve(r.Context(), r.PathValue("id"), moderation.Decision{
 		RuleText:  r.PostFormValue("rule_text"),
 		PathGlob:  pathGlobOf(r),
+		Scope:     r.PostFormValue("scope"),
 		Moderator: moderatorOf(r),
 	})
 	if err != nil {
@@ -259,7 +260,7 @@ func splitRepoRef(repo string) (owner, name string, err error) {
 }
 
 // pathGlobOf reads the glob the form carried. An absent field is not the same
-// as an empty one: absent leaves the rule's scope alone, which is what the CLI
+// as an empty one: absent leaves the rule's glob alone, which is what the CLI
 // does and what a client that only meant to edit the text expects, while an
 // empty one widens the rule to the whole repository, which is what a maintainer
 // clearing the box on the page is asking for.
@@ -339,9 +340,14 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, store.ErrMemoryNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, store.ErrAmbiguousMemory), errors.Is(err, store.ErrMemoryChanged), errors.Is(err, moderation.ErrNoEmbedder):
+	// Refusals a moderator has to act on are conflicts: an ambiguous id, a rule
+	// whose text moved under the decision, an edit with no embedder, and a
+	// decision that would widen a rule to the whole organization.
+	case errors.Is(err, store.ErrAmbiguousMemory), errors.Is(err, store.ErrMemoryChanged),
+		errors.Is(err, moderation.ErrNoEmbedder), errors.Is(err, moderation.ErrScopeWidened):
 		return http.StatusConflict
-	case errors.Is(err, moderation.ErrUnknownStatus):
+	// A status or a scope that is not one a rule can have is a bad request.
+	case errors.Is(err, moderation.ErrUnknownStatus), errors.Is(err, moderation.ErrUnknownScope):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -401,14 +407,18 @@ tr.pending { background: #fffbe6; }
 form { margin: 0; }
 textarea { width: 32rem; height: 4rem; font: inherit; }
 input[type=text] { font: inherit; width: 12rem; }
+select { font: inherit; }
 button { font: inherit; padding: .3rem .8rem; }
 .meta { color: #555; font-size: .85rem; }
 .notice { background: #eef7ee; border: 1px solid #b7d7b7; padding: .5rem 1rem; }
+.scope { display: inline-block; padding: .05rem .4rem; border-radius: .2rem; font-size: .8rem; font-weight: 600; }
+.scope.repo { background: #eef1f5; color: #333; }
+.scope.org { background: #fde9d9; color: #7a3c00; border: 1px solid #e8b98d; }
 </style>
 </head>
 <body>
 <h1>Recorded rules</h1>
-<p class="meta">Only an approved rule is retrieved into a review. Editing a rule re-embeds it, so it is found by the words you approve.</p>
+<p class="meta">Only an approved rule is retrieved into a review. Editing a rule re-embeds it, so it is found by the words you approve. A rule scoped <span class="scope org">ORG</span> applies to every repository in the organization that has nothing more specific to say; a <span class="scope repo">REPO</span> rule applies to the repository it was recorded in and outranks the organization's when both match. An organization rule can be recorded for the repository it was proposed in instead; a repository rule is not widened to the organization from here.</p>
 {{if .Decided}}<p class="notice">{{.Decided}}</p>{{end}}
 <form method="get" action="/ui/moderation">
   <label>status <input type="text" name="status" value="{{.Status}}" placeholder="PENDING"></label>
@@ -416,7 +426,7 @@ button { font: inherit; padding: .3rem .8rem; }
   <button type="submit">Filter</button>
 </form>
 <table>
-<thead><tr><th>Rule</th><th>Repository</th><th>Status</th><th>Asked by</th><th>When</th><th>Decision</th></tr></thead>
+<thead><tr><th>Rule</th><th>Applies to</th><th>Status</th><th>Asked by</th><th>When</th><th>Decision</th></tr></thead>
 <tbody>
 {{range .Rules}}
 <tr class="{{if eq .Status "PENDING"}}pending{{end}}">
@@ -425,11 +435,20 @@ button { font: inherit; padding: .3rem .8rem; }
       <input type="hidden" name="status_filter" value="{{$.Status}}">
       <textarea name="rule_text">{{.RuleText}}</textarea><br>
       <label class="meta">glob <input type="text" name="path_glob" value="{{.PathGlob}}"></label>
+      {{if eq .Scope "ORG"}}<label class="meta">scope
+        <select name="scope">
+          <option value="ORG" selected>ORG — every repository in {{.OrgName}}</option>
+          <option value="REPO">REPO — this repository, {{.RepoName}}</option>
+        </select>
+      </label>{{end}}
       <div class="meta">why: {{.Rationale}}</div>
     </form>
     <div class="meta">{{short .ID}}{{if .ReviewedBy}} · decided by {{.ReviewedBy}}{{end}}</div>
   </td>
-  <td>{{.OrgName}}/{{.RepoName}}<div class="meta">{{.Scope}}</div></td>
+  <td>
+    {{if eq .Scope "ORG"}}<span class="scope org">ORG</span> {{.OrgName}}<div class="meta">proposed in {{.RepoName}}</div>
+    {{else}}<span class="scope repo">REPO</span> {{.OrgName}}/{{.RepoName}}{{end}}
+  </td>
   <td>{{.Status}}</td>
   <td>{{.RequestedBy}}</td>
   <td class="meta">{{date .CreatedAt}}</td>

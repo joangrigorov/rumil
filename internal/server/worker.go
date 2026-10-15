@@ -244,6 +244,7 @@ func (p *Pool) rememberRequest(job *store.Job) (reviewer.RememberRequest, error)
 		Repo:              job.RepoName,
 		Number:            job.PRNumber,
 		Command:           command.Instruction,
+		OrgScoped:         command.Org,
 		CommentID:         delivery.Comment.ID,
 		InReplyToID:       delivery.Comment.InReplyToID,
 		Conversation:      job.EventType == eventIssueComment,

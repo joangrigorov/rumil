@@ -112,6 +112,13 @@ type MemoryQuery struct {
 	// empty path keeps every candidate. A NULL or empty glob applies to every
 	// path.
 	FilePath string
+	// RepoScopeBoost is added to a REPO-scoped rule's similarity when the
+	// candidates are ranked, so a project-specific rule outranks a general
+	// organization rule that came back at a similar distance
+	// (project_plan.md §6 Phase 6). The returned Similarity stays the distance
+	// the embedding actually has: the boost decides the order, not the number.
+	// Zero ranks by similarity alone.
+	RepoScopeBoost float64
 	// Limit is clamped to [MemoryLimitDefault, MemoryLimitMax].
 	Limit int
 }
@@ -121,10 +128,26 @@ const memoryColumns = `id, installation_id, org_name, coalesce(repo_name, ''), s
 	requested_by, coalesce(reviewed_by, ''), created_at, updated_at`
 
 // ProposeMemory stores a proposal and reports whether it inserted a row. A rule
-// already stored for the same installation, organization and repository that
-// sits within nearDuplicateSimilarity of this one is returned instead of a
-// second row, counting PENDING rows too so a proposal awaiting moderation is
-// not duplicated either.
+// already stored that sits within nearDuplicateSimilarity of this one is
+// returned instead of a second row, counting PENDING rows too so a proposal
+// awaiting moderation is not duplicated either.
+//
+// What a proposal is compared against is what the review of this repository
+// would already retrieve: the repository's own rules and its organization's. A
+// repository proposal that restates either of them would put the same rule in
+// front of the reviewer twice, so the existing row is what the person is
+// answered with rather than a second copy. An organization proposal is a
+// widening instead, so the only rule it can duplicate is another organization
+// rule: a repository rule says nothing about the rest of the organization, and
+// asking for the wider rule is a request to record rather than a duplicate to
+// report.
+//
+// The threshold is a similarity, not a meaning, so a repository exception
+// worded closely enough to its organization's rule to sit above it is read as
+// the same rule and not stored separately. That is the pair the ranking boost
+// exists to order, and it is the pair whose wording is a whole sentence apart:
+// at this distance the two rules say the same thing, and the confirmation tells
+// the person which rule answered them and what it reaches.
 //
 // The duplicate check and the insert are separate statements. Two proposals
 // arriving at once can therefore both pass the check; the cost is a duplicate
@@ -162,17 +185,29 @@ func (d *DB) ProposeMemory(ctx context.Context, p Proposal) (memory Memory, inse
 }
 
 func (d *DB) nearDuplicate(ctx context.Context, p Proposal) (*Memory, error) {
+	scope := p.Scope
+	if scope == "" {
+		scope = ScopeRepo
+	}
 	rows, err := d.pool.Query(ctx, `
 		SELECT `+memoryColumns+`
 		FROM memories
 		WHERE installation_id = $1
 		  AND org_name = $2
-		  AND repo_name = $3
 		  AND status IN ('PENDING', 'APPROVED')
-		  AND 1 - (embedding <=> $4::vector) > $5
-		ORDER BY embedding <=> $4::vector
+		  -- A repository proposal repeats what already applies where it was
+		  -- written, which is this repository's own rules and the
+		  -- organization's, the same candidates a search for this repository
+		  -- ranks. An organization proposal widens the rule, so only a rule
+		  -- that already reaches the organization can be the same rule.
+		  AND CASE WHEN $3::memory_scope = 'ORG'
+		           THEN scope = 'ORG'
+		           ELSE scope = 'ORG' OR repo_name = $4
+		      END
+		  AND 1 - (embedding <=> $5::vector) > $6
+		ORDER BY embedding <=> $5::vector
 		LIMIT 1`,
-		p.InstallationID, p.OrgName, p.RepoName, vectorLiteral(p.Embedding), nearDuplicateSimilarity)
+		p.InstallationID, p.OrgName, scope, p.RepoName, vectorLiteral(p.Embedding), nearDuplicateSimilarity)
 	if err != nil {
 		return nil, fmt.Errorf("looking for a near-duplicate memory: %w", err)
 	}
@@ -208,20 +243,32 @@ func (d *DB) SearchMemories(ctx context.Context, query MemoryQuery) ([]MemoryMat
 		fetch = limit * pathOverFetch
 	}
 
+	// The ranking is the query's, so the repository boost is applied before the
+	// limit rather than over a page that was already cut: an organization rule
+	// that scores highest, and a repository rule just behind it, must both be in
+	// the five the caller gets. The score is computed in the subquery because
+	// Postgres allows an output name in ORDER BY but not inside an expression.
 	rows, err := d.pool.Query(ctx, `
-		SELECT id, scope, coalesce(repo_name, ''), coalesce(path_glob, ''), rule_text,
-		       coalesce(rationale, ''), 1 - (embedding <=> $1::vector) AS similarity
-		FROM memories
-		WHERE installation_id = $2
-		  AND org_name = $3
-		  AND status = 'APPROVED'
-		  AND (
-		      (scope = 'REPO' AND repo_name = $4)
-		      OR scope = 'ORG'
-		  )
-		ORDER BY similarity DESC
+		SELECT id, scope, repo_name, path_glob, rule_text, rationale, similarity
+		FROM (
+		    SELECT id, scope, coalesce(repo_name, '') AS repo_name,
+		           coalesce(path_glob, '') AS path_glob, rule_text,
+		           coalesce(rationale, '') AS rationale,
+		           1 - (embedding <=> $1::vector) AS similarity,
+		           (1 - (embedding <=> $1::vector))
+		               + CASE WHEN scope = 'REPO' THEN $6::double precision ELSE 0::double precision END AS score
+		    FROM memories
+		    WHERE installation_id = $2
+		      AND org_name = $3
+		      AND status = 'APPROVED'
+		      AND (
+		          (scope = 'REPO' AND repo_name = $4)
+		          OR scope = 'ORG'
+		      )
+		) AS ranked
+		ORDER BY score DESC, id
 		LIMIT $5`,
-		vectorLiteral(query.Embedding), query.InstallationID, query.OrgName, query.RepoName, fetch)
+		vectorLiteral(query.Embedding), query.InstallationID, query.OrgName, query.RepoName, fetch, query.RepoScopeBoost)
 	if err != nil {
 		return nil, fmt.Errorf("searching memories: %w", err)
 	}

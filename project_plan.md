@@ -111,6 +111,9 @@ review:                                           # v0.0.2+
   guidelines_ref: "base"                          # "base" reads RUMIL.md from the PR base SHA; "head" trusts the PR branch
   resolve_threads: true                           # let the reviewer resolve its own review threads once it verifies the finding is gone
 
+memory:                                           # v0.0.6+
+  repo_scope_boost: 0.05                          # added to a REPO-scoped rule's similarity when ranking, so a project exception outranks a general organization rule that came back at a similar distance; 0 ranks by similarity alone
+
 worker:                                           # v0.0.3+
   concurrency: 4                                  # review jobs processed in parallel; an idle worker polls every 250ms
 
@@ -398,10 +401,11 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * The token is also accepted as the password of a basic credential, because a browser cannot set an `Authorization` header of its own and basic auth is what lets a maintainer use the page without a login route, a cookie, or a line of JavaScript.
    * That browser-facing credential is what makes a same-site check necessary: a browser attaches a cached basic credential to *any* request to this origin, including a form on a page somebody else wrote, and a cross-site form post is a CORS-safelisted content type that needs no preflight. So `POST /api/moderation/{id}/approve|reject` is refused with `403` unless the request's `Sec-Fetch-Site` is `same-origin`/`none` or its `Origin` is this host; a request carrying neither header is the CLI or a script, which chooses its own credential anyway. The page is also sent `X-Frame-Options: DENY` and `frame-ancestors 'none'`, since a decision taken through an overlaid frame comes *from* this origin and the header check cannot see it.
    * Serves server-rendered HTML (`html/template`) at `/ui/moderation` allowing maintainers to filter by repo/status, inline-edit `rule_text` and `path_glob`, and click **Approve** or **Reject**. The page needs no JavaScript: each action is a plain form post to `/api/moderation/{id}/approve|reject`, and the answer is a redirect back to the filtered list. HTMX was dropped deliberately — on a surface that can promote unvetted text into a review prompt, the less machinery between the operator and the decision the better, and it keeps the page working offline.
-   * `path_glob` is read as it arrived: a form that omits the field leaves the rule's scope alone, and the empty the page sends when a maintainer clears the box widens the rule to the whole repository. The CLI always omits it, so `approve` there rewrites the wording without touching the scope.
+   * `path_glob` is read as it arrived: a form that omits the field leaves the rule's glob alone, and the empty the page sends when a maintainer clears the box widens the rule to the whole repository. The CLI always omits it, so `approve` there rewrites the wording without touching the glob.
+   * The scope is narrowing-only, and `scope` is read the same way: a form that omits it leaves the row's scope alone, and the page renders the control only for a rule that is already `ORG`, so the choice is between keeping the organization's rule and recording it for the repository it was proposed in. A decision that would widen a `REPO` rule to the organization is refused (`ErrScopeWidened`, `409`), which is what keeps `T-040-04`'s badge honest about what a rule reaches.
    * `POST /api/moderation/{id}/approve|reject` answers JSON to a client that does not ask for HTML, which is the API half of `T-030-06`.
 5. **Refusals a Moderator Can Act On:**
-   * A decision is computed against a rule the moderator read, and the row can move under it. The store applies the text and its vector together and only when the decision brings the vector for the text it writes, so a decision that would replace the wording with words the row no longer holds and bring no vector for them matches no row: it is refused with `409` (`ErrMemoryChanged`) rather than pairing the words one moderator read with the vector another one computed. This is not a lost-update detector — two moderators who both edit the same rule each write their own words and their own vector, and the last one wins — it is a refusal to write a pair that does not agree with itself.
+   * A decision is computed against a rule the moderator read, and the row can move under it. The store applies the text and its vector together and only when the decision brings the vector for the text it writes, so a decision that would replace the wording with words the row no longer holds and bring no vector for them matches no row: it is refused with `409` (`ErrMemoryChanged`) rather than pairing the words one moderator read with the vector another one computed. This is not a lost-update detector — two moderators who both edit the same rule each write their own words and their own vector, and the last one wins — it is a refusal to write a pair that does not agree with itself. The scope is the exception: a decision carries the scope it was computed against, so a moderator whose read is overtaken by another's narrowing is refused rather than left widening a rule nobody asked to widen.
    * An ambiguous reference — a short id two rules share — is `409`, and an unknown one is `404`; a status filter that names no status is `400` with the three statuses named. None of these is a `500`, which would say the surface is broken rather than the request. A refusal is answered in the shape the caller asked for — JSON to a client that did not ask for the page, text to a browser — so a script never has to parse a plain-text error to find out what happened, and a decision refused because the rule moved is logged, since it means somebody else is working the same rule.
    * The decision endpoints read `application/x-www-form-urlencoded` and refuse anything else with `415`. `ParseForm` ignores a multipart body, so a caller that sent one would have its rule text silently dropped and the rule approved as it happened to be stored, which is a decision nobody made. An empty body is the "approve as it was proposed" case, which the CLI has too.
    * An `Origin` naming no host — the `null` a sandboxed frame or a `data:` URL sends — is refused rather than compared, and the host comparison includes the port. The reverse proxy in front of the surface therefore has to pass `Host` through unchanged.
@@ -425,7 +429,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 #### Scope & Deliverables
 1. Extend the comment command parser (`internal/server/commands.go`) to recognize organization-scoped commands:
    * `@rumil remember --org <instruction>`
-   * `@rumil remember [org] <instruction>`
+   * `@rumil remember org <instruction>`, the shorthand — earlier drafts wrote it as `[org]`, which was notation for an optional token, so the token itself is the word. `--org` is the unambiguous spelling, because an instruction that happens to open with the word "org" is read as the marker; a marker with nothing behind it (`@rumil remember org`) is the whole instruction, so nothing is recorded with an empty rule.
 2. Update `propose_memory` to accept `scope = 'ORG'` when triggered by an org-scoped command.
    * Store `org_name` (the GitHub organization login), set `scope = 'ORG'`, and keep `repo_name` as the origin reference for auditability.
 3. Update `search_memory` hybrid query (`internal/store/memories.go`) to retrieve both repository-specific and organization-wide approved memories in a single query, applying a configurable slight ranking boost (`+0.05` similarity weight) to `REPO`-scoped rules over `ORG`-scoped rules when both match so project-specific exceptions override general org defaults:
@@ -444,6 +448,10 @@ WHERE installation_id = $2
 ORDER BY score DESC
 LIMIT $5;
 ```
+
+The weight is configuration (`memory.repo_scope_boost`, §3): the default is `0.05`, and a team that wants the ranking to be the similarity alone sets it to `0`. The score decides the order only; the number a caller reads back stays the similarity.
+
+4. Give the moderation surface the scope (`internal/moderation`, `internal/server/mod_ui.go`, `rumil mod approve`): the list and the page badge a rule `REPO` or `ORG`, an `ORG` rule names the organization it reaches and the repository it was proposed in, and a decision can narrow an `ORG` proposal to that repository before approving it.
 
 #### Mandatory Verification Matrix — `v0.0.6`
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 
@@ -178,9 +179,31 @@ func TestMemorySpecsPinTheToolSurface(t *testing.T) {
 		}
 	}
 	proposeSchema := string(propose[0].Schema)
-	for _, want := range []string{"rule_text", "rationale", "path_glob", "scope", "REPO", "ORG", `"required":["rule_text","rationale"]`} {
+	for _, want := range []string{"rule_text", "rationale", "path_glob", "scope", "REPO", `"required":["rule_text","rationale"]`} {
 		if !strings.Contains(proposeSchema, want) {
 			t.Errorf("propose_memory schema lost %s: %s", want, proposeSchema)
+		}
+	}
+	// A command that did not ask for an organization rule is not offered that
+	// scope, so the tool cannot be talked into widening a rule's reach.
+	if strings.Contains(proposeSchema, "ORG") {
+		t.Errorf("a repository session was offered ORG: %s", proposeSchema)
+	}
+
+	orgTools := mcpservers.NewMemoryTools(nil, nil, mcpservers.MemorySession{OrgScoped: true}, memoryLogger())
+	orgSpec := orgTools.ProposeSpecs()[0]
+	orgSchema := string(orgSpec.Schema)
+	// The default the schema and the description name is the one the handler
+	// applies to an unstated scope, so the model is not told one thing and
+	// measured against another.
+	for _, want := range []string{"REPO", "ORG", "ORG, the default for this command", `"required":["rule_text","rationale"]`} {
+		if !strings.Contains(orgSchema, want) {
+			t.Errorf("an organization session's schema lost %s: %s", want, orgSchema)
+		}
+	}
+	for _, want := range []string{"ORG, the default", "pass REPO"} {
+		if !strings.Contains(orgSpec.Description, want) {
+			t.Errorf("an organization session's description lost %q: %s", want, orgSpec.Description)
 		}
 	}
 }
@@ -411,22 +434,144 @@ func TestSearchMemoryKeepsOtherTenantsRulesAway(t *testing.T) {
 	}
 }
 
-// Organization-wide rules arrive with v0.0.6. Until then the row is the
-// repository's, and the result says so.
-func TestProposeMemoryRecordsRepoScopeWhenOrgIsAsked(t *testing.T) {
+// A rule reaches the whole organization only when the command asked for it. A
+// repository command that gets the model to say ORG is refused rather than
+// silently narrowed: recording it for the repository would look like success
+// while storing something the person did not ask for.
+func TestProposeMemoryRefusesOrgScopeWithoutAnOrgCommand(t *testing.T) {
 	db := testMemoryStore(t)
 	tools := mcpservers.NewMemoryTools(db, newFakeEmbedder(), memoryTenant("org-scope"), memoryLogger())
 
-	out := decode[proposeResult](t, mustCall(t, tools.ProposeSpecs(), "propose_memory", map[string]any{
+	_, err := callTool(t, tools.ProposeSpecs(), "propose_memory", map[string]any{
 		"rule_text": "Migrations are always additive",
 		"rationale": "the team agreed in review",
 		"scope":     "ORG",
-	}))
-	if out.Scope != store.ScopeRepo {
-		t.Errorf("scope = %s, want %s until org memory ships", out.Scope, store.ScopeRepo)
+	})
+	if err == nil {
+		t.Fatal("a repository command recorded an organization-wide rule")
 	}
-	if !strings.Contains(out.Note, "not available yet") {
-		t.Errorf("note = %q, want it to say the rule was recorded for the repository", out.Note)
+	if !strings.Contains(err.Error(), "needs a command that asked for an organization rule") {
+		t.Errorf("error = %v, want it to name what ORG needs", err)
+	}
+}
+
+// T-040-01 (store half): an org-scoped command records a rule for the
+// organization, and the scope it asked for is what the row carries. An unstated
+// scope in an org command means the organization, which is what the tool
+// description and the schema say it means.
+func TestProposeMemoryRecordsOrgScopeForAnOrgCommand(t *testing.T) {
+	db := testMemoryStore(t)
+
+	for _, tc := range []struct {
+		name   string
+		tenant string
+		scope  any
+	}{
+		{"the model states the scope", "org-stated", "ORG"},
+		{"the model leaves the scope out", "org-default", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each case gets an organization of its own. The fake embedder
+			// numbers the texts it sees from zero, so two cases in one tenant
+			// would embed to the same vector and the second would be answered
+			// with the first row rather than stored, which would make the
+			// assertion below a reading of the other case's row.
+			session := memoryTenant("org-scope")
+			session.OrgName = "acme-" + tc.tenant
+			session.OrgScoped = true
+			tools := mcpservers.NewMemoryTools(db, newFakeEmbedder(), session, memoryLogger())
+
+			args := map[string]any{
+				"rule_text": "All Go services in this organization log with log/slog and never with logrus",
+				"rationale": "the team agreed in review",
+			}
+			if tc.scope != nil {
+				args["scope"] = tc.scope
+			}
+			out := decode[proposeResult](t, mustCall(t, tools.ProposeSpecs(), "propose_memory", args))
+			if !out.Created {
+				t.Fatal("the rule was answered with an existing row rather than stored")
+			}
+			if out.Scope != store.ScopeOrg {
+				t.Errorf("scope = %s, want %s for a command that asked for the organization", out.Scope, store.ScopeOrg)
+			}
+			if want := session.OrgName + "/org-scope"; out.Repo != want {
+				t.Errorf("repo = %q, want %q, the origin repository kept for auditability", out.Repo, want)
+			}
+		})
+	}
+}
+
+// memoryVector returns a unit vector at cosine cos from the fake embedder's
+// first answer (BasisVector(0)), leaning on axis, so a rule can be seeded at a
+// chosen distance from a search query without looking like another rule.
+func memoryVector(cos float64, axis int) []float32 {
+	vector := make([]float32, config.EmbeddingDimensions)
+	vector[0] = float32(cos)
+	vector[axis] = float32(math.Sqrt(1 - cos*cos))
+	return vector
+}
+
+// seedMemoryRule stores an approved rule with the vector the test chooses.
+func seedMemoryRule(t *testing.T, db *store.DB, rule, scope, repo string, vector []float32) {
+	t.Helper()
+
+	if _, _, err := db.ProposeMemory(context.Background(), store.Proposal{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       repo,
+		Scope:          scope,
+		RuleText:       rule,
+		Rationale:      "the team agreed in review",
+		SourcePR:       42,
+		SourceComment:  "https://github.com/acme/" + repo + "/pull/42#discussion_r1",
+		RequestedBy:    "octocat",
+		Approved:       true,
+		Embedding:      vector,
+	}); err != nil {
+		t.Fatalf("seeding %q: %v", rule, err)
+	}
+}
+
+// T-040-02 from the tool's side: the boosting weight the session carries
+// reaches search_memory, so a rule the session looks up mid-review is ranked
+// the way the pre-retrieval was.
+func TestSearchMemoryRanksWithTheSessionsBoost(t *testing.T) {
+	db := testMemoryStore(t)
+
+	const (
+		orgRule  = "All Go services in the organization log with log/slog"
+		repoRule = "legacy-worker keeps logrus and is exempt from the migration"
+	)
+	// The two rules sit at 0.60 and 0.57 from the query the fake embedder
+	// answers with, on different axes so neither is a duplicate of the other.
+	seedMemoryRule(t, db, orgRule, store.ScopeOrg, "payments", memoryVector(0.60, 1))
+	seedMemoryRule(t, db, repoRule, store.ScopeRepo, "legacy-worker", memoryVector(0.57, 2))
+
+	for _, tc := range []struct {
+		name  string
+		boost float64
+		want  string
+	}{
+		{"the session's weight lifts the repository's rule", config.DefaultRepoScopeBoost, repoRule},
+		{"no weight leaves the ranking to the distance", 0, orgRule},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := memoryTenant("legacy-worker")
+			session.RepoScopeBoost = tc.boost
+			tools := mcpservers.NewMemoryTools(db, newFakeEmbedder(), session, memoryLogger())
+
+			out := decode[searchResult](t, mustCall(t, tools.SearchSpecs(), "search_memory", map[string]any{"query": "logging"}))
+			if out.Count != 2 {
+				t.Fatalf("search returned %d rules, want both candidates: %+v", out.Count, out.Rules)
+			}
+			if out.Rules[0].Rule != tc.want {
+				t.Errorf("the search leads with %q, want %q", out.Rules[0].Rule, tc.want)
+			}
+			if out.Rules[0].Scope == store.ScopeRepo && out.Rules[0].Repo != "acme/legacy-worker" {
+				t.Errorf("a repository rule reports the repository it applies to as %q", out.Rules[0].Repo)
+			}
+		})
 	}
 }
 
