@@ -3,17 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/joangrigorov/rumil/internal/config"
+	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
@@ -160,6 +163,39 @@ func runModCmd(t *testing.T, configPath string, args ...string) (string, error) 
 	err := root.Execute()
 	return out.String(), err
 }
+
+// modColumn reads one column of the first rule a `mod list` printed, by the
+// position its header names it in. A value is checked where the table put it,
+// so a column that printed another column's value is caught.
+//
+// The cells are split on the runs of two or more spaces tabwriter pads with,
+// because a cell of its own can hold a single space (an organization rule's
+// "acme (proposed in payments)", for one).
+func modColumn(t *testing.T, listing, header string) string {
+	t.Helper()
+
+	rows := strings.Split(strings.TrimRight(listing, "\n"), "\n")
+	if len(rows) < 2 {
+		t.Fatalf("the listing has no rule to read a %s from:\n%s", header, listing)
+	}
+	cells := func(row string) []string {
+		return tabwriterCell.Split(strings.TrimSpace(row), -1)
+	}
+	names, values := cells(rows[0]), cells(rows[1])
+	for i, name := range names {
+		if name == header {
+			if i >= len(values) {
+				t.Fatalf("the rule row is short of the %s column: %q", header, rows[1])
+			}
+			return values[i]
+		}
+	}
+	t.Fatalf("the header does not carry a %s column: %q", header, rows[0])
+	return ""
+}
+
+// tabwriterCell is the boundary between two columns of a tabwriter table.
+var tabwriterCell = regexp.MustCompile(`\s{2,}`)
 
 // The list shows what is waiting, and nothing a maintainer has already decided.
 func TestModListShowsWhatIsWaiting(t *testing.T) {
@@ -419,5 +455,77 @@ func TestWarnAboutModeration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// §10 item 5 (CLI half): the approval gate is where a rule is raised above the
+// repository's own guidelines, the list shows which rules carry that authority,
+// and the promotion is offered for one repository only.
+func TestModPromotesAboveTheGuidelines(t *testing.T) {
+	dsn := modDatabase(t)
+	llm := testutil.NewFakeLLM(t)
+	configPath := modConfig(t, dsn, llm.URL())
+
+	repo := seedModerationRule(t, dsn, "This service keeps its own hand-rolled clock skew allowance")
+	org := seedScopedModerationRule(t, dsn, "Every service in the organization logs with log/slog", store.ScopeOrg)
+
+	out, err := runModCmd(t, configPath, "list")
+	if err != nil {
+		t.Fatalf("list returned error: %v (output: %s)", err, out)
+	}
+	header, _, _ := strings.Cut(out, "\n")
+	if !strings.Contains(header, "AUTHORITY") {
+		t.Errorf("the list header does not name the authority column: %q", header)
+	}
+	// The column a value lands in is what the header promises, so both are
+	// checked by position rather than by a substring that any other column could
+	// have supplied.
+	if got := modColumn(t, out, "AUTHORITY"); got != store.AuthorityContext {
+		t.Errorf("the AUTHORITY column reads %q for a rule nobody promoted, want %q", got, store.AuthorityContext)
+	}
+
+	// An authority that is not one a rule can have is answered with the two that
+	// are.
+	if out, err = runModCmd(t, configPath, "approve", repo.ID[:8], "--authority", "ABSOLUTE"); err == nil {
+		t.Fatalf("an unknown authority was accepted: %s", out)
+	} else if !errors.Is(err, moderation.ErrUnknownAuthority) || !strings.Contains(err.Error(), "authority takes context or directive") {
+		t.Errorf("error = %v, want %v naming the two authorities", err, moderation.ErrUnknownAuthority)
+	}
+
+	out, err = runModCmd(t, configPath, "approve", repo.ID[:8], "--authority", "directive", "--moderator", "octocat")
+	if err != nil {
+		t.Fatalf("approve --authority returned error: %v (output: %s)", err, out)
+	}
+	if !strings.Contains(out, store.AuthorityDirective) {
+		t.Errorf("the answer does not name the authority it approved with: %s", out)
+	}
+	stored := readModerationRule(t, dsn, repo.ID)
+	if stored.Authority != store.AuthorityDirective || stored.Status != store.MemoryApproved {
+		t.Errorf("row is %+v, want an approved %s rule", stored, store.AuthorityDirective)
+	}
+	if listing, err := runModCmd(t, configPath, "list", "--status", "approved"); err != nil {
+		t.Fatalf("list --status returned error: %v", err)
+	} else if got := modColumn(t, listing, "AUTHORITY"); got != store.AuthorityDirective {
+		t.Errorf("the AUTHORITY column reads %q for the promoted rule, want %q", got, store.AuthorityDirective)
+	}
+
+	// A promotion is offered for a repository rule: one that still reaches the
+	// organization is refused until it is narrowed.
+	if out, err = runModCmd(t, configPath, "approve", org.ID[:8], "--authority", "DIRECTIVE"); err == nil {
+		t.Fatalf("an organization-wide rule was promoted: %s", out)
+	} else if !errors.Is(err, moderation.ErrAuthorityWidened) || !strings.Contains(err.Error(), "a directive applies to one repository") {
+		t.Errorf("error = %v, want %v naming the one-repository rule", err, moderation.ErrAuthorityWidened)
+	}
+	if stored := readModerationRule(t, dsn, org.ID); stored.Authority != store.AuthorityContext || stored.Status != store.MemoryPending {
+		t.Errorf("a refused promotion changed the row: %+v", stored)
+	}
+
+	// Narrowing it in the same command is the decision that lands.
+	if out, err = runModCmd(t, configPath, "approve", org.ID[:8], "--scope", "REPO", "--authority", "DIRECTIVE"); err != nil {
+		t.Fatalf("approve --scope REPO --authority returned error: %v (output: %s)", err, out)
+	}
+	stored = readModerationRule(t, dsn, org.ID)
+	if stored.Scope != store.ScopeRepo || stored.Authority != store.AuthorityDirective {
+		t.Errorf("row is %+v, want a promoted %s rule", stored, store.ScopeRepo)
 	}
 }

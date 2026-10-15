@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/joangrigorov/rumil/internal/testutil"
@@ -69,6 +70,42 @@ func TestMigrateCreatesTheSchema(t *testing.T) {
 	}
 	if embeddingType != "vector(1536)" {
 		t.Errorf("memories.embedding is %s, want vector(1536)", embeddingType)
+	}
+
+	// The authority a rule carries arrives in a later, additive migration
+	// (§4, §10 item 5). What matters is that it is not nullable and that a row
+	// which does not name it reads back as recorded context, which is what makes
+	// the migration safe on an installation that already holds rules.
+	var authorityType, authorityDefault, nullable string
+	err = db.pool.QueryRow(context.Background(), `
+		SELECT udt_name, coalesce(column_default, ''), is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'memories' AND column_name = 'authority'`).
+		Scan(&authorityType, &authorityDefault, &nullable)
+	if err != nil {
+		t.Fatalf("reading the authority column: %v", err)
+	}
+	if authorityType != "memory_authority" {
+		t.Errorf("memories.authority is %s, want memory_authority", authorityType)
+	}
+	if !strings.Contains(authorityDefault, "CONTEXT") {
+		t.Errorf("memories.authority defaults to %q, want CONTEXT", authorityDefault)
+	}
+	if nullable != "NO" {
+		t.Error("memories.authority is nullable, want every rule to carry an authority")
+	}
+
+	// A promotion reaches one repository, and the table refuses the pair at rest
+	// rather than leaving it to the statement that writes it.
+	var constraint string
+	err = db.pool.QueryRow(context.Background(), `
+		SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		WHERE conrelid = 'memories'::regclass AND conname = 'memories_directive_is_a_repository_rule'`).Scan(&constraint)
+	if err != nil {
+		t.Fatalf("reading the promotion constraint: %v", err)
+	}
+	if !strings.Contains(constraint, "DIRECTIVE") || !strings.Contains(constraint, "REPO") {
+		t.Errorf("the promotion constraint is %q, want it to refuse DIRECTIVE on anything but REPO", constraint)
 	}
 }
 

@@ -119,6 +119,7 @@ type searchResult struct {
 		ID         string  `json:"id"`
 		Scope      string  `json:"scope"`
 		Repo       string  `json:"repo"`
+		Authority  string  `json:"authority"`
 		PathGlob   string  `json:"path_glob"`
 		Rule       string  `json:"rule"`
 		Rationale  string  `json:"rationale"`
@@ -146,6 +147,14 @@ func TestMemorySpecsPinTheToolSurface(t *testing.T) {
 	search := tools.SearchSpecs()
 	if len(search) != 1 || search[0].Name != "search_memory" {
 		t.Fatalf("search tool set is %+v, want only search_memory", search)
+	}
+	// The description is what the model reads before it decides to look a rule
+	// up, so it names both authorities: a directive is the one rule the
+	// repository's own guidelines do not outrank.
+	for _, want := range []string{"DIRECTIVE", "CONTEXT", "repository guidelines"} {
+		if !strings.Contains(search[0].Description, want) {
+			t.Errorf("search_memory's description does not name %q:\n%s", want, search[0].Description)
+		}
 	}
 	propose := tools.ProposeSpecs()
 	if len(propose) != 1 || propose[0].Name != "propose_memory" {
@@ -394,6 +403,69 @@ func TestSearchMemoryReturnsApprovedRules(t *testing.T) {
 	}
 	if found.Similarity < 0.99 {
 		t.Errorf("similarity = %v, want an exact match for the same text", found.Similarity)
+	}
+	// The authority is reported for every rule, so a session reading a match
+	// knows whether the repository's own guidelines still outrank it. A rule
+	// nobody promoted is context.
+	if found.Authority != store.AuthorityContext {
+		t.Errorf("authority = %q, want %q for a rule no moderator promoted", found.Authority, store.AuthorityContext)
+	}
+}
+
+// §10 item 5 from the tool's side: a rule a maintainer promoted is reported as a
+// directive and is ranked first, so a session looking a rule up mid-review is told
+// the same thing the pre-retrieval block told it.
+func TestSearchMemoryReportsAPromotedRuleAsADirective(t *testing.T) {
+	db := testMemoryStore(t)
+	ctx := context.Background()
+	embedder := newFakeEmbedder()
+	session := memoryTenant("promoted")
+
+	seedMemoryRule(t, db, "The validator tolerates 60s of clock skew", store.ScopeRepo, session.RepoName,
+		memoryVector(0.80, 1))
+	seedMemoryRule(t, db, "This repository pins its own clock source", store.ScopeRepo, session.RepoName,
+		memoryVector(0.60, 2))
+
+	var promoted store.Memory
+	memories, err := db.ListMemories(ctx, store.MemoryFilter{
+		InstallationID: session.InstallationID,
+		OrgName:        session.OrgName,
+		RepoName:       session.RepoName,
+	})
+	if err != nil {
+		t.Fatalf("ListMemories returned error: %v", err)
+	}
+	for _, memory := range memories {
+		if memory.RuleText == "This repository pins its own clock source" {
+			promoted = memory
+		}
+	}
+	if promoted.ID == "" {
+		t.Fatalf("the rule to promote was not seeded: %+v", memories)
+	}
+	if _, err := db.ApproveMemory(ctx, session.InstallationID, promoted.ID, store.MemoryDecision{
+		Authority: store.AuthorityDirective, ReviewedBy: "octocat",
+	}); err != nil {
+		t.Fatalf("ApproveMemory returned error: %v", err)
+	}
+
+	tools := mcpservers.NewMemoryTools(db, embedder, session, memoryLogger())
+	out := decode[searchResult](t, mustCall(t, tools.SearchSpecs(), "search_memory", map[string]any{
+		"query": "clock skew",
+	}))
+
+	if out.Count != 2 {
+		t.Fatalf("search returned %d rules, want both: %+v", out.Count, out.Rules)
+	}
+	if out.Rules[0].ID != promoted.ID {
+		t.Errorf("the ranking leads with %+v (similarities %v, %v), want the directive",
+			out.Rules[0], out.Rules[0].Similarity, out.Rules[1].Similarity)
+	}
+	if out.Rules[0].Authority != store.AuthorityDirective {
+		t.Errorf("the directive reports authority %q, want %q", out.Rules[0].Authority, store.AuthorityDirective)
+	}
+	if out.Rules[1].Authority != store.AuthorityContext {
+		t.Errorf("the rule behind it reports authority %q, want %q", out.Rules[1].Authority, store.AuthorityContext)
 	}
 }
 

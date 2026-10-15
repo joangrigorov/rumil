@@ -206,6 +206,7 @@ func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
 		RuleText:  r.PostFormValue("rule_text"),
 		PathGlob:  pathGlobOf(r),
 		Scope:     r.PostFormValue("scope"),
+		Authority: r.PostFormValue("authority"),
 		Moderator: moderatorOf(r),
 	})
 	if err != nil {
@@ -288,10 +289,12 @@ func (m *ModerationUI) decide(w http.ResponseWriter, r *http.Request, memory sto
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"id":       memory.ID,
-		"short_id": memory.ShortID(),
-		"status":   memory.Status,
-		"rule":     memory.RuleText,
+		"id":        memory.ID,
+		"short_id":  memory.ShortID(),
+		"status":    memory.Status,
+		"scope":     memory.Scope,
+		"authority": memory.Authority,
+		"rule":      memory.RuleText,
 	}); err != nil {
 		m.logger.Error("writing the moderation result failed", "error", err)
 	}
@@ -341,13 +344,17 @@ func statusFor(err error) int {
 	case errors.Is(err, store.ErrMemoryNotFound):
 		return http.StatusNotFound
 	// Refusals a moderator has to act on are conflicts: an ambiguous id, a rule
-	// whose text moved under the decision, an edit with no embedder, and a
-	// decision that would widen a rule to the whole organization.
+	// whose text moved under the decision, an edit with no embedder, a decision
+	// that would widen a rule to the whole organization, and a promotion of a
+	// rule that still reaches it.
 	case errors.Is(err, store.ErrAmbiguousMemory), errors.Is(err, store.ErrMemoryChanged),
-		errors.Is(err, moderation.ErrNoEmbedder), errors.Is(err, moderation.ErrScopeWidened):
+		errors.Is(err, moderation.ErrNoEmbedder), errors.Is(err, moderation.ErrScopeWidened),
+		errors.Is(err, moderation.ErrAuthorityWidened):
 		return http.StatusConflict
-	// A status or a scope that is not one a rule can have is a bad request.
-	case errors.Is(err, moderation.ErrUnknownStatus), errors.Is(err, moderation.ErrUnknownScope):
+	// A status, a scope or an authority that is not one a rule can have is a bad
+	// request.
+	case errors.Is(err, moderation.ErrUnknownStatus), errors.Is(err, moderation.ErrUnknownScope),
+		errors.Is(err, moderation.ErrUnknownAuthority):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
@@ -414,11 +421,14 @@ button { font: inherit; padding: .3rem .8rem; }
 .scope { display: inline-block; padding: .05rem .4rem; border-radius: .2rem; font-size: .8rem; font-weight: 600; }
 .scope.repo { background: #eef1f5; color: #333; }
 .scope.org { background: #fde9d9; color: #7a3c00; border: 1px solid #e8b98d; }
+.authority { display: inline-block; padding: .05rem .4rem; border-radius: .2rem; font-size: .8rem; font-weight: 600; }
+.authority.directive { background: #f3e0f5; color: #6b1a7a; border: 1px solid #d6a9de; }
 </style>
 </head>
 <body>
 <h1>Recorded rules</h1>
 <p class="meta">Only an approved rule is retrieved into a review. Editing a rule re-embeds it, so it is found by the words you approve. A rule scoped <span class="scope org">ORG</span> applies to every repository in the organization that has nothing more specific to say; a <span class="scope repo">REPO</span> rule applies to the repository it was recorded in and outranks the organization's when both match. An organization rule can be recorded for the repository it was proposed in instead; a repository rule is not widened to the organization from here.</p>
+<p class="meta">A rule is recorded context, and the repository's own <code>RUMIL.md</code> outranks it. Promoting one to <span class="authority directive">DIRECTIVE</span> puts it above that file for the case it names, and it is the reviewer that has to say so when the two conflict. A directive applies to one repository, so an organization-wide rule is recorded for a repository first.</p>
 {{if .Decided}}<p class="notice">{{.Decided}}</p>{{end}}
 <form method="get" action="/ui/moderation">
   <label>status <input type="text" name="status" value="{{.Status}}" placeholder="PENDING"></label>
@@ -441,6 +451,15 @@ button { font: inherit; padding: .3rem .8rem; }
           <option value="REPO">REPO — this repository, {{.RepoName}}</option>
         </select>
       </label>{{end}}
+      <label class="meta">authority
+        <select name="authority">
+          {{if eq .Authority "DIRECTIVE"}}<option value="DIRECTIVE" selected>DIRECTIVE — outranks the guidelines</option>
+          <option value="CONTEXT">CONTEXT — the guidelines outrank it</option>
+          {{else}}<option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>
+          <option value="DIRECTIVE">DIRECTIVE — outranks the guidelines{{if eq .Scope "ORG"}}; needs REPO scope{{end}}</option>
+          {{end}}
+        </select>
+      </label>
       <div class="meta">why: {{.Rationale}}</div>
     </form>
     <div class="meta">{{short .ID}}{{if .ReviewedBy}} · decided by {{.ReviewedBy}}{{end}}</div>
@@ -448,6 +467,7 @@ button { font: inherit; padding: .3rem .8rem; }
   <td>
     {{if eq .Scope "ORG"}}<span class="scope org">ORG</span> {{.OrgName}}<div class="meta">proposed in {{.RepoName}}</div>
     {{else}}<span class="scope repo">REPO</span> {{.OrgName}}/{{.RepoName}}{{end}}
+    {{if eq .Authority "DIRECTIVE"}}<div><span class="authority directive">DIRECTIVE</span> above the guidelines</div>{{end}}
   </td>
   <td>{{.Status}}</td>
   <td>{{.RequestedBy}}</td>

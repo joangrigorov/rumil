@@ -44,3 +44,43 @@ func TestNormalizeStatusAcceptsTheThreeAndNothingElse(t *testing.T) {
 		})
 	}
 }
+
+// The authority a decision carries is normalized in the same one place the
+// status and the scope are, so a surface cannot hand the statement a value the
+// enum will refuse.
+func TestNormalizeAuthorityAcceptsTheTwoAndNothingElse(t *testing.T) {
+	cases := []struct {
+		name      string
+		authority string
+		want      string
+	}{
+		{"nothing asked for", "", ""},
+		{"as the enum spells it", "CONTEXT", "CONTEXT"},
+		{"as a moderator types it", "directive", "DIRECTIVE"},
+		{"with padding", "  Context  ", "CONTEXT"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeAuthority(tc.authority)
+			if err != nil {
+				t.Fatalf("normalizeAuthority(%q) returned error: %v", tc.authority, err)
+			}
+			if got != tc.want {
+				t.Errorf("normalizeAuthority(%q) = %q, want %q", tc.authority, got, tc.want)
+			}
+		})
+	}
+
+	for _, authority := range []string{"absolute", "directives", "CONTEXT,DIRECTIVE", "repo"} {
+		t.Run("refused: "+authority, func(t *testing.T) {
+			got, err := normalizeAuthority(authority)
+			if !errors.Is(err, ErrUnknownAuthority) {
+				t.Fatalf("normalizeAuthority(%q) returned %v, want %v", authority, err, ErrUnknownAuthority)
+			}
+			if got != "" {
+				t.Errorf("a refused authority came back as %q", got)
+			}
+		})
+	}
+}

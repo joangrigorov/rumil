@@ -36,6 +36,18 @@ var ErrUnknownStatus = errors.New("status takes pending, approved or rejected")
 // ErrUnknownScope reports a scope that is not one a rule can have.
 var ErrUnknownScope = errors.New("scope takes REPO or ORG")
 
+// ErrUnknownAuthority reports an authority that is not one a rule can have.
+var ErrUnknownAuthority = errors.New("authority takes context or directive")
+
+// ErrAuthorityWidened reports a promotion of a rule that reaches the whole
+// organization. Raising a rule above the repository's own guidelines is the one
+// decision here that reaches past the repository the rule was recorded in, so
+// it is offered for a repository rule the way the scope is narrowed: a rule that
+// reaches every repository in the organization is recorded for one of them
+// first, which is where a maintainer can point at the policy it overrides
+// (project_plan.md §10 item 5).
+var ErrAuthorityWidened = errors.New("a directive applies to one repository: narrow the rule to a repository before promoting it")
+
 // ErrScopeWidened reports a decision that would widen a repository rule to the
 // whole organization. Moderation narrows: an organization-wide proposal can be
 // recorded for the repository it was proposed in, and a rule that reaches one
@@ -96,14 +108,20 @@ type Decision struct {
 	// narrows an organization-wide proposal to the repository it was proposed
 	// from. Empty keeps the scope the proposal asked for.
 	Scope string
+	// Authority replaces the stored authority when it is set. DIRECTIVE is how a
+	// maintainer promotes one rule above the repository's own guidelines, which
+	// is the decision the approval gate exists to record; CONTEXT demotes a rule
+	// back to recorded context. Empty keeps the authority the rule has, so
+	// approving a rule as it stands never changes it.
+	Authority string
 	// Moderator is recorded as reviewed_by.
 	Moderator string
 }
 
-// Approve keeps a rule, with the wording and the glob the moderator approved.
-// An edit is re-embedded before the row is written, so the rule is found by the
-// words that were approved rather than by the words that were proposed
-// (T-030-03).
+// Approve keeps a rule, with the wording, the glob, the scope and the authority
+// the moderator decided. An edit is re-embedded before the row is written, so the
+// rule is found by the words that were approved rather than by the words that
+// were proposed (T-030-03).
 func (s *Service) Approve(ctx context.Context, id string, decision Decision) (store.Memory, error) {
 	current, err := s.store.MemoryByID(ctx, s.installationID, id)
 	if err != nil {
@@ -123,6 +141,21 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 			ErrScopeWidened, current.ShortID(), current.OrgName, current.RepoName)
 	}
 
+	authority, err := normalizeAuthority(decision.Authority)
+	if err != nil {
+		return store.Memory{}, err
+	}
+	// A promotion is offered for a repository rule only. The rule that ends up
+	// DIRECTIVE is the one this decision leaves behind, so a decision that
+	// narrows an organization rule and promotes it in the same breath is the
+	// decision that is allowed, and one that promotes a rule still reaching the
+	// organization is refused.
+	if resultingAuthority(authority, current) == store.AuthorityDirective &&
+		resultingScope(scope, current) != store.ScopeRepo {
+		return store.Memory{}, fmt.Errorf("%w: %s reaches %s",
+			ErrAuthorityWidened, current.ShortID(), current.OrgName)
+	}
+
 	text := strings.TrimSpace(decision.RuleText)
 	edited := text != "" && text != current.RuleText
 	var embedding []float32
@@ -140,6 +173,7 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 		RuleText:   text,
 		PathGlob:   decision.PathGlob,
 		Scope:      scope,
+		Authority:  authority,
 		Embedding:  embedding,
 		ReviewedBy: decision.Moderator,
 	})
@@ -151,11 +185,32 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 		"short_id", approved.ShortID(),
 		"repo", approved.OrgName+"/"+approved.RepoName,
 		"scope", approved.Scope,
+		"authority", approved.Authority,
 		"moderator", decision.Moderator,
 		"edited", edited,
 		"path_glob", approved.PathGlob,
 	)
 	return approved, nil
+}
+
+// resultingScope is the scope a decision leaves behind: the one it names, or the
+// rule's own when it names none. It is what the store's statement computes with
+// coalesce, said once here so the refusal above is about the same rule the write
+// would produce.
+func resultingScope(scope string, current store.Memory) string {
+	if scope != "" {
+		return scope
+	}
+	return current.Scope
+}
+
+// resultingAuthority is the authority a decision leaves behind, read the same
+// way resultingScope reads the scope.
+func resultingAuthority(authority string, current store.Memory) string {
+	if authority != "" {
+		return authority
+	}
+	return current.Authority
 }
 
 // normalizeScope turns a moderator's scope choice into one of the two a rule can
@@ -166,6 +221,19 @@ func normalizeScope(scope string) (string, error) {
 		return scope, nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnknownScope, scope)
+	}
+}
+
+// normalizeAuthority turns a moderator's authority choice into one of the two a
+// rule can have, or into no change at all when they did not pick one. The values
+// are spelled the way the enum stores them, so the case and the surrounding
+// whitespace a moderator types are normalized here.
+func normalizeAuthority(authority string) (string, error) {
+	switch authority = strings.ToUpper(strings.TrimSpace(authority)); authority {
+	case "", store.AuthorityContext, store.AuthorityDirective:
+		return authority, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownAuthority, authority)
 	}
 }
 

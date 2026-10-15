@@ -622,3 +622,102 @@ func TestGlobMatch(t *testing.T) {
 		}
 	}
 }
+
+// §10 item 5: a directive is ranked above every other candidate, so a rule a
+// maintainer promoted above the repository's guidelines is never the rule a
+// limit leaves out. The order is the only thing the authority changes: the
+// similarity a caller reads back is still the distance.
+func TestSearchMemoriesRanksADirectiveAboveACloserRule(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// The two rules sit at cosine 0.80 and 0.60 from the query, on different
+	// axes so they are nothing like each other. The closer one is recorded
+	// context, the further one a maintainer promoted.
+	closer := testProposal("The validator tolerates 60s of clock skew", embeddingLike(0.80, 1))
+	closer.PathGlob, closer.Approved = "", true
+	if _, _, err := db.ProposeMemory(ctx, closer); err != nil {
+		t.Fatalf("ProposeMemory(closer rule) returned error: %v", err)
+	}
+
+	further := testProposal("This repository pins its own clock source rather than the platform default", embeddingLike(0.60, 2))
+	further.PathGlob, further.Approved = "", true
+	stored, _, err := db.ProposeMemory(ctx, further)
+	if err != nil {
+		t.Fatalf("ProposeMemory(further rule) returned error: %v", err)
+	}
+	if _, err := db.ApproveMemory(ctx, further.InstallationID, stored.ID, MemoryDecision{
+		Authority: AuthorityDirective, ReviewedBy: "octocat",
+	}); err != nil {
+		t.Fatalf("ApproveMemory returned error: %v", err)
+	}
+
+	query := MemoryQuery{
+		InstallationID: further.InstallationID,
+		OrgName:        testOrg,
+		RepoName:       testRepo,
+		Embedding:      embeddingAt(0),
+		RepoScopeBoost: config.DefaultRepoScopeBoost,
+	}
+	matches, err := db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("search returned %d rules, want both candidates: %+v", len(matches), matches)
+	}
+	if matches[0].ID != stored.ID {
+		t.Errorf("the ranking leads with the closer rule (similarities %v, %v), want the directive",
+			matches[0].Similarity, matches[1].Similarity)
+	}
+	if matches[0].Authority != AuthorityDirective {
+		t.Errorf("the leading rule carries authority %s, want %s", matches[0].Authority, AuthorityDirective)
+	}
+	// The promotion decides the order and nothing else: the number the caller
+	// reads back is the distance the embedding has, or a caller that ranked its
+	// own results would be ranking on a score it cannot reproduce.
+	if math.Abs(matches[0].Similarity-0.60) > 1e-5 {
+		t.Errorf("the directive reports similarity %v, want the distance 0.60 rather than a boosted score", matches[0].Similarity)
+	}
+
+	// What the promotion buys: a caller that asked for one rule is handed the
+	// one a maintainer promoted.
+	query.Limit = 1
+	matches, err = db.SearchMemories(ctx, query)
+	if err != nil {
+		t.Fatalf("SearchMemories(limit 1) returned error: %v", err)
+	}
+	if len(matches) != 1 || matches[0].ID != stored.ID {
+		t.Errorf("a limit of one returned %+v, want the directive", matches)
+	}
+}
+
+// §10 item 5: nothing on the proposal path raises a rule above the repository's
+// guidelines, including the path that stores a rule approved without a moderator
+// looking at it. A commenter cannot promote their own rule, and neither can an
+// operator who turned the gate off.
+func TestProposalIsAlwaysRecordedAsContext(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	for i, tc := range []struct {
+		ruleText string
+		approved bool
+	}{
+		{"a rule waiting for a decision", false},
+		{"a rule the operator let through unchecked", true},
+	} {
+		proposal := testProposal(tc.ruleText, embeddingAt(i))
+		proposal.Approved = tc.approved
+		stored, inserted, err := db.ProposeMemory(ctx, proposal)
+		if err != nil {
+			t.Fatalf("ProposeMemory(approved=%v) returned error: %v", tc.approved, err)
+		}
+		if !inserted {
+			t.Fatalf("ProposeMemory(approved=%v) stored nothing", tc.approved)
+		}
+		if stored.Authority != AuthorityContext {
+			t.Errorf("approved=%v stored authority %s, want %s", tc.approved, stored.Authority, AuthorityContext)
+		}
+	}
+}

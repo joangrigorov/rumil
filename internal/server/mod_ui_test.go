@@ -689,3 +689,135 @@ func TestModerationRefusesARepositoryReferenceItCannotUse(t *testing.T) {
 		t.Errorf("a real reference returned %d, want 200", response.Code)
 	}
 }
+
+// §10 item 5: the approval gate is where a maintainer promotes one rule above
+// the repository's own guidelines, and the page is where the rules that carry
+// that authority are visible. A promotion applies to one repository, so an
+// organization-wide rule is refused until the same decision narrows it.
+func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	rule := seedMemory(t, h, "This service keeps its own hand-rolled clock skew allowance")
+	orgRule := seedScopedMemory(t, h, "Every service in the organization logs with log/slog", store.ScopeOrg)
+
+	// Both forms offer the choice, and neither row carries the badge yet.
+	page := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	if count := strings.Count(body, `name="authority"`); count != 2 {
+		t.Errorf("the page carries %d authority controls, want one per rule:\n%s", count, body)
+	}
+	if !strings.Contains(body, `<option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>`) {
+		t.Errorf("the page does not show a recorded rule as context:\n%s", body)
+	}
+	// The badge in the page's own legend is not a rule carrying the authority,
+	// so both of these look for the one a row renders.
+	if strings.Contains(body, "DIRECTIVE</span> above the guidelines") {
+		t.Errorf("a rule that was never promoted is badged as a directive:\n%s", body)
+	}
+	// The organization rule's promotion option says what it needs, because the
+	// refusal is about the pair rather than about the authority alone.
+	if !strings.Contains(body, "DIRECTIVE — outranks the guidelines; needs REPO scope") {
+		t.Errorf("the organization rule's promotion option does not say what it needs:\n%s", body)
+	}
+
+	// An authority the enum does not have is refused before the write.
+	refused := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+rule.ID+"/approve", adminToken,
+		url.Values{"authority": {"ABSOLUTE"}}, "application/json")
+	if refused.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", refused.Code, refused.Body.String())
+	}
+	if !strings.Contains(refused.Body.String(), "authority takes context or directive") {
+		t.Errorf("the refusal does not say what the authority values are: %s", refused.Body.String())
+	}
+
+	// Promoting a repository rule is recorded, and the page shows it.
+	promotion := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+rule.ID+"/approve", adminToken,
+		url.Values{"authority": {"directive"}, "moderator": {"octocat"}}, "application/json")
+	if promotion.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", promotion.Code, promotion.Body.String())
+	}
+	// The JSON answer carries the authority, so a client that drives the surface
+	// over the API can see what it just recorded.
+	var answer struct {
+		ShortID   string `json:"short_id"`
+		Status    string `json:"status"`
+		Scope     string `json:"scope"`
+		Authority string `json:"authority"`
+	}
+	if err := json.Unmarshal(promotion.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decoding the decision answer %q: %v", promotion.Body.String(), err)
+	}
+	if answer.Authority != store.AuthorityDirective || answer.Status != store.MemoryApproved {
+		t.Errorf("the answer reports %+v, want an approved rule carrying %s", answer, store.AuthorityDirective)
+	}
+	stored, err := h.db.MemoryByID(context.Background(), 98765432, rule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.Authority != store.AuthorityDirective {
+		t.Errorf("authority = %s, want %s", stored.Authority, store.AuthorityDirective)
+	}
+	if stored.Status != store.MemoryApproved {
+		t.Errorf("status = %s, want %s", stored.Status, store.MemoryApproved)
+	}
+
+	body = moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html").Body.String()
+	if !strings.Contains(body, "DIRECTIVE</span> above the guidelines") {
+		t.Errorf("the promoted rule is not badged:\n%s", body)
+	}
+	if !strings.Contains(body, `<option value="DIRECTIVE" selected>`) {
+		t.Errorf("the promoted rule's form does not show the authority it has:\n%s", body)
+	}
+
+	// The promotion applies to one repository, so an organization-wide rule is
+	// refused and the row is left as it was.
+	widened := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+orgRule.ID+"/approve", adminToken,
+		url.Values{"authority": {"DIRECTIVE"}}, "application/json")
+	if widened.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", widened.Code, widened.Body.String())
+	}
+	if !strings.Contains(widened.Body.String(), "a directive applies to one repository") {
+		t.Errorf("the refusal does not say what to do about it: %s", widened.Body.String())
+	}
+	untouched, err := h.db.MemoryByID(context.Background(), 98765432, orgRule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if untouched.Status != store.MemoryPending || untouched.Authority != store.AuthorityContext {
+		t.Errorf("row is %+v, want it left pending and unpromoted", untouched)
+	}
+
+	// The same decision narrowed to one repository is the one that lands.
+	narrowed := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+orgRule.ID+"/approve", adminToken,
+		url.Values{"authority": {"DIRECTIVE"}, "scope": {"REPO"}}, "application/json")
+	if narrowed.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", narrowed.Code, narrowed.Body.String())
+	}
+	stored, err = h.db.MemoryByID(context.Background(), 98765432, orgRule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.Scope != store.ScopeRepo || stored.Authority != store.AuthorityDirective {
+		t.Errorf("row is %+v, want a promoted %s rule", stored, store.ScopeRepo)
+	}
+
+	// A moderator can take the promotion back, so it is not a one-way door.
+	demotion := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+rule.ID+"/approve", adminToken,
+		url.Values{"authority": {"context"}}, "application/json")
+	if demotion.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", demotion.Code, demotion.Body.String())
+	}
+	stored, err = h.db.MemoryByID(context.Background(), 98765432, rule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.Authority != store.AuthorityContext {
+		t.Errorf("authority = %s, want it back at %s", stored.Authority, store.AuthorityContext)
+	}
+}

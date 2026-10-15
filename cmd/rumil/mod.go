@@ -74,11 +74,12 @@ func newModListCmd(configPath *string) *cobra.Command {
 			}
 
 			writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(writer, "ID\tSCOPE\tSTATUS\tAPPLIES TO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
+			_, _ = fmt.Fprintln(writer, "ID\tSCOPE\tAUTHORITY\tSTATUS\tAPPLIES TO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
 			for _, memory := range memories {
-				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 					memory.ShortID(),
 					memory.Scope,
+					memory.Authority,
 					memory.Status,
 					moderationTarget(memory),
 					orDash(memory.PathGlob),
@@ -101,6 +102,7 @@ func newModApproveCmd(configPath *string) *cobra.Command {
 	var (
 		ruleText  string
 		scope     string
+		authority string
 		moderator string
 	)
 
@@ -112,7 +114,11 @@ func newModApproveCmd(configPath *string) *cobra.Command {
 			"found by the words that were approved. Passing --scope REPO records an organization-wide rule\n" +
 			"for the repository it was proposed in, which is the way to keep a general rule from reaching a\n" +
 			"repository it does not fit. The scope is not widened the other way: a repository rule is not\n" +
-			"promoted to the whole organization from here.",
+			"promoted to the whole organization from here.\n" +
+			"Passing --authority directive promotes the rule above the repository's own RUMIL.md for the\n" +
+			"case it names, which is recorded here and nowhere else. A directive applies to one repository,\n" +
+			"so an organization-wide rule is narrowed with --scope REPO in the same command; --authority\n" +
+			"context demotes a rule that was promoted earlier.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			service, _, closeDB, err := openModeration(*configPath)
@@ -124,19 +130,21 @@ func newModApproveCmd(configPath *string) *cobra.Command {
 			memory, err := service.Approve(cmd.Context(), args[0], moderation.Decision{
 				RuleText:  ruleText,
 				Scope:     scope,
+				Authority: authority,
 				Moderator: moderator,
 			})
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s/%s, %s, %s)\n",
-				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Scope, memory.Status)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approved %s (%s/%s, %s, %s, %s)\n",
+				memory.ShortID(), memory.OrgName, memory.RepoName, memory.Scope, memory.Authority, memory.Status)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&ruleText, "rule-text", "", "replace the proposed wording before approving")
 	cmd.Flags().StringVar(&scope, "scope", "", "record an organization rule for its repository: REPO narrows it, and a repository rule is not widened to ORG")
+	cmd.Flags().StringVar(&authority, "authority", "", "put the rule above the repository's RUMIL.md for one repository: directive promotes it, context leaves it as recorded context")
 	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who made the decision, recorded as reviewed_by")
 	return cmd
 }
