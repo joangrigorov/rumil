@@ -4,7 +4,8 @@
 #   docker compose up
 #
 # Copy rumil.example.yaml to rumil.yaml first, and point github.webhook_secret
-# at the same secret you configure on the GitHub App.
+# at the same secret you configure on the GitHub App. RUMIL_ADMIN_TOKEN is
+# optional and turns the moderation page and API on when it is set.
 services:
   rumil:
     build: .
@@ -19,6 +20,10 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      # Optional: set it to turn on the moderation page and API. Left out, the
+      # example config expands moderation.admin_token to "" and both refuse
+      # every request.
+      RUMIL_ADMIN_TOKEN: ${RUMIL_ADMIN_TOKEN:-}
     volumes:
       - ./rumil.yaml:/etc/rumil/rumil.yaml:ro
       - ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH}:/run/secrets/github_app.pem:ro
