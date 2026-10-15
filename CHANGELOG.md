@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.8](https://github.com/joangrigorov/rumil/compare/v0.0.7...v0.0.8) (2026-10-15)
+
+
+### Features
+
+* **license:** license rumil under Apache-2.0 and add a README ([#16](https://github.com/joangrigorov/rumil/issues/16)) ([46acedf](https://github.com/joangrigorov/rumil/commit/46acedf5378e47ebf47d9f2090cd2590ea894a41))
+
 ## [0.0.7](https://github.com/joangrigorov/rumil/compare/v0.0.6...v0.0.7) (2026-10-15)
 
 
