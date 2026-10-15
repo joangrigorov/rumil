@@ -100,6 +100,8 @@ rumil/
 ├── Dockerfile
 ├── Dockerfile.release
 ├── docker-compose.yml
+├── LICENSE                       # Apache-2.0, canonical text (§10 item 1)
+├── README.md                     # What Rumil is, install, configure, use
 ├── rumil.example.yaml
 └── go.mod
 ```
@@ -606,7 +608,7 @@ Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: wri
 * Binaries are static (`CGO_ENABLED=0`, `-trimpath`) and receive `main.version`, `main.commit`, and `main.date` through `-ldflags`, so `cmd/rumil/main.go` declares those three package variables.
 * macOS artifacts are unsigned and un-notarized, and packages are unsigned: an accepted limitation of a free signing setup. Homebrew tap publishing is not used.
 * Every GitHub Action in `.github/workflows/` is pinned to a full commit SHA with a trailing `# vX.Y.Z` comment.
-* Added in Phase 1 (`v0.0.1`) once the `Dockerfile` existed: a GHCR image build in the same workflow (`packages: write`), `rumil.example.yaml` bundled into the archives and installed by nfpm to `/etc/rumil/rumil.example.yaml` as `config|noreplace`. The image is `linux/amd64` only until a QEMU step is added. The package `license` field and the archive `LICENSE` file stay unset because the repository has no `LICENSE` file yet; both are wired up when one lands.
+* Added in Phase 1 (`v0.0.1`) once the `Dockerfile` existed: a GHCR image build in the same workflow (`packages: write`), `rumil.example.yaml` bundled into the archives and installed by nfpm to `/etc/rumil/rumil.example.yaml` as `config|noreplace`. The image is `linux/amd64` only until a QEMU step is added. The repository is Apache-2.0: `LICENSE` holds the canonical text, every archive carries the file, nfpm declares `license: Apache-2.0` and installs the file to `/usr/share/licenses/rumil/LICENSE`, and the image labels carry `org.opencontainers.image.licenses` (§10 item 1).
 * Two Dockerfiles, because goreleaser's `dockers_v2` builds from a temporary context that holds the binaries it compiled for each platform and no source files. `Dockerfile` stays the multi-stage from-source build that `docker compose up` and a developer use by hand; `Dockerfile.release` copies `${TARGETPLATFORM}/rumil` into the same distroless base. Both share the runtime layout (distroless static, uid 65532, same entrypoint), so the two images are interchangeable at run time. The release workflow also sets up a `docker-container` buildx driver, which the SBOM attestation `dockers_v2` attaches by default requires; the runner's stock `docker` driver cannot produce it. Because buildx pushes with the credentials in the docker config, the job logs in to `ghcr.io` with `docker/login-action` and the workflow's `GITHUB_TOKEN` before running goreleaser; without that login the push requests an anonymous token and ghcr.io answers 403.
 
 ---
@@ -615,7 +617,7 @@ Everything runs in one job graph with the default `GITHUB_TOKEN` (`contents: wri
 
 Deliberately unresolved, to be decided with the phase that needs them. An item that is decided stays in place, marked as decided, so the numbers the rest of this document and the code cite do not move:
 
-1. **No `LICENSE` file.** The nfpm `license` field, the archive `LICENSE`, and the repository's own license stay unset until a license is chosen (§9).
+1. **License: Apache-2.0 — decided with the README.** The repository was unlicensed, which makes every copy of it all-rights-reserved by default. It now carries the canonical Apache License 2.0 text in `LICENSE`, and the packaging declares it: the archives bundle the file, nfpm sets `license: Apache-2.0` and installs the file to `/usr/share/licenses/rumil/LICENSE`, and the image labels set `org.opencontainers.image.licenses`. Apache-2.0 over MIT for the explicit patent grant in §3, the attribution and trademark terms, and because it is the common choice for self-hosted infrastructure tooling. `README.md` states the license and links to the file. The copyright appendix keeps its `[yyyy] [name of copyright owner]` placeholders: only the maintainer can fill in a holder and a year.
 2. **Single-platform container image.** The GHCR image is `linux/amd64` until a QEMU step is added to the release workflow.
 3. **`app.bot_handle` has no consumer yet.** It is validated and defaulted in `internal/config`, and read by nothing until the `@rumil` comment commands of Phase 4.
 4. **Upstream kit race.** `MCPToolManager.GetTools` reads the tool slice without holding the mutex that the parallel server loader writes under, and the bug is present on kit `master`. §1 avoids it by registering the specs as raw tools. Reporting it upstream is worthwhile and is not tracked by any phase.

@@ -15,7 +15,8 @@ app:
 github:
   app_id: 123456
   installation_id: 98765432       # Installation of your App on the target account
-  private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use the GITHUB_PRIVATE_KEY environment variable instead
+  private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use private_key below, or the GITHUB_PRIVATE_KEY environment variable
+  # private_key: "${GITHUB_PRIVATE_KEY}"             # The PEM itself, for a secret store that hands over its contents rather than a path
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.0.3 for webhook verification
 
 # Repository review guidelines are read before the first agent turn, from
