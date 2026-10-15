@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.7](https://github.com/joangrigorov/rumil/compare/v0.0.6...v0.0.7) (2026-10-15)
+
+
+### Features
+
+* **memory:** let a maintainer promote a rule above the repository guidelines ([#14](https://github.com/joangrigorov/rumil/issues/14)) ([59a5811](https://github.com/joangrigorov/rumil/commit/59a5811ea0300fcf1fe2e40184a7c2a97d9a9df9))
+
 ## [0.0.6](https://github.com/joangrigorov/rumil/compare/v0.0.5...v0.0.6) (2026-10-15)
 
 
