@@ -25,6 +25,20 @@ const (
 	MemoryRejected = "REJECTED"
 )
 
+// MemoryAuthority values of the memory_authority enum.
+//
+// AuthorityContext is what every rule is stored as, and it is what a proposal
+// can only ever be: recorded context, which the repository's own guidelines
+// outrank. AuthorityDirective is set by a maintainer at the approval gate and
+// puts one rule above those guidelines for the case it names, which is why no
+// proposal path can write it: a rule reaches the reviewer with authority over
+// the repository's own policy only after a person promoted it
+// (project_plan.md §10 item 5).
+const (
+	AuthorityContext   = "CONTEXT"
+	AuthorityDirective = "DIRECTIVE"
+)
+
 // Bounds on the rules one search returns (project_plan.md §5.2).
 const (
 	MemoryLimitDefault = 5
@@ -50,16 +64,19 @@ type Memory struct {
 	OrgName        string
 	RepoName       string
 	Scope          string
-	Status         string
-	PathGlob       string
-	RuleText       string
-	Rationale      string
-	SourcePR       int
-	SourceComment  string
-	RequestedBy    string
-	ReviewedBy     string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Authority is CONTEXT for every rule a comment proposed, and DIRECTIVE
+	// only once a maintainer promoted it at the approval gate.
+	Authority     string
+	Status        string
+	PathGlob      string
+	RuleText      string
+	Rationale     string
+	SourcePR      int
+	SourceComment string
+	RequestedBy   string
+	ReviewedBy    string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // ShortID is the leading UUID group, which is what a confirmation reply names
@@ -86,19 +103,29 @@ type Proposal struct {
 	RequestedBy    string
 	// Approved stores the row APPROVED instead of PENDING. It is true only when
 	// moderation.accept_all is on, which is off by default.
-	Approved  bool
+	Approved bool
+	// There is deliberately no Authority field. A proposal is stored as
+	// AuthorityContext whatever it is, and the statement below names that value
+	// rather than leaning on the column default, so the one path that can raise
+	// a rule above the repository's guidelines stays the approval gate. An
+	// operator who turns moderation off has skipped the gate, so a rule that
+	// arrives that way is context like any other.
 	Embedding []float32
 }
 
 // MemoryMatch is one candidate rule with how close it came to the query.
 // Similarity is the cosine similarity, so higher is closer.
 type MemoryMatch struct {
-	ID         string
-	Scope      string
-	RepoName   string
-	PathGlob   string
-	RuleText   string
-	Rationale  string
+	ID        string
+	Scope     string
+	RepoName  string
+	PathGlob  string
+	RuleText  string
+	Rationale string
+	// Authority is the rule's memory_authority, which is what lets the reader
+	// tell a rule a maintainer promoted above the repository's guidelines from
+	// recorded context.
+	Authority  string
 	Similarity float64
 }
 
@@ -123,7 +150,7 @@ type MemoryQuery struct {
 	Limit int
 }
 
-const memoryColumns = `id, installation_id, org_name, coalesce(repo_name, ''), scope, status,
+const memoryColumns = `id, installation_id, org_name, coalesce(repo_name, ''), scope, authority, status,
 	coalesce(path_glob, ''), rule_text, coalesce(rationale, ''), source_pr, source_comment,
 	requested_by, coalesce(reviewed_by, ''), created_at, updated_at`
 
@@ -166,9 +193,9 @@ func (d *DB) ProposeMemory(ctx context.Context, p Proposal) (memory Memory, inse
 		status = MemoryApproved
 	}
 	rows, err := d.pool.Query(ctx, `
-		INSERT INTO memories (installation_id, org_name, repo_name, scope, status, path_glob,
+		INSERT INTO memories (installation_id, org_name, repo_name, scope, authority, status, path_glob,
 		                      rule_text, rationale, source_pr, source_comment, requested_by, embedding)
-		VALUES ($1, $2, $3, $4, $5, nullif($6, ''), $7, nullif($8, ''), $9, $10, $11, $12::vector)
+		VALUES ($1, $2, $3, $4, 'CONTEXT', $5, nullif($6, ''), $7, nullif($8, ''), $9, $10, $11, $12::vector)
 		RETURNING `+memoryColumns,
 		p.InstallationID, p.OrgName, p.RepoName, p.Scope, status, p.PathGlob,
 		p.RuleText, p.Rationale, p.SourcePR, p.SourceComment, p.RequestedBy, vectorLiteral(p.Embedding))
@@ -248,12 +275,19 @@ func (d *DB) SearchMemories(ctx context.Context, query MemoryQuery) ([]MemoryMat
 	// that scores highest, and a repository rule just behind it, must both be in
 	// the five the caller gets. The score is computed in the subquery because
 	// Postgres allows an output name in ORDER BY but not inside an expression.
+	//
+	// A directive is ranked above every other candidate, ahead of both the
+	// similarity and the boost, so a rule a maintainer promoted above the
+	// repository's guidelines is never the rule a limit leaves out. It is the one
+	// property here that is not a distance, and the returned similarity stays the
+	// distance the embedding has. The renderer's own byte cap is a separate bound
+	// and can still drop an oversized rule, promoted or not.
 	rows, err := d.pool.Query(ctx, `
-		SELECT id, scope, repo_name, path_glob, rule_text, rationale, similarity
+		SELECT id, scope, repo_name, path_glob, rule_text, rationale, authority, similarity
 		FROM (
 		    SELECT id, scope, coalesce(repo_name, '') AS repo_name,
 		           coalesce(path_glob, '') AS path_glob, rule_text,
-		           coalesce(rationale, '') AS rationale,
+		           coalesce(rationale, '') AS rationale, authority,
 		           1 - (embedding <=> $1::vector) AS similarity,
 		           (1 - (embedding <=> $1::vector))
 		               + CASE WHEN scope = 'REPO' THEN $6::double precision ELSE 0::double precision END AS score
@@ -266,7 +300,7 @@ func (d *DB) SearchMemories(ctx context.Context, query MemoryQuery) ([]MemoryMat
 		          OR scope = 'ORG'
 		      )
 		) AS ranked
-		ORDER BY score DESC, id
+		ORDER BY authority = 'DIRECTIVE' DESC, score DESC, id
 		LIMIT $5`,
 		vectorLiteral(query.Embedding), query.InstallationID, query.OrgName, query.RepoName, fetch, query.RepoScopeBoost)
 	if err != nil {
@@ -277,7 +311,7 @@ func (d *DB) SearchMemories(ctx context.Context, query MemoryQuery) ([]MemoryMat
 	matches := make([]MemoryMatch, 0, limit)
 	for rows.Next() {
 		var m MemoryMatch
-		if err := rows.Scan(&m.ID, &m.Scope, &m.RepoName, &m.PathGlob, &m.RuleText, &m.Rationale, &m.Similarity); err != nil {
+		if err := rows.Scan(&m.ID, &m.Scope, &m.RepoName, &m.PathGlob, &m.RuleText, &m.Rationale, &m.Authority, &m.Similarity); err != nil {
 			return nil, fmt.Errorf("scanning a memory match: %w", err)
 		}
 		if query.FilePath != "" && m.PathGlob != "" && !globMatch(m.PathGlob, query.FilePath) {
@@ -341,7 +375,7 @@ func scanMemory(rows pgx.Rows) (*Memory, error) {
 
 	var m Memory
 	if err := rows.Scan(
-		&m.ID, &m.InstallationID, &m.OrgName, &m.RepoName, &m.Scope, &m.Status,
+		&m.ID, &m.InstallationID, &m.OrgName, &m.RepoName, &m.Scope, &m.Authority, &m.Status,
 		&m.PathGlob, &m.RuleText, &m.Rationale, &m.SourcePR, &m.SourceComment,
 		&m.RequestedBy, &m.ReviewedBy, &m.CreatedAt, &m.UpdatedAt,
 	); err != nil {

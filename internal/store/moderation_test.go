@@ -457,3 +457,119 @@ func TestMemoryByIDReportsAnAmbiguousPrefix(t *testing.T) {
 		t.Errorf("read %s, want %s", found.ID, ids[0])
 	}
 }
+
+// §10 item 5: the approval gate is where a rule is raised above the repository's
+// own guidelines, and the row is what a later review reads.
+func TestApproveMemoryPromotesARuleAboveTheGuidelines(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	proposal := testProposal("This service keeps its own hand-rolled clock skew allowance", embeddingAt(0))
+	proposal.Approved = true
+	stored, _, err := db.ProposeMemory(ctx, proposal)
+	if err != nil {
+		t.Fatalf("ProposeMemory returned error: %v", err)
+	}
+	if stored.Authority != AuthorityContext {
+		t.Errorf("authority = %s, want %s for a rule no moderator has decided on", stored.Authority, AuthorityContext)
+	}
+
+	promoted, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Authority: AuthorityDirective, ReviewedBy: "octocat",
+	})
+	if err != nil {
+		t.Fatalf("ApproveMemory returned error: %v", err)
+	}
+	if promoted.Authority != AuthorityDirective {
+		t.Errorf("authority = %s, want %s", promoted.Authority, AuthorityDirective)
+	}
+
+	// The promotion survives the round trip a review makes, which is what the
+	// reader of a candidate rule has to be able to see.
+	matches, err := db.SearchMemories(ctx, MemoryQuery{
+		InstallationID: proposal.InstallationID,
+		OrgName:        testOrg,
+		RepoName:       testRepo,
+		Embedding:      embeddingAt(0),
+	})
+	if err != nil {
+		t.Fatalf("SearchMemories returned error: %v", err)
+	}
+	if len(matches) != 1 || matches[0].Authority != AuthorityDirective {
+		t.Fatalf("search returned %+v, want one rule carrying %s", matches, AuthorityDirective)
+	}
+
+	// A moderator can take it back, so the promotion settles a rule's standing
+	// rather than opening a one-way door.
+	demoted, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Authority: AuthorityContext, ReviewedBy: "octocat",
+	})
+	if err != nil {
+		t.Fatalf("ApproveMemory(demote) returned error: %v", err)
+	}
+	if demoted.Authority != AuthorityContext {
+		t.Errorf("authority = %s, want it back at %s", demoted.Authority, AuthorityContext)
+	}
+
+	// A decision that names no authority leaves the rule's own standing alone, so
+	// a moderator working the queue after somebody promoted a rule does not have
+	// to know about the promotion to avoid undoing it.
+	if _, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Authority: AuthorityDirective, ReviewedBy: "octocat",
+	}); err != nil {
+		t.Fatalf("ApproveMemory(promote again) returned error: %v", err)
+	}
+	kept, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		RuleText:  "This service keeps its own hand-rolled clock skew allowance, and clocks its own way",
+		Embedding: embeddingAt(0), ReviewedBy: "hubot",
+	})
+	if err != nil {
+		t.Fatalf("ApproveMemory(edit only) returned error: %v", err)
+	}
+	if kept.Authority != AuthorityDirective || kept.ReviewedBy != "hubot" {
+		t.Errorf("row is %+v, want the promotion kept while the edit lands", kept)
+	}
+}
+
+// §10 item 5: a promotion applies to one repository. The statement refuses the
+// pair rather than trusting a surface to have computed it, so an organization
+// rule cannot be made to outrank every repository's own guidelines in the
+// organization, and the row is left alone when it is tried.
+func TestReviewMemoryRefusesAPromotionThatReachesTheOrganization(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	proposal := testProposal("Every service in the organization logs with log/slog", embeddingAt(0))
+	proposal.Scope, proposal.PathGlob, proposal.Approved = ScopeOrg, "", true
+	stored, _, err := db.ProposeMemory(ctx, proposal)
+	if err != nil {
+		t.Fatalf("ProposeMemory returned error: %v", err)
+	}
+
+	_, err = db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Authority: AuthorityDirective, ReviewedBy: "octocat",
+	})
+	if !errors.Is(err, ErrMemoryChanged) {
+		t.Fatalf("promoting an organization-wide rule returned %v, want %v", err, ErrMemoryChanged)
+	}
+
+	after, err := db.MemoryByID(ctx, proposal.InstallationID, stored.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if after.Scope != ScopeOrg || after.Authority != AuthorityContext {
+		t.Errorf("row is %+v, want it unchanged at %s/%s", after, ScopeOrg, AuthorityContext)
+	}
+
+	// Narrowing the rule in the same decision is what makes the promotion land,
+	// which is the path both moderation surfaces offer.
+	narrowed, err := db.ApproveMemory(ctx, proposal.InstallationID, stored.ID, MemoryDecision{
+		Scope: ScopeRepo, Authority: AuthorityDirective, ReviewedBy: "octocat",
+	})
+	if err != nil {
+		t.Fatalf("ApproveMemory(narrow and promote) returned error: %v", err)
+	}
+	if narrowed.Scope != ScopeRepo || narrowed.Authority != AuthorityDirective {
+		t.Errorf("row is %+v, want a %s rule carrying %s", narrowed, ScopeRepo, AuthorityDirective)
+	}
+}

@@ -156,6 +156,11 @@ type MemoryDecision struct {
 	// from, which is the decision the moderation page offers for an ORG row
 	// (project_plan.md §6 Phase 6).
 	Scope string
+	// Authority replaces the stored authority when it is not empty. This is the
+	// one place a rule is raised above the repository's own guidelines, and the
+	// statement refuses the promotion on a rule that reaches the organization
+	// (project_plan.md §10 item 5).
+	Authority string
 	// Embedding is the vector for RuleText, and is required when RuleText is an
 	// edit: the store does not call an embedding provider, and keeping the old
 	// vector would leave a rule that no longer matches what a search looks for
@@ -195,7 +200,7 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 	// The text, the glob and the vector are only replaced when the decision
 	// carries them, so a rejection cannot erase what was proposed.
 	//
-	// The last two conditions are what make a decision atomic against a second
+	// The last three conditions are what make a decision atomic against a second
 	// moderator. The text one reads rule_text as it is now, and only lets the
 	// statement replace the text when the decision brings the vector for that
 	// replacement, so a decision computed before the text changed matches
@@ -204,7 +209,10 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 	// refuses to record a repository rule for the whole organization, so a
 	// decision computed while another moderator was narrowing the same rule
 	// cannot widen it afterwards: the write matches no row rather than reaching
-	// every repository in the organization.
+	// every repository in the organization. The authority one reads the scope as
+	// it is about to be and refuses to promote anything that reaches the
+	// organization, so a promotion cannot be made to apply to every repository
+	// in it by a decision that narrowed the rule in the same breath.
 	rows, err := d.pool.Query(ctx, `
 		UPDATE memories
 		SET status = $3::memory_status,
@@ -212,14 +220,17 @@ func (d *DB) reviewMemory(ctx context.Context, installationID int64, id, status 
 		    path_glob = coalesce($5, path_glob),
 		    embedding = CASE WHEN $4 <> '' AND $4 <> rule_text THEN $6::vector ELSE embedding END,
 		    scope = coalesce(nullif($8, '')::memory_scope, scope),
+		    authority = coalesce(nullif($9, '')::memory_authority, authority),
 		    reviewed_by = nullif($7, ''),
 		    updated_at = now()
 		WHERE installation_id = $1 AND id = $2
 		  AND ($4 = '' OR $4 = rule_text OR $6::vector IS NOT NULL)
 		  AND (coalesce(nullif($8, '')::memory_scope, scope) <> 'ORG' OR scope = 'ORG')
+		  AND (coalesce(nullif($9, '')::memory_authority, authority) <> 'DIRECTIVE'
+		       OR coalesce(nullif($8, '')::memory_scope, scope) = 'REPO')
 		RETURNING `+memoryColumns,
 		installationID, resolved.ID, status, decision.RuleText, decision.PathGlob,
-		vectorLiteralOrNull(decision.Embedding), decision.ReviewedBy, decision.Scope)
+		vectorLiteralOrNull(decision.Embedding), decision.ReviewedBy, decision.Scope, decision.Authority)
 	if err != nil {
 		return Memory{}, fmt.Errorf("updating memory %s: %w", id, err)
 	}

@@ -67,7 +67,7 @@ func (t *MemoryTools) SearchSpecs() []Spec {
 	return []Spec{
 		{
 			Name:        "search_memory",
-			Description: "Search the team's approved engineering rules by meaning, so a convention that was recorded earlier is not reported as a mistake. Returns the closest rules. Pass file_path to keep only rules whose glob covers that file.",
+			Description: "Search the team's approved engineering rules by meaning, so a convention that was recorded earlier is not reported as a mistake. Returns the closest rules, each with the authority it carries: DIRECTIVE is a rule a maintainer promoted above the repository guidelines, and CONTEXT is recorded context those guidelines outrank. Pass file_path to keep only rules whose glob covers that file.",
 			Schema:      json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"What to look up, written as a sentence."},"file_path":{"type":"string","description":"Repository-relative path; only rules whose glob covers it are returned."},"limit":{"type":"integer","description":"How many rules to return, 1 to 15, default 5."}},"required":["query"],"additionalProperties":false}`),
 			Handle:      t.searchMemory,
 		},
@@ -152,6 +152,7 @@ func (t *MemoryTools) searchMemory(ctx context.Context, args map[string]any) (st
 		ID         string  `json:"id"`
 		Scope      string  `json:"scope"`
 		Repo       string  `json:"repo,omitempty"`
+		Authority  string  `json:"authority"`
 		PathGlob   string  `json:"path_glob,omitempty"`
 		Rule       string  `json:"rule"`
 		Rationale  string  `json:"rationale,omitempty"`
@@ -167,6 +168,7 @@ func (t *MemoryTools) searchMemory(ctx context.Context, args map[string]any) (st
 			ID:         m.ID,
 			Scope:      m.Scope,
 			Repo:       repo,
+			Authority:  m.Authority,
 			PathGlob:   m.PathGlob,
 			Rule:       m.RuleText,
 			Rationale:  m.Rationale,

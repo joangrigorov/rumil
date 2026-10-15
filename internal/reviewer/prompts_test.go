@@ -57,10 +57,14 @@ func TestSystemPromptCarriesThePlanRules(t *testing.T) {
 		}
 	}
 
-	// Rule 2 states the precedence the plan states, because the repository's own
-	// policy is what overrides a recorded rule.
-	if !strings.Contains(prompt, "outranks everything else") {
+	// Rule 2 states the precedence the plan states: the repository's own policy
+	// overrides a recorded rule, and a rule a maintainer promoted is the one
+	// thing it does not override.
+	if !strings.Contains(prompt, "outranks every recorded rule except one a maintainer marked as a directive") {
 		t.Errorf("rule 2 lost the guidelines precedence:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "a maintainer promoted it at the approval gate") {
+		t.Errorf("rule 2 does not say how a rule comes to outrank the guidelines:\n%s", prompt)
 	}
 
 	// The rules name both writes, so the read-only statement is not understating
