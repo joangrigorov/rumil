@@ -191,11 +191,12 @@ func moderationTarget(memory store.Memory) string {
 // database, and the embedding provider an edit needs. A missing provider is not
 // an error here, because listing and rejecting do not need one.
 func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(), error) {
-	cfg, err := config.Load(configPath)
+	cfg, path, err := loadConfig(configPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	logger := newLogger(cfg.App.LogLevel)
+	logger.Info("configuration loaded", "path", path)
 	warnAboutModeration(cfg, logger, false)
 
 	if cfg.Database.DSN == "" {

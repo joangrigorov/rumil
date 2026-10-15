@@ -50,6 +50,7 @@ rumil/
 ├── internal/
 │   ├── config/
 │   │   ├── config.go             # YAML loader, env interpolation, validation
+│   │   ├── resolve.go            # Which file to read: --config, RUMIL_CONFIG, then the search order (§3)
 │   │   └── config_test.go
 │   ├── ghapp/
 │   │   ├── auth.go               # App JWT & repo-scoped Installation Token minting
@@ -166,6 +167,19 @@ moderation:                                       # Used in v0.0.4 / v0.0.5+
   auto_approve_associations: []                   # Optional e.g. ["OWNER", "MEMBER"]: these commenters record rules already APPROVED, and on a public repository the untrusted-commenter guard of v0.0.5 runs first, so only an association the guard accepts has an effect
   admin_token: "${RUMIL_ADMIN_TOKEN}"             # Bearer token (or basic-auth password) for the Moderation UI/API; compared as a hash in constant time, and an unset token disables the surface
 ```
+
+### Configuration File Location
+`--config`/`-c` names the file, and `RUMIL_CONFIG` names it for the runs where a flag is awkward to pass: a container, a systemd unit, a CI job. A named file is used as it is, whether or not it exists, so a typo fails the load instead of silently reading a different file. Without one, the first of these that exists is read:
+
+| Order | Path |
+| :--- | :--- |
+| 1 | `./rumil.yaml` — the working directory, which is what the CLI read before discovery existed, so a repository's own file keeps winning |
+| 2 | `$XDG_CONFIG_HOME/rumil/config.yaml`, or `~/.config/rumil/config.yaml` when the variable is unset |
+| 3 | the same directory under the name `rumil.yaml` |
+| 4 | `/etc/rumil/config.yaml` |
+| 5 | `/etc/rumil/rumil.yaml` — beside the example `nfpms` installs there, so a packaged daemon is configured the way every other daemon is, with no useful `HOME` |
+
+The working directory is searched under the program's own name alone: a bare `config.yaml` there is ambiguous with every other tool's. Inside a directory that belongs to Rumil, `config.yaml` comes first and `rumil.yaml` is accepted because that is what the example and this document call it. Finding nothing is an error naming every path that was tried and the flag that would bypass the search, and every command logs the path it read: discovery means the operator can no longer see the answer by looking at the command line. `internal/config/resolve.go` holds this and nothing else.
 
 ### GitHub App Credentials & Authentication Model
 Rumil ships no centralized GitHub App. Because it is open source, every operator registers their own GitHub App and is responsible for its credentials, so `github.app_id`, `github.installation_id`, and `github.private_key_path` (or an inline `GITHUB_PRIVATE_KEY`) are all required, and Rumil never calls the "list installations" API.
@@ -623,3 +637,4 @@ Deliberately unresolved, to be decided with the phase that needs them. An item t
 4. **Upstream kit race.** `MCPToolManager.GetTools` reads the tool slice without holding the mutex that the parallel server loader writes under, and the bug is present on kit `master`. §1 avoids it by registering the specs as raw tools. Reporting it upstream is worthwhile and is not tracked by any phase.
 5. **A memory's authority is not adjustable — decided after the six phases, in `v0.0.7`.** §7.1 rule 2 made `RUMIL.md` outrank every memory and rule 3 only ordered `ORG` against `REPO`, so nothing let a maintainer promote one rule above the repository guidelines for a specific case. The approval gate now records an `authority` on a rule: `CONTEXT` is recorded context that the guidelines outrank, which is what every rule was before, and `DIRECTIVE` is the rule a maintainer promoted above them for the case it names. A promotion is recorded for one repository, and an organization-wide rule is narrowed to a repository in the same decision; the store holds that pair at rest as well as in the statement that writes it. A promoted rule is ranked above every other candidate, so a limit never leaves it out, and the `<project_memories>` label that says so is a line of its own, because a rule's text is a line too. §4 carries the column, its additive migration and the constraint, §5.2 the ranking and the field a caller reads back, and §7.1 rule 2 the precedence the reviewer is told.
 6. **`rumil mcp [github|memory]`.** §2 lists `cmd/rumil/mcp.go` as a stdio adapter over the tool specs, and no phase owns it. It stays unscheduled until a client needs it; the specs are reachable without it because they are registered as raw tools in the review session.
+7. **Configuration discovery — decided after the six phases.** `--config` defaulted to the literal `rumil.yaml`, resolved against the working directory, which made the flag unavoidable for the two runs that need a configuration the most: a container, and a daemon started by systemd with no useful working directory or `HOME`. A flag or `RUMIL_CONFIG` still wins and the working directory still works, so nothing that ran before runs differently; the per-user and machine-wide directories are added underneath, in the order §3 records. Every command logs the path it read, and finding nothing fails with every path that was tried, because a search that cannot be seen is worse than a flag that must be typed.
