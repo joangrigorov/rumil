@@ -118,7 +118,19 @@ The image is `linux/amd64` and holds the binary alone. It is the same binary the
 
 ## Configure
 
-Rumil reads one YAML file, `rumil.yaml` by default; `--config` or `-c` points somewhere else. Before the YAML is parsed, `${VAR}` placeholders are expanded from the environment, so secrets never have to live in the file. `rumil.example.yaml` documents every key: it is in the repository, and a package installs it to `/etc/rumil/rumil.example.yaml`.
+Rumil reads one YAML file. `--config` or `-c` names it, and so does `RUMIL_CONFIG`; without either, the first file in the search below is read. Before the YAML is parsed, `${VAR}` placeholders are expanded from the environment, so secrets never have to live in the file. `rumil.example.yaml` documents every key: it is in the repository, and a package installs it to `/etc/rumil/rumil.example.yaml`.
+
+### Where the file is found
+
+| Order | Path |
+| :--- | :--- |
+| 1 | `./rumil.yaml` |
+| 2 | `~/.config/rumil/config.yaml` (`$XDG_CONFIG_HOME` is respected) |
+| 3 | `~/.config/rumil/rumil.yaml` |
+| 4 | `/etc/rumil/config.yaml` |
+| 5 | `/etc/rumil/rumil.yaml` |
+
+A file in the working directory wins, which is what a repository clone and `docker compose` rely on. A package install is configured machine-wide in `/etc/rumil/`, beside the example config it ships. Every command logs the path it read, and when there is no file anywhere the error names every path that was tried. A path you name yourself is used as it is: if it is not there, the command says so rather than searching elsewhere.
 
 ### Create the GitHub App
 
@@ -207,10 +219,10 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 `rumil review` is the shortest way to a review: no server, no queue, no webhook, no database.
 
 ```bash
-rumil review --config rumil.yaml --repo acme/payments --pr 42
+rumil review --repo acme/payments --pr 42
 ```
 
-It needs the App credentials and a chat provider, and it submits the review as the App. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so.
+It needs the App credentials and a chat provider, and it submits the review as the App. It reads the file the [search](#where-the-file-is-found) finds, so the `rumil.yaml` you copied in the step above is enough, and `--config` names another one. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so.
 
 ## Run the webhook server
 
@@ -266,10 +278,10 @@ The published image is `linux/amd64`. On another architecture, use `docker compo
 ### The installed binary
 
 ```bash
-rumil serve --config /etc/rumil/rumil.yaml
+rumil serve
 ```
 
-It serves on `server.listen` (`:8080` unless the config or `--listen` says otherwise). The database at `database.dsn` has to exist with the `pgvector` extension in it; with `database.auto_migrate: true` Rumil creates and updates its own tables at startup.
+Without `--config` it reads the first file of the [search](#where-the-file-is-found) — `/etc/rumil/rumil.yaml` for a package install, `./rumil.yaml` for an extracted archive. It serves on `server.listen` (`:8080` unless the config or `--listen` says otherwise). The database at `database.dsn` has to exist with the `pgvector` extension in it; with `database.auto_migrate: true` Rumil creates and updates its own tables at startup.
 
 ### What a review does
 

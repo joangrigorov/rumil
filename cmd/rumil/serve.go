@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/server"
@@ -36,11 +35,12 @@ func newServeCmd(configPath *string) *cobra.Command {
 			"Reviews start only when a pull request requests the App as a reviewer.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := config.Load(*configPath)
+			cfg, path, err := loadConfig(*configPath)
 			if err != nil {
 				return err
 			}
 			logger := newLogger(cfg.App.LogLevel)
+			logger.Info("configuration loaded", "path", path)
 			warnAboutModeration(cfg, logger, true)
 
 			if cfg.GitHub.WebhookSecret == "" {

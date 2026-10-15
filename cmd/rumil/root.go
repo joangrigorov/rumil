@@ -23,12 +23,29 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	root.PersistentFlags().StringVarP(&configPath, "config", "c", "rumil.yaml", "path to the rumil configuration file")
+	root.PersistentFlags().StringVarP(&configPath, "config", "c", "",
+		"configuration file; without it, the first of ./rumil.yaml, ~/.config/rumil/config.yaml\n"+
+			"or /etc/rumil/rumil.yaml is used, and "+config.EnvConfig+" names one instead")
 	root.AddCommand(newReviewCmd(&configPath))
 	root.AddCommand(newServeCmd(&configPath))
 	root.AddCommand(newModCmd(&configPath))
 
 	return root
+}
+
+// loadConfig resolves the configuration file the way the flag documents, loads
+// it, and hands back the path it read. Discovery means the operator does not
+// always know which file was used, so every command that reads one says so.
+func loadConfig(flag string) (*config.Config, string, error) {
+	path, err := config.Env(flag).Locate()
+	if err != nil {
+		return nil, "", err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, "", err
+	}
+	return cfg, path, nil
 }
 
 // warnAboutModeration logs what a configuration means for the approval gate.

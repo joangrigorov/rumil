@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -37,12 +36,13 @@ func newReviewCmd(configPath *string) *cobra.Command {
 				return fmt.Errorf("--pr must be a positive pull request number, got %d", pr)
 			}
 
-			cfg, err := config.Load(*configPath)
+			cfg, path, err := loadConfig(*configPath)
 			if err != nil {
 				return err
 			}
 
 			logger := newLogger(cfg.App.LogLevel).With(
+				"config", path,
 				"installation_id", cfg.GitHub.InstallationID,
 				"repo", owner+"/"+name,
 				"pr", pr,
