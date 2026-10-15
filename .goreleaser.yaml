@@ -58,6 +58,7 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     files:
       - rumil.example.yaml
+      - LICENSE
 
 checksum:
   name_template: checksums.txt
@@ -79,6 +80,7 @@ nfpms:
     maintainer: joangrigorov <joangrigorov@users.noreply.github.com>
     description: |-
       Rumil is a read-only GitHub App pull request reviewer with moderated RAG memory.
+    license: Apache-2.0
     formats:
       - deb
       - rpm
@@ -88,11 +90,17 @@ nfpms:
     section: utils
     priority: optional
     mtime: "{{ .CommitDate }}"
-    umask: 0o755
     contents:
       - src: rumil.example.yaml
         dst: /etc/rumil/rumil.example.yaml
         type: config|noreplace
+      # The mode is named so the installed license is readable whatever umask
+      # the builder runs with: an installed license nobody can read is no
+      # license.
+      - src: LICENSE
+        dst: /usr/share/licenses/rumil/LICENSE
+        file_info:
+          mode: 0o644
     # Signed packages are intentionally skipped: signing keys are not part of this
     # open source pipeline. macOS artifacts are likewise unsigned and un-notarized,
     # which is the free-code-signing limitation of this setup.
@@ -112,6 +120,12 @@ dockers_v2:
     dockerfile: Dockerfile.release
     platforms:
       - linux/amd64
+    # The build context holds only the staged binary, so the license is added to
+    # it explicitly and copied into the image by Dockerfile.release. The image
+    # is a distribution of the binary like any other, so it carries the text and
+    # not only the label below.
+    extra_files:
+      - LICENSE
     # An SBOM attestation needs a builder with attestation support, which is why
     # the release workflow sets up a docker-container driver before running
     # goreleaser. Written out because goreleaser defaults it to true, so the
@@ -124,3 +138,4 @@ dockers_v2:
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.licenses: "Apache-2.0"

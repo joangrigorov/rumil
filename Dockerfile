@@ -24,6 +24,9 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 
 COPY --from=build /out/rumil /usr/local/bin/rumil
 
+# An image is a distribution of the binary, so it carries the license text too.
+COPY LICENSE /usr/share/licenses/rumil/LICENSE
+
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/rumil"]
 
