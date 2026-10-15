@@ -6,6 +6,7 @@ It is read-only: the review, the replies in the threads it opened, and the confi
 
 | Command | What it does |
 | :--- | :--- |
+| `rumil init` | Write a configuration file, one question at a time. |
 | `rumil review` | Review one pull request and exit. No server, no queue. |
 | `rumil serve` | Run the webhook server and the queue that reviews on request. |
 | `rumil mod` | List the recorded rules, and approve or reject them. |
@@ -131,6 +132,24 @@ Rumil reads one YAML file. `--config` or `-c` names it, and so does `RUMIL_CONFI
 | 5 | `/etc/rumil/rumil.yaml` |
 
 A file in the working directory wins, which is what a repository clone and `docker compose` rely on. A package install is configured machine-wide in `/etc/rumil/`, beside the example config it ships. Every command logs the path it read, and when there is no file anywhere the error names every path that was tried. A path you name yourself is used as it is: if it is not there, the command says so rather than searching elsewhere.
+
+### Write one with `rumil init`
+
+`rumil init` asks for what a first run needs — the App credentials, the model endpoint, and optionally memory and the webhook server — and writes the file it will then find on its own:
+
+```bash
+rumil init
+```
+
+Every screen says what it is asking for, including where in GitHub the value comes from, so this README is not needed while it runs. The file is parsed before it is written, so `rumil init` cannot leave behind a configuration that Rumil refuses to start with. `--force` overwrites an existing file, `--print` writes to stdout instead of the filesystem, and `--config` says where the file belongs.
+
+An answer that is the name of an environment variable — `OPENAI_API_KEY` — is written as `${OPENAI_API_KEY}`, so the file holds no secrets and can be copied or committed. It writes the per-user file described below and creates its directory.
+
+Without a terminal it asks the same questions one line at a time, which is how a script or a container answers them:
+
+```bash
+rumil init < answers.txt
+```
 
 ### Create the GitHub App
 

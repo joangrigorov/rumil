@@ -29,6 +29,7 @@
 * **GitHub API:** `github.com/google/go-github/v69` over REST for every read and for submitting reviews. Review-thread state is the exception: `isResolved` and `isOutdated`, and the mutation that resolves a thread, exist only in GraphQL, so `internal/ghapp` issues two hand-rolled requests through `client.NewRequest` and `encoding/json` rather than taking `shurcooL/githubv4` as a dependency.
 * **Migrations:** `github.com/pressly/goose/v3` using Go `//go:embed` so the single `rumil` binary self-migrates on boot.
 * **CLI Framework:** `github.com/spf13/cobra`
+* **Interactive Setup:** `charm.land/huh/v2` (over `charm.land/bubbletea/v2`, with `charmbracelet/x/term` for the terminal check) draws the `rumil init` form. The terminal is only what the drawing needs: the same questions run a line at a time without one, which is how they are tested and how a container answers them.
 * **Configuration:** `gopkg.in/yaml.v3` with environment variable expansion (`os.ExpandEnv`).
 
 ---
@@ -44,6 +45,7 @@ rumil/
 │       ├── main.go               # Entrypoint
 │       ├── root.go               # Cobra root command + global flags
 │       ├── review.go             # `rumil review --repo owner/repo --pr 123` (v0.0.1)
+│       ├── init.go               # `rumil init`: the setup form and the file it writes (§10 item 8)
 │       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.0.3+)
 │       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs) — not built, §10 item 6
 │       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.0.5+)
@@ -51,6 +53,7 @@ rumil/
 │   ├── config/
 │   │   ├── config.go             # YAML loader, env interpolation, validation
 │   │   ├── resolve.go            # Which file to read: --config, RUMIL_CONFIG, then the search order (§3)
+│   │   ├── render.go             # The file `rumil init` writes, parsed before it reaches the disk
 │   │   └── config_test.go
 │   ├── ghapp/
 │   │   ├── auth.go               # App JWT & repo-scoped Installation Token minting
@@ -638,3 +641,4 @@ Deliberately unresolved, to be decided with the phase that needs them. An item t
 5. **A memory's authority is not adjustable — decided after the six phases, in `v0.0.7`.** §7.1 rule 2 made `RUMIL.md` outrank every memory and rule 3 only ordered `ORG` against `REPO`, so nothing let a maintainer promote one rule above the repository guidelines for a specific case. The approval gate now records an `authority` on a rule: `CONTEXT` is recorded context that the guidelines outrank, which is what every rule was before, and `DIRECTIVE` is the rule a maintainer promoted above them for the case it names. A promotion is recorded for one repository, and an organization-wide rule is narrowed to a repository in the same decision; the store holds that pair at rest as well as in the statement that writes it. A promoted rule is ranked above every other candidate, so a limit never leaves it out, and the `<project_memories>` label that says so is a line of its own, because a rule's text is a line too. §4 carries the column, its additive migration and the constraint, §5.2 the ranking and the field a caller reads back, and §7.1 rule 2 the precedence the reviewer is told.
 6. **`rumil mcp [github|memory]`.** §2 lists `cmd/rumil/mcp.go` as a stdio adapter over the tool specs, and no phase owns it. It stays unscheduled until a client needs it; the specs are reachable without it because they are registered as raw tools in the review session.
 7. **Configuration discovery — decided after the six phases.** `--config` defaulted to the literal `rumil.yaml`, resolved against the working directory, which made the flag unavoidable for the two runs that need a configuration the most: a container, and a daemon started by systemd with no useful working directory or `HOME`. A flag or `RUMIL_CONFIG` still wins and the working directory still works, so nothing that ran before runs differently; the per-user and machine-wide directories are added underneath, in the order §3 records. Every command logs the path it read, and finding nothing fails with every path that was tried, because a search that cannot be seen is worse than a flag that must be typed.
+8. **`rumil init` — decided after the six phases, with item 7.** Writing a configuration by hand meant copying `rumil.example.yaml` and reading §3 to know what each key means, which is a poor first ten minutes for a tool the operator runs themselves. `rumil init` asks for the App credentials, the model endpoint, and optionally memory and the webhook, saying on every screen what it is asking for and where in GitHub the value comes from, and writes the file to the path item 7 resolves for writing: `--config` when named, otherwise the per-user file. The answers are assembled by `internal/config/render.go` and parsed before anything reaches the disk, so the command cannot leave behind a configuration the runtime refuses; an answer that is the name of an environment variable is written as `${THAT_VARIABLE}`, which keeps the whole file free of secrets. The form needs a terminal, and the questions run a line at a time without one, which is how they are tested and how a container answers them.
