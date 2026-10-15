@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.9](https://github.com/joangrigorov/rumil/compare/v0.0.8...v0.0.9) (2026-10-15)
+
+
+### Features
+
+* **config:** find the configuration file without --config ([#19](https://github.com/joangrigorov/rumil/issues/19)) ([b01024e](https://github.com/joangrigorov/rumil/commit/b01024e98acfb374c988f97e9de0bf700e65b536))
+* **init:** write the configuration from a form ([#21](https://github.com/joangrigorov/rumil/issues/21)) ([4162426](https://github.com/joangrigorov/rumil/commit/41624269411ac039ee11e212706f20e986671783))
+
 ## [0.0.8](https://github.com/joangrigorov/rumil/compare/v0.0.7...v0.0.8) (2026-10-15)
 
 
