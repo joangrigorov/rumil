@@ -108,8 +108,20 @@ func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetada
 	}
 
 	block := renderMemories(matches, hasGuidelines)
-	m.logger.Info("pre-retrieved recorded rules", "rules", len(matches), "bytes", len(block))
+	m.logger.Info("pre-retrieved recorded rules",
+		"rules", len(matches), "bytes", len(block), "ids", memoryIDs(matches))
 	return block, nil
+}
+
+// memoryIDs is the short id of every rule the selection carries, so which rules
+// a review ran with is a fact in the log rather than a number that has to be
+// guessed at from the moderation list afterwards.
+func memoryIDs(matches []store.MemoryMatch) []string {
+	ids := make([]string, 0, len(matches))
+	for _, match := range matches {
+		ids = append(ids, match.ShortID())
+	}
+	return ids
 }
 
 // tools is the search_memory tool set, scoped to this pull request. The tenant
