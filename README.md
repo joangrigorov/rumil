@@ -1,8 +1,16 @@
 # Rumil
 
+![Rumil: an elven scribe reading a scroll with a quill, the word RUMIL below](docs/images/rumil-banner.jpeg)
+
+[![CI](https://github.com/joangrigorov/rumil/actions/workflows/ci.yml/badge.svg)](https://github.com/joangrigorov/rumil/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/joangrigorov/rumil)](https://github.com/joangrigorov/rumil/releases/latest)
+[![Go version](https://img.shields.io/github/go-mod/go-version/joangrigorov/rumil)](https://go.dev/dl/)
+[![License](https://img.shields.io/github/license/joangrigorov/rumil)](LICENSE)
+[![Container](https://img.shields.io/badge/ghcr.io-joangrigorov%2Frumil-blue)](https://github.com/joangrigorov/rumil/pkgs/container/rumil)
+
 Rumil is a self-hosted GitHub App that reviews pull requests. It reads the change, posts one GitHub review with inline comments, and — with memory turned on — records the engineering rules your team states in review, so a later round stops flagging a deliberate decision as a mistake.
 
-It is read-only: the review, the replies in the threads it opened, and the confirmation it posts for a recorded rule are everything it writes.
+It is read-only in what it does: the review, the replies in the threads it opened, the resolution of its own threads, and the confirmation it posts for a recorded rule are everything its code writes. One permission is wider than that use — GitHub maps closing a review thread to **Contents: Read and write**, so an App whose threads close themselves holds a token that could also write files. An operator who would rather not grant it keeps Contents at Read, and closes the threads a round says are fixed.
 
 | Command | What it does |
 | :--- | :--- |
