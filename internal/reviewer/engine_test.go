@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -155,6 +156,59 @@ func (h *harness) modelsUsed(t *testing.T) []string {
 		models = append(models, r.Model)
 	}
 	return models
+}
+
+// The configured handle is the login Rumil answers to in comments and the login
+// its own reviews are attributed to, and it is the only part of the
+// configuration that copies a fact GitHub already owns. A handle that is not the
+// App's slug leaves the comment commands, the review requests and thread
+// resolution inert while a run keeps looking healthy, so it is held against the
+// App's own record instead of trusted.
+func TestVerifyHandleHoldsTheHandleAgainstTheAppsRecord(t *testing.T) {
+	t.Run("a handle that is the App's slug passes", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppSlug = "rumil"
+
+		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
+
+		if err := h.engine.VerifyHandle(context.Background()); err != nil {
+			t.Fatalf("VerifyHandle returned error: %v", err)
+		}
+	})
+
+	t.Run("a handle that names something else stops the run", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppSlug = "rumil-testing"
+
+		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
+
+		err := h.engine.VerifyHandle(context.Background())
+		if !errors.Is(err, ErrHandleMismatch) {
+			t.Fatalf("error = %v, want it to wrap ErrHandleMismatch", err)
+		}
+		// The message has to carry what to write, because it is the only place
+		// the operator learns the App's slug from.
+		for _, want := range []string{`"@rumil"`, `"rumil-testing"`, "app.bot_handle"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to carry %s", err, want)
+			}
+		}
+	})
+
+	t.Run("a record that could not be read is not a mismatch", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppStatus = http.StatusBadGateway
+
+		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
+
+		err := h.engine.VerifyHandle(context.Background())
+		if err == nil {
+			t.Fatal("VerifyHandle succeeded without reading the App's record")
+		}
+		if errors.Is(err, ErrHandleMismatch) {
+			t.Errorf("error = %v, want a read that failed rather than a handle that disagrees", err)
+		}
+	})
 }
 
 // T-001-01: a valid configuration whose default_chat names the second provider

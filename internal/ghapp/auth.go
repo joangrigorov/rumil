@@ -31,6 +31,7 @@ var ErrInvalidPrivateKey = errors.New("invalid github app private key")
 type AppAuth struct {
 	installationID int64
 	transport      *ghinstallation.Transport
+	apps           *ghinstallation.AppsTransport
 	baseURL        string
 }
 
@@ -52,6 +53,7 @@ func NewAppAuth(cfg config.GitHub, keyPEM []byte, baseURL string) (*AppAuth, err
 	return &AppAuth{
 		installationID: cfg.InstallationID,
 		transport:      transport,
+		apps:           appsTransport,
 		baseURL:        baseURL,
 	}, nil
 }
@@ -74,9 +76,32 @@ func (a *AppAuth) Verify(ctx context.Context) error {
 
 // Client returns a go-github client authenticated as the installation.
 func (a *AppAuth) Client() *github.Client {
-	client := github.NewClient(&http.Client{Transport: a.transport})
-	if a.baseURL != "" {
-		if parsed, err := url.Parse(strings.TrimRight(a.baseURL, "/") + "/"); err == nil {
+	return apiClient(a.transport, a.baseURL)
+}
+
+// Slug reads the App's own record and returns the slug GitHub knows it by,
+// which is the login people mention in comments and the login the App's own
+// reviews are attributed to. GET /app is app-authenticated rather than
+// installation-authenticated, so this is the one read that works before an
+// installation token is minted.
+func (a *AppAuth) Slug(ctx context.Context) (string, error) {
+	app, _, err := apiClient(a.apps, a.baseURL).Apps.Get(ctx, "")
+	if err != nil {
+		return "", fmt.Errorf("reading the App's own record: %w", err)
+	}
+	slug := app.GetSlug()
+	if slug == "" {
+		return "", errors.New("the App's own record carries no slug")
+	}
+	return slug, nil
+}
+
+// apiClient points a go-github client at the configured API endpoint, which is
+// the public one unless a test overrode it.
+func apiClient(transport http.RoundTripper, baseURL string) *github.Client {
+	client := github.NewClient(&http.Client{Transport: transport})
+	if baseURL != "" {
+		if parsed, err := url.Parse(strings.TrimRight(baseURL, "/") + "/"); err == nil {
 			client.BaseURL = parsed
 		}
 	}
