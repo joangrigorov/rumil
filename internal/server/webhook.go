@@ -30,8 +30,16 @@ const (
 	eventReviewComment = "pull_request_review_comment"
 )
 
-// commandRemember is the one command the conversation supports.
-const commandRemember = "remember"
+// The two commands the conversation supports.
+const (
+	// commandRemember records a rule from the comment.
+	commandRemember = "remember"
+	// commandReview asks for a review of the pull request the comment is on.
+	// It exists because a GitHub App cannot be requested as a reviewer from
+	// every surface: the API refuses one, and the people who hit that can ask
+	// in the conversation instead.
+	commandReview = "review"
+)
 
 // signatureHeader carries the HMAC of the raw webhook body.
 const signatureHeader = "X-Hub-Signature-256"
@@ -216,17 +224,20 @@ func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
 		if !ok {
 			return store.Job{}, fmt.Sprintf("the comment carries no @%s command", w.botLogin)
 		}
-		if command.Verb != commandRemember {
+		if command.Verb != commandRemember && command.Verb != commandReview {
 			return store.Job{}, fmt.Sprintf("command %q is not supported", command.Verb)
 		}
-		if command.Instruction == "" {
+		if command.Verb == commandRemember && command.Instruction == "" {
 			return store.Job{}, "the command carries no instruction"
 		}
-		if !w.mayRecordRules(d) {
+		// A command costs the operator model calls, and a review command
+		// spends them whether or not it records anything, so both verbs need
+		// the same standing.
+		if !w.mayCommand(d) {
 			// Dropped here rather than in the worker, so an outsider's command
 			// never reaches the database, the model, or the embedder: the point
 			// is that it costs the operator nothing.
-			return store.Job{}, fmt.Sprintf("a commenter with author_association %q cannot record rules on a public repository",
+			return store.Job{}, fmt.Sprintf("a commenter with author_association %q cannot command Rumil on a public repository",
 				d.Comment.AuthorAssociation)
 		}
 
@@ -266,13 +277,14 @@ func isBotReviewer(botLogin string, requested *requestedReviewer) bool {
 	return requested.Type == "Bot" && ghapp.NormalizeLogin(requested.Login) == botLogin
 }
 
-// mayRecordRules reports whether the commenter's standing is enough to record a
-// rule. A public repository is readable by everyone, so anyone can post a
-// command on it; accepting it would let an outsider queue proposals and spend
-// the operator's embedding credits, so a public repository accepts a command
-// only from a commenter with a standing in it. A private repository needs no
-// check, because everybody who can comment on one already has access to it.
-func (w *Webhook) mayRecordRules(d payload) bool {
+// mayCommand reports whether the commenter's standing is enough to command
+// Rumil. A public repository is readable by everyone, so anyone can post a
+// command on it; accepting it would let an outsider queue work that spends the
+// operator's model and embedding credits, so a public repository accepts a
+// command only from a commenter with a standing in it. A private repository
+// needs no check, because everybody who can comment on one already has access
+// to it.
+func (w *Webhook) mayCommand(d payload) bool {
 	if d.Repository.Private {
 		return true
 	}
