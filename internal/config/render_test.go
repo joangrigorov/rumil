@@ -249,6 +249,35 @@ func TestRenderRefusesAMissingRequiredAnswer(t *testing.T) {
 	}
 }
 
+// A provider is either the chat model or the embedding model, and the id of a
+// provider is the name of its model, so one model answered on both screens is a
+// file the loader rejects: the answers are refused instead, with a message that
+// says what to do about it.
+func TestRenderRefusesTheChatModelAsTheEmbeddingModel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		embed string
+	}{
+		{name: "refuses the chat model", embed: "deepseek-chat"},
+		{name: "refuses the chat model with space around it", embed: "  deepseek-chat  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answers := fullAnswers()
+			answers.EmbeddingModel = tc.embed
+
+			raw, err := Render(answers)
+			if err == nil {
+				t.Fatalf("Render() wrote a file with one model on both sides:\n%s", raw)
+			}
+			for _, want := range []string{answers.ChatModel, "embedding model", "without memory"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Render() error = %v, want it to mention %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderRefusesAnIDThatIsNotANumber(t *testing.T) {
 	answers := fullAnswers()
 	answers.AppID = "abc"

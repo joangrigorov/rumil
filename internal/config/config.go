@@ -216,7 +216,7 @@ func Parse(raw []byte, source string) (*Config, error) {
 
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config %s: %w", source, err)
+		return nil, fmt.Errorf("invalid config in %s: %w", source, err)
 	}
 	return &cfg, nil
 }
