@@ -164,15 +164,19 @@ func (h *harness) modelsUsed(t *testing.T) []string {
 // App's slug leaves the comment commands, the review requests and thread
 // resolution inert while a run keeps looking healthy, so it is held against the
 // App's own record instead of trusted.
-func TestVerifyHandleHoldsTheHandleAgainstTheAppsRecord(t *testing.T) {
+func TestCheckAppHoldsTheConfigurationAgainstTheAppsRecord(t *testing.T) {
 	t.Run("a handle that is the App's slug passes", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
 		gh.AppSlug = "rumil"
 
 		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
 
-		if err := h.engine.VerifyHandle(context.Background()); err != nil {
-			t.Fatalf("VerifyHandle returned error: %v", err)
+		warnings, err := h.engine.CheckApp(context.Background())
+		if err != nil {
+			t.Fatalf("CheckApp returned error: %v", err)
+		}
+		if len(warnings) != 0 {
+			t.Errorf("warnings = %v, want none for an App that may close its threads", warnings)
 		}
 	})
 
@@ -182,7 +186,7 @@ func TestVerifyHandleHoldsTheHandleAgainstTheAppsRecord(t *testing.T) {
 
 		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
 
-		err := h.engine.VerifyHandle(context.Background())
+		_, err := h.engine.CheckApp(context.Background())
 		if !errors.Is(err, ErrHandleMismatch) {
 			t.Fatalf("error = %v, want it to wrap ErrHandleMismatch", err)
 		}
@@ -195,15 +199,38 @@ func TestVerifyHandleHoldsTheHandleAgainstTheAppsRecord(t *testing.T) {
 		}
 	})
 
+	// GitHub refuses to let an App close a review thread unless the App holds
+	// Contents: Read and write, and the refusal arrives at the end of a round
+	// that has already been paid for. One warning at startup is cheaper.
+	t.Run("a Contents permission of read is reported before a round is spent on it", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppPermissions = map[string]string{"contents": "read", "pull_requests": "write"}
+
+		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
+
+		warnings, err := h.engine.CheckApp(context.Background())
+		if err != nil {
+			t.Fatalf("CheckApp returned error: %v", err)
+		}
+		if len(warnings) != 1 {
+			t.Fatalf("warnings = %v, want the one the Contents permission earns", warnings)
+		}
+		for _, want := range []string{"Contents", "resolveReviewThread", `"read"`} {
+			if !strings.Contains(warnings[0], want) {
+				t.Errorf("warning = %q, want it to carry %s", warnings[0], want)
+			}
+		}
+	})
+
 	t.Run("a record that could not be read is not a mismatch", func(t *testing.T) {
 		gh := testutil.NewFakeGitHub(t)
 		gh.AppStatus = http.StatusBadGateway
 
 		h := newHarness(t, gh, testutil.NewFakeLLM(t), harnessOpts{})
 
-		err := h.engine.VerifyHandle(context.Background())
+		_, err := h.engine.CheckApp(context.Background())
 		if err == nil {
-			t.Fatal("VerifyHandle succeeded without reading the App's record")
+			t.Fatal("CheckApp succeeded without reading the App's record")
 		}
 		if errors.Is(err, ErrHandleMismatch) {
 			t.Errorf("error = %v, want a read that failed rather than a handle that disagrees", err)

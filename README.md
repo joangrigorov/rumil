@@ -163,9 +163,9 @@ Rumil authenticates as a GitHub App you own. Both ways of running it need the Ap
 
    | Permission | Access | Why |
    | :--- | :--- | :--- |
-   | Contents | Read | Read `RUMIL.md` and the file contents behind a diff hunk |
+   | Contents | Read | Read `RUMIL.md` and the file contents behind a diff hunk. **Read and write** is what GitHub requires before it lets an App installation resolve a review thread, so a read-only App leaves its own threads for a person to close. Raising it on the App is not enough on its own: the installation's owner has to accept the change before the tokens carry it |
    | Issues | Read and write | Read the pull request conversation, and post the reply to a remembered rule |
-   | Pull requests | Read and write | Read metadata, diffs, reviews and review threads; submit the review, reply to review comments, and resolve threads |
+   | Pull requests | Read and write | Read metadata, diffs, reviews and review threads; submit the review, and reply to review comments |
    | Metadata | Read | Always required by GitHub |
 
 4. Create the App, then **Generate a private key** and download the `.pem`. Point `github.private_key_path` at it, or put its contents in the `GITHUB_PRIVATE_KEY` environment variable.
@@ -220,12 +220,12 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 
 | Key | Default | Notes |
 | :--- | :--- | :--- |
-| `app.bot_handle` | `@rumil` | Your App's slug. A leading `@` and a trailing `[bot]` are ignored, so `acme-rumil`, `@acme-rumil` and `acme-rumil[bot]` all match. `rumil serve` and `rumil review` read `GET /app` at startup and refuse to run when this is not the App's slug, because a handle that names something else silently disables the comment commands, the review requests and thread resolution |
+| `app.bot_handle` | `@rumil` | Your App's slug. A leading `@` and a trailing `[bot]` are ignored, so `acme-rumil`, `@acme-rumil` and `acme-rumil[bot]` all match. `rumil serve` and `rumil review` read `GET /app` at startup and refuse to run when this is not the App's slug, because a handle that names something else silently disables the comment commands, the review requests and thread resolution. The same read warns about the one permission GitHub refuses thread resolution without |
 | `app.max_agent_turns` | `25` | How many model turns one session may take. A session that runs out submits nothing, and the log says so |
 | `app.max_diff_bytes` | `250000` | Larger diffs are paginated instead of handed over in one piece |
 | `app.log_level` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on stderr |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |
-| `review.resolve_threads` | `true` | Whether Rumil tries to resolve its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub answers `resolveReviewThread` with `Resource not accessible by integration` for every App installation, so in practice a round posts the reason into the thread and names the threads its commits fixed in the summary |
+| `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
@@ -308,7 +308,7 @@ Without `--config` it reads the first file of the [search](#where-the-file-is-fo
 
 1. GitHub delivers a webhook. Rumil verifies the signature and queues the job in Postgres.
 2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
-3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it posts a one-line reason into that thread and names the thread in the summary, so a fixed finding is never silent. Closing the thread is left to a person: GitHub refuses the mutation that does it to an App installation.
+3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it posts a one-line reason into that thread and resolves it, so a resolution is never silent. An installation whose Contents permission is Read cannot resolve a thread — GitHub refuses the mutation — so in that configuration the reason goes into the thread, the summary names the threads to close, and a person clicks resolve.
 
 To start one, mention the App's handle in a comment with `review` and nothing else:
 

@@ -68,7 +68,7 @@ func newReviewCmd(configPath *string) *cobra.Command {
 			// A handle that is not the App's slug costs this run its own review
 			// history and its ability to close its own threads, so the run stops
 			// before it spends a model call on it.
-			if err := checkHandle(cmd.Context(), engine, cfg.App.BotHandle, logger); err != nil {
+			if err := checkApp(cmd.Context(), engine, cfg.App.BotHandle, logger); err != nil {
 				return err
 			}
 

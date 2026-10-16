@@ -146,14 +146,14 @@ func (c *Client) ReviewThreads(ctx context.Context) ([]ReviewThread, error) {
 // closes a review thread to this token.
 //
 // A GitHub App installation is answered FORBIDDEN "Resource not accessible by
-// integration" for resolveReviewThread even when the App holds
-// pull_requests: write on the App record and on the installation: the same
-// mutation on the same thread answers 200 with a user token, and the
-// installation token reads those same threads without complaint, so the limit
-// is the integration rather than the permission set. Closing a review thread is
-// therefore a person's action, and a round that fixes a finding says so in its
-// summary instead of closing the thread.
-var ErrThreadResolveUnsupported = errors.New("github does not let a GitHub App installation resolve review threads")
+// integration" for resolveReviewThread unless the App holds Contents: Read and
+// write. `pull_requests: write` is not enough and does not stand in for it: the
+// same mutation on the same thread is refused to an installation whose Contents
+// permission is read, and resolved by an installation of an App whose Contents
+// permission is write. The mutation is not closed to Apps as such, and the
+// permission is not the repo's contents in any sense the operator can see from
+// the pull request, which is why the message names it.
+var ErrThreadResolveUnsupported = errors.New("github refused the mutation that closes a review thread")
 
 // ResolveReviewThread marks a thread resolved. GitHub keeps the thread and its
 // replies; what changes is that later rounds read it as a decision rather than

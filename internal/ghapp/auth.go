@@ -79,21 +79,35 @@ func (a *AppAuth) Client() *github.Client {
 	return apiClient(a.transport, a.baseURL)
 }
 
-// Slug reads the App's own record and returns the slug GitHub knows it by,
-// which is the login people mention in comments and the login the App's own
-// reviews are attributed to. GET /app is app-authenticated rather than
-// installation-authenticated, so this is the one read that works before an
-// installation token is minted.
-func (a *AppAuth) Slug(ctx context.Context) (string, error) {
-	app, _, err := apiClient(a.apps, a.baseURL).Apps.Get(ctx, "")
+// AppRecord is what the App's own record says about it: the login people
+// mention in comments, and the permissions it holds.
+type AppRecord struct {
+	// Slug is the App's login, which is what its reviews are attributed to.
+	Slug string
+	// Permissions is the permission set GitHub reports for the App.
+	Permissions *github.InstallationPermissions
+}
+
+// Record reads what the installation this process authenticates as is allowed
+// to do.
+//
+// The read is the installation's own record rather than the App's: the App's
+// permission settings can be ahead of the installation's, because a permission
+// added to the App does not reach an installation until its owner accepts it,
+// and an installation can be narrower than the App. `GET /app/installations/{id}`
+// is app-authenticated rather than installation-authenticated, so it works
+// before any token is minted, and it answers with both the App's slug — the
+// login people mention in comments — and the permission set the tokens carry.
+func (a *AppAuth) Record(ctx context.Context) (AppRecord, error) {
+	installation, _, err := apiClient(a.apps, a.baseURL).Apps.GetInstallation(ctx, a.installationID)
 	if err != nil {
-		return "", fmt.Errorf("reading the App's own record: %w", err)
+		return AppRecord{}, fmt.Errorf("reading installation %d's own record: %w", a.installationID, err)
 	}
-	slug := app.GetSlug()
+	slug := installation.GetAppSlug()
 	if slug == "" {
-		return "", errors.New("the App's own record carries no slug")
+		return AppRecord{}, fmt.Errorf("installation %d's record carries no App slug", a.installationID)
 	}
-	return slug, nil
+	return AppRecord{Slug: slug, Permissions: installation.Permissions}, nil
 }
 
 // apiClient points a go-github client at the configured API endpoint, which is

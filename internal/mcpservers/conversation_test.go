@@ -520,10 +520,10 @@ func TestResolveReviewThreadNeedsItsArguments(t *testing.T) {
 	}
 }
 
-// GitHub refuses the mutation that closes a review thread to an App
-// installation, so the tool says what the limit is and what to do instead, and
-// the reason it posted stays in the thread as the record that the finding is
-// gone.
+// GitHub refuses the mutation that closes a review thread to an App whose
+// Contents permission is read, so the tool says what the requirement is and what
+// to do instead, and the reason it posted stays in the thread as the record that
+// the finding is gone.
 func TestResolveReviewThreadReportsAnIntegrationRefusal(t *testing.T) {
 	gh := historyFixture(t)
 	gh.ResolveError = "Resource not accessible by integration"
@@ -535,7 +535,7 @@ func TestResolveReviewThreadReportsAnIntegrationRefusal(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolve_review_thread reported success while github refused the mutation")
 	}
-	for _, want := range []string{"cannot close a thread here", "review summary"} {
+	for _, want := range []string{"cannot close a thread for this App", "Contents permission", "review summary"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to carry %q", err, want)
 		}

@@ -88,24 +88,41 @@ func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string, db *stor
 // ErrHandleMismatch reports that app.bot_handle is not the App's own slug.
 var ErrHandleMismatch = errors.New("app.bot_handle is not this App's slug")
 
-// VerifyHandle reads the App's own record and checks the configured handle
-// against it. The handle is what tells a mention in a comment apart from other
-// text, what marks a review as Rumil's own among the reviews of a pull request,
-// and what recognizes a review request aimed at Rumil. A handle that is not the
-// slug therefore leaves the comment commands, the review requests and thread
+// CheckApp holds the configuration against the App's own record and returns
+// what the record says about the rest of it.
+//
+// The handle is what tells a mention in a comment apart from other text, what
+// marks a review as Rumil's own among the reviews of a pull request, and what
+// recognizes a review request aimed at Rumil. A handle that is not the slug
+// therefore leaves the comment commands, the review requests and thread
 // resolution inert while every other part of a run keeps working, which is why
-// it is checked rather than trusted. The error wraps ErrHandleMismatch for a
-// handle that disagrees, and anything else is a read that failed.
-func (e *Engine) VerifyHandle(ctx context.Context) error {
-	slug, err := e.auth.Slug(ctx)
+// it stops a run rather than being trusted. The error wraps ErrHandleMismatch
+// for a handle that disagrees, and anything else is a read that failed.
+//
+// The warnings are the parts of the configuration that GitHub will refuse
+// later, in the middle of a round rather than at its start.
+func (e *Engine) CheckApp(ctx context.Context) ([]string, error) {
+	record, err := e.auth.Record(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !ghapp.SameLogin(slug, e.cfg.App.BotHandle) {
-		return fmt.Errorf("%w: the configuration says %q and the App's slug is %q, so set app.bot_handle to %q",
-			ErrHandleMismatch, e.cfg.App.BotHandle, slug, slug)
+	if !ghapp.SameLogin(record.Slug, e.cfg.App.BotHandle) {
+		return nil, fmt.Errorf("%w: the configuration says %q and the App's slug is %q, so set app.bot_handle to %q",
+			ErrHandleMismatch, e.cfg.App.BotHandle, record.Slug, record.Slug)
 	}
-	return nil
+
+	var warnings []string
+	// Closing a review thread is refused for an installation whose Contents
+	// permission is read, whatever its pull_requests permission says, and the
+	// refusal arrives at the end of a round that has already been paid for. The
+	// installation is what answers this, not the App: a permission raised on the
+	// App does not reach the tokens until the installation's owner accepts it.
+	if level := record.Permissions.GetContents(); level != "write" {
+		warnings = append(warnings, fmt.Sprintf(
+			"closing review threads will be refused: GitHub answers resolveReviewThread only when the installation's Contents permission is read and write, and installation %d's is %q. If the App's own settings already say write, the installation has not accepted the change yet, and its owner accepts it in the installation's settings",
+			e.cfg.GitHub.InstallationID, level))
+	}
+	return warnings, nil
 }
 
 // Review runs the review. The installation is verified before the session is

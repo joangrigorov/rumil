@@ -76,7 +76,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 			// The handle decides which comments and which review requests Rumil
 			// answers, so it is held against the App's own record before the
 			// webhook endpoint is reachable.
-			if err := checkHandle(ctx, engine, cfg.App.BotHandle, logger); err != nil {
+			if err := checkApp(ctx, engine, cfg.App.BotHandle, logger); err != nil {
 				return err
 			}
 
