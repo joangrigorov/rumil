@@ -32,7 +32,8 @@ func newServeCmd(configPath *string) *cobra.Command {
 		Use:   "serve",
 		Short: "Run the GitHub webhook server and the review workers",
 		Long: "Run the webhook server and the review worker pool against the configured database.\n" +
-			"Reviews start only when a pull request requests the App as a reviewer.",
+			"Reviews start when a comment mentions the App with the review command, which is the\n" +
+			"trigger that works where GitHub will not let an App be requested as a reviewer.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, path, err := loadConfig(*configPath)
@@ -69,6 +70,13 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL, db)
 			if err != nil {
+				return err
+			}
+
+			// The handle decides which comments and which review requests Rumil
+			// answers, so it is held against the App's own record before the
+			// webhook endpoint is reachable.
+			if err := checkHandle(ctx, engine, cfg.App.BotHandle, logger); err != nil {
 				return err
 			}
 

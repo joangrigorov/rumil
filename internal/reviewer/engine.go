@@ -85,6 +85,29 @@ func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string, db *stor
 	return &Engine{cfg: cfg, logger: logger, auth: auth, memory: memory}, nil
 }
 
+// ErrHandleMismatch reports that app.bot_handle is not the App's own slug.
+var ErrHandleMismatch = errors.New("app.bot_handle is not this App's slug")
+
+// VerifyHandle reads the App's own record and checks the configured handle
+// against it. The handle is what tells a mention in a comment apart from other
+// text, what marks a review as Rumil's own among the reviews of a pull request,
+// and what recognizes a review request aimed at Rumil. A handle that is not the
+// slug therefore leaves the comment commands, the review requests and thread
+// resolution inert while every other part of a run keeps working, which is why
+// it is checked rather than trusted. The error wraps ErrHandleMismatch for a
+// handle that disagrees, and anything else is a read that failed.
+func (e *Engine) VerifyHandle(ctx context.Context) error {
+	slug, err := e.auth.Slug(ctx)
+	if err != nil {
+		return err
+	}
+	if !ghapp.SameLogin(slug, e.cfg.App.BotHandle) {
+		return fmt.Errorf("%w: the configuration says %q and the App's slug is %q, so set app.bot_handle to %q",
+			ErrHandleMismatch, e.cfg.App.BotHandle, slug, slug)
+	}
+	return nil
+}
+
 // Review runs the review. The installation is verified before the session is
 // created, so a missing GitHub App installation fails fast and cheap.
 func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {

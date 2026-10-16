@@ -178,6 +178,11 @@ type FakeGitHub struct {
 	// BotLogin is the login the fake reports for the comments it records a post
 	// as, so a later listing sees them exactly as GitHub would serve them.
 	BotLogin string
+	// AppSlug is the slug the fake's own App record carries, which is what the
+	// configured bot handle is held against.
+	AppSlug string
+	// AppStatus, when non-zero, is returned by the App record instead of it.
+	AppStatus int
 
 	// MintStatus, when non-zero, is returned by the installation token
 	// endpoint instead of a token (404 simulates an App that is not installed).
@@ -200,6 +205,7 @@ func NewFakeGitHub(t *testing.T) *FakeGitHub {
 		Owner:    "acme",
 		Repo:     "payments",
 		Number:   42,
+		AppSlug:  "rumil",
 		PRTitle:  "Add retry to the settlement worker",
 		PRBody:   "Adds bounded retries around the settlement call.",
 		PRAuthor: "octocat",
@@ -277,6 +283,8 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
 		f.handleMint(w)
+	case r.Method == http.MethodGet && r.URL.Path == "/app":
+		f.handleApp(w)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath():
 		f.handlePull(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/files":
@@ -370,6 +378,20 @@ func (f *FakeGitHub) handleMint(w http.ResponseWriter) {
 		"token":      "ghs_test_installation_token",
 		"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 	})
+}
+
+// handleApp serves the App's own record, which is the one route that answers
+// without an installation token.
+func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
+	f.mu.Lock()
+	slug, status := f.AppSlug, f.AppStatus
+	f.mu.Unlock()
+
+	if status != 0 {
+		f.writeJSON(w, status, map[string]string{"message": "Not Found"})
+		return
+	}
+	f.writeJSON(w, http.StatusOK, map[string]any{"id": 1, "slug": slug})
 }
 
 func (f *FakeGitHub) handlePull(w http.ResponseWriter, r *http.Request) {
