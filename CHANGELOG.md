@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.10](https://github.com/joangrigorov/rumil/compare/v0.0.9...v0.0.10) (2026-10-16)
+
+
+### Features
+
+* **config:** take the embedding width from the provider ([#25](https://github.com/joangrigorov/rumil/issues/25)) ([17ceb16](https://github.com/joangrigorov/rumil/commit/17ceb165a24f501de6fce25f31010d8e21465994))
+
+
+### Bug Fixes
+
+* **init:** ask a line at a time when the output is redirected ([#23](https://github.com/joangrigorov/rumil/issues/23)) ([cea6da9](https://github.com/joangrigorov/rumil/commit/cea6da958436105b2a79934856c475bb6c918a15))
+* **init:** refuse the chat model as the embedding model ([#22](https://github.com/joangrigorov/rumil/issues/22)) ([5a72308](https://github.com/joangrigorov/rumil/commit/5a72308747514cc5b7a89692c603102e4450d8ad))
+
 ## [0.0.9](https://github.com/joangrigorov/rumil/compare/v0.0.8...v0.0.9) (2026-10-15)
 
 
