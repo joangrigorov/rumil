@@ -647,6 +647,133 @@ func TestRememberCommandWithoutMemoryCostsNoModelCall(t *testing.T) {
 	}
 }
 
+// A review can be asked for in the conversation. It is the surface that works
+// when the App cannot be requested as a reviewer, and the reaction on the
+// comment is how the person knows the request was taken before the review
+// appears.
+func TestAReviewCommandQueuesAndAcknowledges(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	body := issueCommentPayload("created", "octocat", "User", "@rumil review", 9001)
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	response := h.deliver(t, handler, "issue_comment", "delivery-review-command", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202\nbody: %s", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "delivery-review-command"))
+
+	if reviews := gh.SubmittedReviews(); len(reviews) == 0 {
+		t.Error("the command produced no review")
+	}
+	reactions := gh.AddedReactions()
+	if len(reactions) != 1 {
+		t.Fatalf("recorded %d reactions, want one acknowledgement", len(reactions))
+	}
+	if reactions[0].Target != "issue_comment" || reactions[0].ID != 9001 {
+		t.Errorf("reaction = %+v, want it on the comment that carried the command", reactions[0])
+	}
+	if reactions[0].Content != "+1" {
+		t.Errorf("reaction content = %q, want %q", reactions[0].Content, "+1")
+	}
+}
+
+// A review request has no comment to answer, so its acknowledgement goes on the
+// pull request.
+func TestAReviewRequestIsAcknowledged(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	response := h.deliver(t, handler, "pull_request", "delivery-ack", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202\nbody: %s", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "delivery-ack"))
+
+	reactions := gh.AddedReactions()
+	if len(reactions) != 1 {
+		t.Fatalf("recorded %d reactions, want one acknowledgement", len(reactions))
+	}
+	if reactions[0].Target != "pull_request" {
+		t.Errorf("reaction = %+v, want it on the pull request", reactions[0])
+	}
+}
+
+// A reaction that cannot be posted is a warning rather than a failed job: the
+// review still runs and still lands.
+func TestAFailedReactionDoesNotFailTheReview(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.ReactionStatus = http.StatusForbidden
+	llm := testutil.NewFakeLLM(t)
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	h.deliver(t, handler, "pull_request", "delivery-ack-failed", body, sign(webhookSecret, body))
+	runPool(t, h, gh, jobCompleted(t, h, "delivery-ack-failed"))
+
+	if reviews := gh.SubmittedReviews(); len(reviews) == 0 {
+		t.Error("a refused reaction stopped the review")
+	}
+	if !strings.Contains(h.logs.String(), "acknowledging the review request failed") {
+		t.Errorf("logs do not record the refused reaction:\n%s", h.logs.String())
+	}
+}
+
+// A review command spends the operator's model calls whether or not it records
+// anything, so it is guarded by the same standing as a remembered rule.
+func TestAReviewCommandNeedsStandingOnAPublicRepository(t *testing.T) {
+	cases := []struct {
+		name        string
+		private     bool
+		association string
+		wantStatus  int
+	}{
+		{"a stranger on a public repository", false, "NONE", http.StatusOK},
+		{"a member of a public repository", false, "MEMBER", http.StatusAccepted},
+		{"a stranger on a private repository", true, "NONE", http.StatusAccepted},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := testutil.NewFakeGitHub(t)
+			llm := testutil.NewFakeLLM(t)
+			h := newHarness(t, gh, llm, harnessOpts{})
+			handler := server.Handler(h.webhook(), h.db, nil)
+
+			body := rawCommentPayload(tc.private, tc.association, "@rumil review")
+			response := h.deliver(t, handler, "pull_request_review_comment", "d-review-guard", body, sign(webhookSecret, body))
+			if response.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", response.Code, tc.wantStatus, response.Body.String())
+			}
+
+			queued, err := h.db.CountJobs(context.Background(), store.StatusQueued)
+			if err != nil {
+				t.Fatalf("CountJobs returned error: %v", err)
+			}
+			want := 0
+			if tc.wantStatus == http.StatusAccepted {
+				want = 1
+			}
+			if queued != want {
+				t.Errorf("queued jobs = %d, want %d", queued, want)
+			}
+		})
+	}
+}
+
 // storedMemories reads the rows as they are, with the status the gate gave
 // them, which is what a test of the approval gate asserts on.
 func storedMemories(t *testing.T, dsn string) []store.Memory {

@@ -310,7 +310,15 @@ Without `--config` it reads the first file of the [search](#where-the-file-is-fo
 2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
 3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it resolves that thread with a one-line reason, so a resolution is never silent.
 
-To start one, open a pull request and request the App under **Reviewers**. A later push is not reviewed on its own; request the App again to review it.
+To start one, open a pull request and request the App under **Reviewers**, or mention its handle in a comment with `review` and nothing else:
+
+```text
+@<the App's handle> review
+```
+
+The comment is the trigger that works everywhere: the API refuses to add a GitHub App as a reviewer, and the Reviewers dropdown does not offer one in every repository.
+
+Rumil answers a request with a `+1` reaction as soon as it has taken it — on the pull request for a review request, on the comment for a command — so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
 
 ## Repository guidelines
 
@@ -326,7 +334,7 @@ Rumil can record rules from the conversation, so a decision made once in review 
 
 ### Recording a rule
 
-On a private repository, anyone who can comment on a pull request can write a rule. On a public one the commenter needs a standing in the repository — `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR` — because a public repository takes comments from anyone, and a stranger's rule would queue work and spend the operator's embedding credits. Mention the App's handle in a comment with `remember` and the rule in your own words:
+On a private repository, anyone who can comment on a pull request can write a rule. On a public one the commenter needs a standing in the repository — `OWNER`, `MEMBER`, `COLLABORATOR` or `CONTRIBUTOR` — because a public repository takes comments from anyone, and a stranger's rule would queue work and spend the operator's embedding credits. A `review` command needs the same standing, for the same reason. Mention the App's handle in a comment with `remember` and the rule in your own words:
 
 ```text
 @rumil remember this service deliberately tolerates 60 seconds of clock skew in the JWT validator

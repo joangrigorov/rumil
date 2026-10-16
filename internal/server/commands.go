@@ -4,17 +4,21 @@ import "strings"
 
 // Command is one instruction parsed out of a comment that mentions Rumil.
 //
-// The pull request conversation supports exactly one command, `@rumil remember
-// <instruction>` (project_plan.md §6 Phase 4), in the two scopes of §6 Phase 6:
-// `@rumil remember --org <instruction>` and `@rumil remember org <instruction>`
-// record a rule for the whole organization rather than for the repository the
-// comment is on. Parsing happens in the webhook so a comment that asks for
-// nothing never takes a worker.
+// The pull request conversation supports two commands. `remember <instruction>`
+// records a rule (project_plan.md §6 Phase 4), in the two scopes of §6 Phase 6:
+// a `--org` marker before the instruction or the word `org` after it records a
+// rule for the whole organization rather than for the repository the comment is
+// on. `review` asks for a review of the pull request the comment is on, which
+// is the trigger that works where the App cannot be requested as a reviewer:
+// the REST API refuses a GitHub App in its reviewers list, and the UI does not
+// offer one everywhere. Parsing happens in the webhook so a comment that asks
+// for nothing never takes a worker.
 type Command struct {
-	// Verb is the command word, lowercased: "remember".
+	// Verb is the command word, lowercased: "remember" or "review".
 	Verb string
 	// Instruction is what the person wrote after the verb, with the scope marker
-	// taken out. It is the raw material of the synthesis step, not a rule yet.
+	// taken out. It is the raw material of the synthesis step, not a rule yet,
+	// and it is empty for a command that carries none.
 	Instruction string
 	// Org is true when the command asked for an organization-wide rule, which is
 	// the only thing that lets the synthesis session record one.

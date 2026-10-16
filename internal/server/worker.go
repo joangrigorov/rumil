@@ -124,12 +124,63 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 
 	switch job.EventType {
 	case eventPullRequest:
+		// The reaction goes on the pull request, because a review request
+		// carries no comment to answer.
+		p.acknowledgeReview(ctx, logger, reviewer.Request{
+			Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
+		})
 		p.review(ctx, logger, job)
 	case eventIssueComment, eventReviewComment:
-		p.remember(ctx, logger, job)
+		p.command(ctx, logger, job)
 	default:
 		logger.Info("the event needs no work")
 		p.finish(ctx, logger, job, true, nil)
+	}
+}
+
+// command runs what a comment asked for: a review of the pull request, or a
+// rule to record.
+func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job) {
+	delivery, command, err := p.commandOf(job)
+	if err != nil {
+		logger.Error("reading the command out of the delivery failed", "error", err)
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+
+	// The reaction goes on the comment, and it goes first: it tells the person
+	// the command was taken, which is what they are waiting for.
+	p.acknowledgeCommand(ctx, logger, reviewer.RememberRequest{
+		Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
+		CommentID: delivery.Comment.ID, Conversation: job.EventType == eventIssueComment,
+	})
+
+	switch command.Verb {
+	case commandReview:
+		p.review(ctx, logger, job)
+	case commandRemember:
+		p.remember(ctx, logger, job, delivery, command)
+	default:
+		// The webhook refuses a verb it does not know, so this is a job that
+		// outlived the version that queued it.
+		logger.Info("the command needs no work", "verb", command.Verb)
+		p.finish(ctx, logger, job, true, nil)
+	}
+}
+
+// acknowledgeReview reacts to a review request, best-effort: a reaction that
+// could not be posted is not a review that cannot run.
+func (p *Pool) acknowledgeReview(ctx context.Context, logger *slog.Logger, req reviewer.Request) {
+	if err := p.engine.Acknowledge(ctx, req); err != nil {
+		logger.Warn("acknowledging the review request failed", "error", err)
+	}
+}
+
+// acknowledgeCommand reacts to the comment that carried a command, which is
+// where the person who typed it is looking.
+func (p *Pool) acknowledgeCommand(ctx context.Context, logger *slog.Logger, req reviewer.RememberRequest) {
+	if err := p.engine.AcknowledgeCommand(ctx, req); err != nil {
+		logger.Warn("acknowledging the command failed", "error", err)
 	}
 }
 
@@ -169,7 +220,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 
 // remember distills the command a comment carried into a rule and answers the
 // comment.
-func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job) {
+func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
 	if !p.engine.MemoryConfigured() {
 		// Memory is opt-in, so a command that arrives while it is off is a
 		// configuration state rather than a failure: the job is completed with a
@@ -179,7 +230,7 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 		return
 	}
 
-	req, err := p.rememberRequest(job)
+	req, err := p.rememberRequest(job, delivery, command)
 	if err != nil {
 		logger.Error("reading the command out of the delivery failed", "error", err)
 		p.finish(ctx, logger, job, false, err)
@@ -217,20 +268,28 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 	p.finish(ctx, logger, job, true, nil)
 }
 
-// rememberRequest reads the command and its context back out of the delivery
-// the webhook stored. The payload is the signed body GitHub sent, so the fields
-// the webhook classified on are the ones read here.
-func (p *Pool) rememberRequest(job *store.Job) (reviewer.RememberRequest, error) {
+// commandOf reads the comment and the command back out of the delivery the
+// webhook stored. The payload is the signed body GitHub sent, so the fields the
+// webhook classified on are the ones read here.
+func (p *Pool) commandOf(job *store.Job) (payload, Command, error) {
 	var delivery payload
 	if err := json.Unmarshal(job.Payload, &delivery); err != nil {
-		return reviewer.RememberRequest{}, fmt.Errorf("decoding delivery %s: %w", job.DeliveryID, err)
+		return payload{}, Command{}, fmt.Errorf("decoding delivery %s: %w", job.DeliveryID, err)
 	}
 	if delivery.Comment == nil {
-		return reviewer.RememberRequest{}, fmt.Errorf("delivery %s carries no comment", job.DeliveryID)
+		return payload{}, Command{}, fmt.Errorf("delivery %s carries no comment", job.DeliveryID)
 	}
 
 	command, ok := parseCommand(p.botLogin, delivery.Comment.Body)
-	if !ok || command.Verb != commandRemember || command.Instruction == "" {
+	if !ok {
+		return payload{}, Command{}, fmt.Errorf("delivery %s carries no @%s command", job.DeliveryID, p.botLogin)
+	}
+	return delivery, command, nil
+}
+
+// rememberRequest reads the context a remembered rule is recorded with.
+func (p *Pool) rememberRequest(job *store.Job, delivery payload, command Command) (reviewer.RememberRequest, error) {
+	if command.Verb != commandRemember || command.Instruction == "" {
 		return reviewer.RememberRequest{}, fmt.Errorf("delivery %s no longer parses as a %s command", job.DeliveryID, commandRemember)
 	}
 

@@ -106,6 +106,15 @@ type SubmittedReview struct {
 	} `json:"comments"`
 }
 
+// Reaction is one acknowledgement, as the API received it.
+type Reaction struct {
+	// Target is "pull_request", "issue_comment" or "review_comment".
+	Target string
+	// ID is the comment the reaction hangs on, zero for the pull request body.
+	ID      int64
+	Content string
+}
+
 // FakeGitHub is an httptest-backed stand-in for the GitHub REST API surface
 // that Rumil uses.
 type FakeGitHub struct {
@@ -156,6 +165,12 @@ type FakeGitHub struct {
 	// Posted collects the comments Rumil posted through the reply and
 	// conversation endpoints.
 	Posted []PostedComment
+	// Reactions collects the reactions Rumil added, in order, so a test can
+	// assert what a request was acknowledged with and where.
+	Reactions []Reaction
+	// ReactionStatus, when non-zero, is returned by the reactions endpoints
+	// instead of a created reaction.
+	ReactionStatus int
 	// BotLogin is the login the fake reports for the comments it records a post
 	// as, so a later listing sees them exactly as GitHub would serve them.
 	BotLogin string
@@ -277,6 +292,16 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusOK, f.IssueComments)
 	case r.Method == http.MethodPost && r.URL.Path == f.issuePath()+"/comments":
 		f.handlePostIssueComment(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == f.issuePath()+"/reactions":
+		f.handleReaction(w, r, "pull_request", 0)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reactions") &&
+		strings.HasPrefix(r.URL.Path, f.repoPath()+"/issues/comments/"):
+		// A conversation comment is addressed by its own id, without the pull
+		// request number the comment belongs to.
+		f.handleReaction(w, r, "issue_comment", f.commentID(r.URL.Path, f.repoPath()+"/issues/comments/"))
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reactions") &&
+		strings.HasPrefix(r.URL.Path, f.repoPath()+"/pulls/comments/"):
+		f.handleReaction(w, r, "review_comment", f.commentID(r.URL.Path, f.repoPath()+"/pulls/comments/"))
 	case r.Method == http.MethodPost && r.URL.Path == f.pullPath()+"/reviews":
 		f.handleReview(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/contents/"):
@@ -286,6 +311,45 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, fmt.Sprintf(`{"message":"unexpected %s %s"}`, r.Method, r.URL.Path), http.StatusNotFound)
 	}
+}
+
+// AddedReactions returns a copy of the reactions seen so far.
+func (f *FakeGitHub) AddedReactions() []Reaction {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Reaction(nil), f.Reactions...)
+}
+
+// handleReaction records one acknowledgement, and answers with the reaction the
+// API would return.
+func (f *FakeGitHub) handleReaction(w http.ResponseWriter, r *http.Request, target string, id int64) {
+	var body struct {
+		Content string `json:"content"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	f.mu.Lock()
+	status := f.ReactionStatus
+	f.Reactions = append(f.Reactions, Reaction{Target: target, ID: id, Content: body.Content})
+	sequence := len(f.Reactions)
+	f.mu.Unlock()
+
+	if status != 0 {
+		http.Error(w, `{"message":"the reaction was refused"}`, status)
+		return
+	}
+	f.writeJSON(w, http.StatusCreated, map[string]any{"id": sequence, "content": body.Content})
+}
+
+// commentID reads the comment id out of a reactions path, which is
+// ".../comments/<id>/reactions".
+func (f *FakeGitHub) commentID(path, prefix string) int64 {
+	rest := strings.TrimSuffix(strings.TrimPrefix(path, prefix), "/reactions")
+	id, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (f *FakeGitHub) handleMint(w http.ResponseWriter) {
