@@ -225,7 +225,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `app.max_diff_bytes` | `250000` | Larger diffs are paginated instead of handed over in one piece |
 | `app.log_level` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on stderr |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |
-| `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review |
+| `review.resolve_threads` | `true` | Whether Rumil tries to resolve its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub answers `resolveReviewThread` with `Resource not accessible by integration` for every App installation, so in practice a round posts the reason into the thread and names the threads its commits fixed in the summary |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
@@ -308,7 +308,7 @@ Without `--config` it reads the first file of the [search](#where-the-file-is-fo
 
 1. GitHub delivers a webhook. Rumil verifies the signature and queues the job in Postgres.
 2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
-3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it resolves that thread with a one-line reason, so a resolution is never silent.
+3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it posts a one-line reason into that thread and names the thread in the summary, so a fixed finding is never silent. Closing the thread is left to a person: GitHub refuses the mutation that does it to an App installation.
 
 To start one, mention the App's handle in a comment with `review` and nothing else:
 
@@ -318,7 +318,7 @@ To start one, mention the App's handle in a comment with `review` and nothing el
 
 The comment is the trigger, and the only one. A GitHub App cannot be requested as a reviewer on github.com: `POST /pulls/{n}/requested_reviewers` answers 200 and adds nobody, `gh pr edit --add-reviewer 'slug[bot]'` fails to resolve the login, and the **Reviewers** list offers people, teams and GitHub Copilot, which is special-cased. GitHub's own documentation describes requesting a review from a person, a team or Copilot, and from nothing else. Mentioning the App in a comment reaches it the way a mention reaches any account.
 
-Rumil answers a request with a `+1` reaction as soon as it has taken it — on the pull request for a review request, on the comment for a command — so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
+Rumil answers a command with a `+1` reaction on the comment as soon as it has taken it, so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
 
 ## Repository guidelines
 

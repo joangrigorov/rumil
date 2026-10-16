@@ -520,6 +520,36 @@ func TestResolveReviewThreadNeedsItsArguments(t *testing.T) {
 	}
 }
 
+// GitHub refuses the mutation that closes a review thread to an App
+// installation, so the tool says what the limit is and what to do instead, and
+// the reason it posted stays in the thread as the record that the finding is
+// gone.
+func TestResolveReviewThreadReportsAnIntegrationRefusal(t *testing.T) {
+	gh := historyFixture(t)
+	gh.ResolveError = "Resource not accessible by integration"
+	tools := newGithubTools(t, gh, "@rumil")
+
+	_, err := callTool(t, tools.Specs(), "resolve_review_thread", map[string]any{
+		"thread_id": "PRRT_open", "reason": "the finding is gone",
+	})
+	if err == nil {
+		t.Fatal("resolve_review_thread reported success while github refused the mutation")
+	}
+	for _, want := range []string{"cannot close a thread here", "review summary"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to carry %q", err, want)
+		}
+	}
+	if resolved := gh.Resolved(); len(resolved) != 0 {
+		t.Errorf("resolved %v, want nothing closed", resolved)
+	}
+
+	posted := gh.PostedComments()
+	if len(posted) != 1 || !strings.Contains(posted[0].Body, "the finding is gone") {
+		t.Errorf("posted %+v, want the reason in the thread it could not close", posted)
+	}
+}
+
 func TestListConversationClampsTheLimit(t *testing.T) {
 	gh := historyFixture(t)
 	tools := newGithubTools(t, gh, "@rumil")
