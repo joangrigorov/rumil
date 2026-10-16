@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.0.12](https://github.com/joangrigorov/rumil/compare/v0.0.11...v0.0.12) (2026-10-16)
+
+
+### Features
+
+* ask for a review in a comment, and acknowledge a request with a reaction ([#30](https://github.com/joangrigorov/rumil/issues/30)) ([5be575b](https://github.com/joangrigorov/rumil/commit/5be575bf404d62aed5cac24172d6250cc74bd0f5))
+* browse and decide the recorded rules on a terminal ([#31](https://github.com/joangrigorov/rumil/issues/31)) ([e7635b6](https://github.com/joangrigorov/rumil/commit/e7635b6ad9d1138dbb6a40fb11f2405abb63012c))
+
+
+### Bug Fixes
+
+* decide a duplicate rule by its words, not only by its distance ([#29](https://github.com/joangrigorov/rumil/issues/29)) ([429e937](https://github.com/joangrigorov/rumil/commit/429e9377103f194c81c249441a54523e936c0fc6))
+* hold app.bot_handle against the App's own slug ([#33](https://github.com/joangrigorov/rumil/issues/33)) ([18d387c](https://github.com/joangrigorov/rumil/commit/18d387c481f14d8963791bd7975bc6fbbf02f6d1))
+* report GitHub's refusal to let an App close a review thread ([#34](https://github.com/joangrigorov/rumil/issues/34)) ([25808a0](https://github.com/joangrigorov/rumil/commit/25808a0378fa5cad9bb364a580081a2db9f12d77))
+
 ## [0.0.11](https://github.com/joangrigorov/rumil/compare/v0.0.10...v0.0.11) (2026-10-16)
 
 
