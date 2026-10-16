@@ -10,10 +10,10 @@ import (
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
-// testDB connects to a schema of its own on TEST_DATABASE_URL and applies the
-// migrations, at the width the fixtures build vectors and configurations at.
-// Tests skip when the variable is unset, so `go test ./...` still passes
-// without a database; CI and docker-compose provide one.
+// testDB connects to a schema of its own on the container testutil starts and
+// applies the migrations, at the width the fixtures build vectors and
+// configurations at. The tests skip when no container can be started, so
+// `go test ./...` still runs where Docker is unavailable.
 func testDB(t *testing.T) *DB {
 	t.Helper()
 
