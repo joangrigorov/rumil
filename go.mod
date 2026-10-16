@@ -3,6 +3,7 @@ module github.com/joangrigorov/rumil
 go 1.27.0
 
 require (
+	charm.land/fantasy v0.45.3
 	charm.land/huh/v2 v2.0.3
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/charmbracelet/x/term v0.2.2
@@ -19,7 +20,6 @@ require (
 require (
 	charm.land/bubbles/v2 v2.2.1 // indirect
 	charm.land/bubbletea/v2 v2.1.0 // indirect
-	charm.land/fantasy v0.45.3 // indirect
 	charm.land/lipgloss/v2 v2.0.6 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.24.1 // indirect

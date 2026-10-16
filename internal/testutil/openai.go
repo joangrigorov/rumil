@@ -49,6 +49,7 @@ type FakeLLM struct {
 	turns     []ScriptedTurn
 	defaultTx string
 	unknown   []string
+	rejected  []string
 
 	// embeddings are the vectors queued for the next embedding calls, and
 	// embedded is every input those calls carried.
@@ -107,6 +108,31 @@ func (f *FakeLLM) UnknownPaths() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.unknown...)
+}
+
+// RejectedSchemas returns the tool schemas this endpoint refused, in order. An
+// empty result means every request carried a schema a validating provider
+// accepts; a session that did not run because of one has its cause here.
+func (f *FakeLLM) RejectedSchemas() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.rejected...)
+}
+
+// ToolSchemaOf returns the schema the provider was shown for one tool of the
+// most recent request, which is what a test reads when it cares about the shape
+// rather than that a call happened.
+func (f *FakeLLM) ToolSchemaOf(name string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) == 0 {
+		return nil
+	}
+	var body map[string]any
+	if err := json.Unmarshal(f.requests[len(f.requests)-1].Raw, &body); err != nil {
+		return nil
+	}
+	return ToolSchemas(body)[name]
 }
 
 // ToolNames returns the tools offered on the most recent request.
@@ -184,6 +210,19 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 		f.unknown = append(f.unknown, r.Method+" "+r.URL.Path)
 		f.mu.Unlock()
 		http.Error(w, `{"error":{"message":"unsupported endpoint"}}`, http.StatusNotFound)
+		return
+	}
+
+	// A provider that validates tool schemas answers this before it looks at
+	// the conversation, so the double refuses the same requests (see
+	// ValidateToolSchemas).
+	if err := ValidateToolSchemas(body); err != nil {
+		f.mu.Lock()
+		f.rejected = append(f.rejected, err.Error())
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": err.Error()}})
 		return
 	}
 
