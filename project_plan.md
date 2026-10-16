@@ -48,7 +48,8 @@ rumil/
 │       ├── init.go               # `rumil init`: the setup form and the file it writes (§10 item 8)
 │       ├── serve.go              # `rumil serve` HTTP webhook + UI server (v0.0.3+)
 │       ├── mcp.go                # `rumil mcp [github|memory]` stdio runners (mcp-go adapter over the specs) — not built, §10 item 6
-│       └── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.0.5+)
+│       ├── mod.go                # `rumil mod [list|approve|reject]` CLI (v0.0.5+)
+│       └── mod_tui.go            # the interactive rule browser behind bare `rumil mod` (v0.0.12)
 ├── internal/
 │   ├── config/
 │   │   ├── config.go             # YAML loader, env interpolation, validation
@@ -451,6 +452,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
    * `rumil mod approve <memory-id> [--rule-text "optional edited text"] [--moderator name]` (re-embeds if `rule_text` was edited)
    * `rumil mod reject <memory-id> [--moderator name]`
    * `<memory-id>` is the full UUID or the short id the confirmation reply named. `--moderator` defaults to `cli`, because nothing here reads the host's identity: `reviewed_by` records what the team says it is.
+   * **Added after the phases, in `v0.0.12`:** bare `rumil mod` opens an interactive browser over the same service (`cmd/rumil/mod_tui.go`): the queue with the pending rules first, a screen per rule carrying everything the store recorded — the wording, the rationale, what it applies to, the comment it came from, who asked — and the four decisions (approve, edit the wording then approve, reject, promote to a directive) plus going back. It is a sequence of `huh` forms rather than a second rendering path, so the gate, the re-embedding of an edited rule, and the recorded moderator are the same code the subcommands use, and a decision taken in it is indistinguishable afterwards from one taken on the web page. It needs a terminal on both the input and the error output, which is what `rumil init` asks too; with either redirected it prints the queue and names `rumil mod approve`, because a browser with nothing to browse with answers nothing.
 4. **Web UI Moderation (`internal/server/mod_ui.go`):**
    * Protected by `moderation.admin_token`, accepted as an `Authorization: Bearer` header and compared in constant time. No login page, no sessions, no cookies. An unset token disables the surface: every request is answered `503` rather than served to anyone. Both sides of the comparison are hashed first, so the comparison is over two values of equal length and says nothing about the token's length; the scheme is matched case-insensitively, as the RFC defines it.
    * The token is also accepted as the password of a basic credential, because a browser cannot set an `Authorization` header of its own and basic auth is what lets a maintainer use the page without a login route, a cookie, or a line of JavaScript.
