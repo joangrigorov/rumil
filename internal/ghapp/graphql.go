@@ -3,7 +3,9 @@ package ghapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -140,6 +142,19 @@ func (c *Client) ReviewThreads(ctx context.Context) ([]ReviewThread, error) {
 	return threads, nil
 }
 
+// ErrThreadResolveUnsupported reports that GitHub refused the mutation that
+// closes a review thread to this token.
+//
+// A GitHub App installation is answered FORBIDDEN "Resource not accessible by
+// integration" for resolveReviewThread even when the App holds
+// pull_requests: write on the App record and on the installation: the same
+// mutation on the same thread answers 200 with a user token, and the
+// installation token reads those same threads without complaint, so the limit
+// is the integration rather than the permission set. Closing a review thread is
+// therefore a person's action, and a round that fixes a finding says so in its
+// summary instead of closing the thread.
+var ErrThreadResolveUnsupported = errors.New("github does not let a GitHub App installation resolve review threads")
+
 // ResolveReviewThread marks a thread resolved. GitHub keeps the thread and its
 // replies; what changes is that later rounds read it as a decision rather than
 // an open question.
@@ -156,13 +171,35 @@ func (c *Client) ResolveReviewThread(ctx context.Context, threadID string) error
 			} `json:"thread"`
 		} `json:"resolveReviewThread"`
 	}
-	if err := c.graphql(ctx, resolveReviewThreadMutation, map[string]any{"threadId": threadID}, &response); err != nil {
+	err := c.graphql(ctx, resolveReviewThreadMutation, map[string]any{"threadId": threadID}, &response)
+	if err != nil {
+		var answered *graphqlError
+		if errors.As(err, &answered) && answered.refusedToTheIntegration() {
+			return fmt.Errorf("%w: %w", ErrThreadResolveUnsupported, err)
+		}
 		return err
 	}
 	if !response.ResolveReviewThread.Thread.IsResolved {
 		return fmt.Errorf("github did not resolve thread %s", threadID)
 	}
 	return nil
+}
+
+// graphqlError is one error GitHub's GraphQL api answered with, kept as a type
+// so a caller can tell a refusal apart from a request that did not work.
+type graphqlError struct {
+	message string
+	kind    string
+}
+
+func (e *graphqlError) Error() string {
+	return fmt.Sprintf("github graphql: %s (type %s)", e.message, e.kind)
+}
+
+// refusedToTheIntegration reports the answer GitHub gives an installation for
+// an operation its integration may not perform.
+func (e *graphqlError) refusedToTheIntegration() bool {
+	return e.kind == "FORBIDDEN" && strings.Contains(e.message, "not accessible by integration")
 }
 
 // graphql posts one query and decodes its data. GraphQL answers a failed
@@ -185,7 +222,7 @@ func (c *Client) graphql(ctx context.Context, query string, variables map[string
 		return fmt.Errorf("calling the github graphql api: %w", err)
 	}
 	if len(body.Errors) > 0 {
-		return fmt.Errorf("github graphql: %s (type %s)", body.Errors[0].Message, body.Errors[0].Type)
+		return &graphqlError{message: body.Errors[0].Message, kind: body.Errors[0].Type}
 	}
 	if data == nil {
 		return nil

@@ -2,6 +2,7 @@ package ghapp
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,8 +133,30 @@ func TestGraphQLErrorsAreReported(t *testing.T) {
 	if !strings.Contains(err.Error(), "Resource not accessible by integration") {
 		t.Errorf("error = %v, want the message github sent", err)
 	}
+	// This is the answer GitHub gives an installation for the mutation that
+	// closes a thread, so the refusal is reported as the integration's limit
+	// rather than as a call that broke.
+	if !errors.Is(err, ErrThreadResolveUnsupported) {
+		t.Errorf("error = %v, want it to wrap ErrThreadResolveUnsupported", err)
+	}
 	if _, err := client.ReviewThreads(context.Background()); err == nil {
 		t.Error("ReviewThreads hid a graphql error")
+	}
+}
+
+// A graphql error that is not the integration refusal stays what it is: the
+// guidance the refusal carries would be wrong for a call that simply failed.
+func TestOtherGraphQLErrorsAreNotIntegrationRefusals(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.ResolveError = "something went wrong"
+	client := newTestClient(t, gh)
+
+	err := client.ResolveReviewThread(context.Background(), "PRRT_open")
+	if err == nil {
+		t.Fatal("ResolveReviewThread hid a graphql error")
+	}
+	if errors.Is(err, ErrThreadResolveUnsupported) {
+		t.Errorf("error = %v, want a failed call rather than the integration's limit", err)
 	}
 }
 

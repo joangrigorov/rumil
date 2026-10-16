@@ -2,6 +2,7 @@ package mcpservers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -294,6 +295,12 @@ func (t *GithubTools) resolveThread(ctx context.Context, args map[string]any) (s
 		return "", fmt.Errorf("resolve_review_thread failed: %w", err)
 	}
 	if err := t.client.ResolveReviewThread(ctx, threadID); err != nil {
+		if errors.Is(err, ghapp.ErrThreadResolveUnsupported) {
+			// The reason is already in the thread, so whoever reads it sees why
+			// the finding is gone even though GitHub will not let the App close
+			// it. Calling again would only post a second one.
+			return "", fmt.Errorf("resolve_review_thread cannot close a thread here: %w. The reason you posted is in the thread; say in the review summary which threads the commits have fixed instead of calling this tool again", err)
+		}
 		return "", fmt.Errorf("resolve_review_thread failed: %w", err)
 	}
 	closed := t.countResolution()

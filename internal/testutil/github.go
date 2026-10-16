@@ -159,6 +159,10 @@ type FakeGitHub struct {
 	// GraphQLErrors, when set, is returned in the errors array of every
 	// GraphQL response.
 	GraphQLErrors []string
+	// ResolveError, when set, is returned by the mutation that closes a review
+	// thread instead of it, so a test can drive a refusal of that operation
+	// alone.
+	ResolveError string
 	// ThreadPageSize, when set, is how many threads one reviewThreads page
 	// holds, so a test can make the client follow endCursor.
 	ThreadPageSize int
@@ -620,6 +624,15 @@ func (f *FakeGitHub) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.Contains(body.Query, "resolveReviewThread"):
 		threadID, _ := body.Variables["threadId"].(string)
+		f.mu.Lock()
+		refusal := f.ResolveError
+		f.mu.Unlock()
+		if refusal != "" {
+			f.writeJSON(w, http.StatusOK, map[string]any{"data": nil, "errors": []map[string]string{
+				{"message": refusal, "type": "FORBIDDEN"},
+			}})
+			return
+		}
 		f.mu.Lock()
 		f.ResolvedThreads = append(f.ResolvedThreads, threadID)
 		for i := range f.Threads {
