@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
@@ -32,7 +31,7 @@ func testMemoryDSN(t *testing.T) string {
 
 	// The migrations run first: the table has to exist before it can be
 	// emptied, and a fresh schema has nothing but the schema itself.
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
@@ -101,7 +100,7 @@ func seedOrgRule(t *testing.T, dsn, org, origin, rule string, vector []float32, 
 // needs: two rules at a chosen distance from the query that are not
 // near-duplicates, so both are stored.
 func vectorLike(cos float64, axis int) []float32 {
-	vector := make([]float32, config.EmbeddingDimensions)
+	vector := make([]float32, testutil.EmbeddingDimensions)
 	vector[0] = float32(cos)
 	vector[axis] = float32(math.Sqrt(1 - cos*cos))
 	return vector
@@ -112,7 +111,7 @@ func seedRuleProposal(t *testing.T, dsn string, proposal store.Proposal) {
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}

@@ -55,7 +55,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			db, err := store.Open(ctx, cfg.Database.DSN, cfg.Database.AutoMigrate)
+			db, err := store.Open(ctx, cfg.Database.DSN, cfg.Database.AutoMigrate, cfg.Models.EmbeddingDimensions())
 			if err != nil {
 				return err
 			}

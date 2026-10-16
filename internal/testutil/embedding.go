@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/http"
-
-	"github.com/joangrigorov/rumil/internal/config"
 )
+
+// EmbeddingDimensions is the width the tests build vectors, configurations and
+// databases at. Production takes the width from the embedding provider
+// (config.Models.EmbeddingDimensions); a fixture names one width so that the
+// vector it seeds, the configuration it loads and the column it fills agree.
+const EmbeddingDimensions = 1536
 
 // BasisVector returns a vector orthogonal to every other basis vector, so two
 // of them are unrelated rules and the same one is an exact match. It is what a
 // test seeds a memory with and what it scripts the embedder to answer.
 func BasisVector(index int) []float32 {
-	vector := make([]float32, config.EmbeddingDimensions)
-	vector[index%config.EmbeddingDimensions] = 1
+	vector := make([]float32, EmbeddingDimensions)
+	vector[index%EmbeddingDimensions] = 1
 	return vector
 }
 
@@ -81,5 +85,5 @@ func (f *FakeLLM) handleEmbeddings(w http.ResponseWriter, raw []byte) {
 func embeddingIndex(text string) int {
 	hash := fnv.New32a()
 	_, _ = hash.Write([]byte(text))
-	return int(hash.Sum32() % config.EmbeddingDimensions)
+	return int(hash.Sum32() % EmbeddingDimensions)
 }

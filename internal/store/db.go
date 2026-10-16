@@ -21,7 +21,11 @@ type DB struct {
 
 // Open connects to dsn and, when autoMigrate is set, applies the embedded
 // migrations before returning.
-func Open(ctx context.Context, dsn string, autoMigrate bool) (*DB, error) {
+//
+// embeddingWidth is the width of the vectors memory holds, from the embedding
+// provider in the configuration. Zero means memory is off, and then the column
+// is left as it is.
+func Open(ctx context.Context, dsn string, autoMigrate bool, embeddingWidth int) (*DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("database.dsn is required")
 	}
@@ -38,6 +42,12 @@ func Open(ctx context.Context, dsn string, autoMigrate bool) (*DB, error) {
 	db := &DB{pool: pool}
 	if autoMigrate {
 		if err := db.Migrate(ctx); err != nil {
+			pool.Close()
+			return nil, err
+		}
+	}
+	if embeddingWidth > 0 {
+		if err := db.EnsureEmbeddingWidth(ctx, embeddingWidth); err != nil {
 			pool.Close()
 			return nil, err
 		}

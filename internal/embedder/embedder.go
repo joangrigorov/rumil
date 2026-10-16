@@ -27,8 +27,8 @@ const maxInputBytes = 24 << 10
 // maxErrorBytes bounds how much of a failed response is quoted back.
 const maxErrorBytes = 4 << 10
 
-// maxResponseBytes bounds a successful response. A 1536-dimension vector is
-// roughly 20 KB of JSON.
+// maxResponseBytes bounds a successful response. A wide vector, 1536
+// dimensions or more, is tens of KB of JSON.
 const maxResponseBytes = 1 << 20
 
 // requestTimeout bounds one embeddings call.
@@ -45,8 +45,8 @@ type Client struct {
 }
 
 // New builds a client for an embedding provider. It fails when the provider
-// declares no dimensions, because the vector width is what the
-// `vector(1536)` column depends on.
+// declares no dimensions, because that is the width the column memory searches
+// is sized to.
 func New(provider *config.Provider) (*Client, error) {
 	if provider == nil {
 		return nil, errors.New("embedder: no provider")

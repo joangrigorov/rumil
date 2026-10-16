@@ -72,7 +72,7 @@ func modDatabase(t *testing.T) string {
 	dsn := testutil.TestDatabaseURL(t, "rumil_cmd_test")
 	ctx := context.Background()
 
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
@@ -95,7 +95,7 @@ func modDatabase(t *testing.T) string {
 func ruleVector(rule string) []float32 {
 	hash := fnv.New32a()
 	_, _ = hash.Write([]byte(rule))
-	return testutil.BasisVector(int(hash.Sum32() % config.EmbeddingDimensions))
+	return testutil.BasisVector(int(hash.Sum32() % testutil.EmbeddingDimensions))
 }
 
 // seedModerationRule records a pending repository rule.
@@ -110,7 +110,7 @@ func seedScopedModerationRule(t *testing.T, dsn, rule, scope string) store.Memor
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
@@ -137,7 +137,7 @@ func seedScopedModerationRule(t *testing.T, dsn, rule, scope string) store.Memor
 func readModerationRule(t *testing.T, dsn, id string) store.Memory {
 	t.Helper()
 
-	db, err := store.Open(context.Background(), dsn, true)
+	db, err := store.Open(context.Background(), dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestModRejectHidesARule(t *testing.T) {
 		t.Errorf("row is %+v, want REJECTED and reviewed_by octocat", rejected)
 	}
 
-	db, err := store.Open(context.Background(), dsn, true)
+	db, err := store.Open(context.Background(), dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}

@@ -42,8 +42,12 @@ type Answers struct {
 	EmbeddingBaseURL string
 	EmbeddingModel   string
 	EmbeddingAPIKey  string
-	DatabaseDSN      string
-	AdminToken       string
+	// EmbeddingDimensions is the width the embedding model returns. Empty
+	// takes DefaultEmbeddingDimensions; memory search cannot be built without
+	// a width, and the provider has to agree with it at every call.
+	EmbeddingDimensions string
+	DatabaseDSN         string
+	AdminToken          string
 }
 
 // envName is the shape of a name a secret is written as, rather than in full:
@@ -127,6 +131,19 @@ func Render(a Answers) ([]byte, error) {
 		if apiKey == "" {
 			apiKey = strings.TrimSpace(a.ChatAPIKey)
 		}
+
+		// The width is the embedding model's, not the chat model's, and the
+		// column memory searches is built to it.
+		width := DefaultEmbeddingDimensions
+		if given := strings.TrimSpace(a.EmbeddingDimensions); given != "" {
+			parsed, err := strconv.Atoi(given)
+			if err != nil || parsed < 1 || parsed > MaxEmbeddingDimensions {
+				return nil, fmt.Errorf("the embedding dimensions must be a whole number between 1 and %d, got %q",
+					MaxEmbeddingDimensions, given)
+			}
+			width = parsed
+		}
+
 		doc.Models.DefaultEmbedding = model
 		doc.Models.Providers = append(doc.Models.Providers, providerSection{
 			ID:         model,
@@ -134,7 +151,7 @@ func Render(a Answers) ([]byte, error) {
 			BaseURL:    baseURL,
 			ModelName:  model,
 			APIKey:     secretOrLiteral(apiKey),
-			Dimensions: EmbeddingDimensions,
+			Dimensions: width,
 		})
 	}
 

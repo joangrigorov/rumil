@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/embedder"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/server"
@@ -39,10 +38,10 @@ func (e *textEmbedder) Embed(_ context.Context, text string) ([]float32, error) 
 // vectorFor is the vector every test uses for a piece of text: a basis vector
 // chosen by the text, so two different texts never look alike.
 func vectorFor(text string) []float32 {
-	vector := make([]float32, config.EmbeddingDimensions)
+	vector := make([]float32, testutil.EmbeddingDimensions)
 	index := 0
 	for _, r := range text {
-		index = (index*31 + int(r)) % config.EmbeddingDimensions
+		index = (index*31 + int(r)) % testutil.EmbeddingDimensions
 	}
 	vector[index] = 1
 	return vector

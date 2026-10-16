@@ -51,7 +51,7 @@ models:
       base_url: "https://api.openai.com/v1"
       model_name: "text-embedding-3-small"
       api_key: "${OPENAI_API_KEY}"
-      dimensions: 1536            # A provider with dimensions is an embedding provider; it must match the memories.embedding column
+      dimensions: 1536            # A provider with dimensions is an embedding provider. The width is the model's own: memory is stored and searched at it, and Rumil sizes memories.embedding to it on boot. 1536 for text-embedding-3-small, 768 for a local EmbeddingGemma
 
 database:                         # Required from v0.0.3
   dsn: "${DATABASE_URL}"          # postgres://user:pass@db:5432/rumil?sslmode=disable

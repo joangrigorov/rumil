@@ -99,7 +99,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}

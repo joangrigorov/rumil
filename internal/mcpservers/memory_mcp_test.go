@@ -36,7 +36,7 @@ func (f *fakeEmbedder) Embed(_ context.Context, text string) ([]float32, error) 
 		index = len(f.index)
 		f.index[text] = index
 	}
-	vector := make([]float32, config.EmbeddingDimensions)
+	vector := make([]float32, testutil.EmbeddingDimensions)
 	vector[index] = 1
 	return vector, nil
 }
@@ -65,7 +65,7 @@ func testMemoryStore(t *testing.T) *store.DB {
 
 	dsn := testutil.TestDatabaseURL(t, "rumil_mcpservers_test")
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestProposeMemoryRecordsOrgScopeForAnOrgCommand(t *testing.T) {
 // first answer (BasisVector(0)), leaning on axis, so a rule can be seeded at a
 // chosen distance from a search query without looking like another rule.
 func memoryVector(cos float64, axis int) []float32 {
-	vector := make([]float32, config.EmbeddingDimensions)
+	vector := make([]float32, testutil.EmbeddingDimensions)
 	vector[0] = float32(cos)
 	vector[axis] = float32(math.Sqrt(1 - cos*cos))
 	return vector

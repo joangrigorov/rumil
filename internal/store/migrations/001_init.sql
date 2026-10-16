@@ -1,4 +1,10 @@
 -- +goose Up
+-- The whole schema lives in this one migration until 0.1.0. Rumil is still
+-- being built and holds no data worth keeping, so a schema change edits this
+-- file rather than adding a migration that unpicks an earlier one. A second
+-- migration appears only when there is data to keep, and never a destructive
+-- one (§4).
+--
 -- The schema is pinned because an extension is database-wide: a bare
 -- CREATE EXTENSION installs into the first schema on the caller's search_path,
 -- which is a different schema for every test package.
@@ -8,6 +14,12 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 CREATE TYPE memory_scope AS ENUM ('REPO', 'ORG');
 CREATE TYPE memory_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
 CREATE TYPE job_status AS ENUM ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED');
+
+-- A rule's authority over the repository's own guidelines. CONTEXT is what a
+-- rule is recorded as: context that the guidelines outrank. DIRECTIVE is set
+-- only at the approval gate, by a maintainer, and puts one rule above RUMIL.md
+-- for the case it names.
+CREATE TYPE memory_authority AS ENUM ('CONTEXT', 'DIRECTIVE');
 
 CREATE TABLE webhook_jobs (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,6 +46,7 @@ CREATE TABLE memories (
     repo_name       TEXT,                         -- Nullable when scope = 'ORG' (though origin repo is still recorded)
     scope           memory_scope NOT NULL DEFAULT 'REPO',
     status          memory_status NOT NULL DEFAULT 'PENDING',
+    authority       memory_authority NOT NULL DEFAULT 'CONTEXT',
     path_glob       TEXT,                         -- Optional file glob e.g. 'internal/payments/**'
     rule_text       TEXT NOT NULL,                -- Distilled standalone engineering rule
     rationale       TEXT,                         -- Why this rule exists
@@ -41,17 +54,28 @@ CREATE TABLE memories (
     source_comment  TEXT NOT NULL,                -- Permalink or comment ID
     requested_by    TEXT NOT NULL,                -- GitHub login of requester
     reviewed_by     TEXT,                         -- Moderator identifier
-    embedding       vector(1536) NOT NULL,
+    -- Declared without a width on purpose: the width is that of the embedding
+    -- provider in the configuration, which SQL cannot read. internal/store
+    -- sizes the column and builds the index that searches it at startup, from
+    -- the width the configuration resolves to.
+    embedding       vector NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_memories_tenant_lookup ON memories (installation_id, org_name, status, scope);
-CREATE INDEX idx_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops);
+
+-- A promotion reaches one repository, so the pair is refused at rest as well as
+-- by the statement that writes it: a reader can rely on a DIRECTIVE rule being a
+-- repository's own, whatever wrote the row.
+ALTER TABLE memories
+    ADD CONSTRAINT memories_directive_is_a_repository_rule
+        CHECK (authority <> 'DIRECTIVE' OR scope = 'REPO');
 
 -- +goose Down
 DROP TABLE IF EXISTS memories;
 DROP TABLE IF EXISTS webhook_jobs;
 DROP TYPE IF EXISTS job_status;
+DROP TYPE IF EXISTS memory_authority;
 DROP TYPE IF EXISTS memory_status;
 DROP TYPE IF EXISTS memory_scope;
