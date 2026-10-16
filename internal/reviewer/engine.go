@@ -112,13 +112,15 @@ func (e *Engine) CheckApp(ctx context.Context) ([]string, error) {
 	}
 
 	var warnings []string
-	// Closing a review thread is refused for an App whose Contents permission
-	// is read, whatever its pull_requests permission says, and the refusal
-	// arrives at the end of a round that has already been paid for.
+	// Closing a review thread is refused for an installation whose Contents
+	// permission is read, whatever its pull_requests permission says, and the
+	// refusal arrives at the end of a round that has already been paid for. The
+	// installation is what answers this, not the App: a permission raised on the
+	// App does not reach the tokens until the installation's owner accepts it.
 	if level := record.Permissions.GetContents(); level != "write" {
 		warnings = append(warnings, fmt.Sprintf(
-			"closing review threads will be refused: GitHub answers resolveReviewThread for an App installation only when the App's Contents permission is read and write, and this App's is %q. Raise it in the App's settings, or let a round name the threads its commits fix instead",
-			level))
+			"closing review threads will be refused: GitHub answers resolveReviewThread only when the installation's Contents permission is read and write, and installation %d's is %q. If the App's own settings already say write, the installation has not accepted the change yet, and its owner accepts it in the installation's settings",
+			e.cfg.GitHub.InstallationID, level))
 	}
 	return warnings, nil
 }

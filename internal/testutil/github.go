@@ -288,7 +288,7 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/access_tokens"):
 		f.handleMint(w)
-	case r.Method == http.MethodGet && r.URL.Path == "/app":
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/app/installations/"):
 		f.handleApp(w)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath():
 		f.handlePull(w, r)
@@ -385,8 +385,9 @@ func (f *FakeGitHub) handleMint(w http.ResponseWriter) {
 	})
 }
 
-// handleApp serves the App's own record, which is the one route that answers
-// without an installation token.
+// handleApp serves the installation's own record, which is the read that answers
+// without an installation token and carries both the App's slug and the
+// permissions the tokens it mints will hold.
 func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
 	f.mu.Lock()
 	slug, permissions, status := f.AppSlug, f.AppPermissions, f.AppStatus
@@ -396,7 +397,9 @@ func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
 		f.writeJSON(w, status, map[string]string{"message": "Not Found"})
 		return
 	}
-	f.writeJSON(w, http.StatusOK, map[string]any{"id": 1, "slug": slug, "permissions": permissions})
+	f.writeJSON(w, http.StatusOK, map[string]any{
+		"id": 98765432, "app_id": 123456, "app_slug": slug, "permissions": permissions,
+	})
 }
 
 func (f *FakeGitHub) handlePull(w http.ResponseWriter, r *http.Request) {

@@ -88,20 +88,26 @@ type AppRecord struct {
 	Permissions *github.InstallationPermissions
 }
 
-// Record reads the App's own record. GET /app is app-authenticated rather than
-// installation-authenticated, so this is the one read that works before an
-// installation token is minted, and it is the only place an operator's
-// configuration can be held against what GitHub knows instead of against itself.
+// Record reads what the installation this process authenticates as is allowed
+// to do.
+//
+// The read is the installation's own record rather than the App's: the App's
+// permission settings can be ahead of the installation's, because a permission
+// added to the App does not reach an installation until its owner accepts it,
+// and an installation can be narrower than the App. `GET /app/installations/{id}`
+// is app-authenticated rather than installation-authenticated, so it works
+// before any token is minted, and it answers with both the App's slug — the
+// login people mention in comments — and the permission set the tokens carry.
 func (a *AppAuth) Record(ctx context.Context) (AppRecord, error) {
-	app, _, err := apiClient(a.apps, a.baseURL).Apps.Get(ctx, "")
+	installation, _, err := apiClient(a.apps, a.baseURL).Apps.GetInstallation(ctx, a.installationID)
 	if err != nil {
-		return AppRecord{}, fmt.Errorf("reading the App's own record: %w", err)
+		return AppRecord{}, fmt.Errorf("reading installation %d's own record: %w", a.installationID, err)
 	}
-	slug := app.GetSlug()
+	slug := installation.GetAppSlug()
 	if slug == "" {
-		return AppRecord{}, errors.New("the App's own record carries no slug")
+		return AppRecord{}, fmt.Errorf("installation %d's record carries no App slug", a.installationID)
 	}
-	return AppRecord{Slug: slug, Permissions: app.Permissions}, nil
+	return AppRecord{Slug: slug, Permissions: installation.Permissions}, nil
 }
 
 // apiClient points a go-github client at the configured API endpoint, which is
