@@ -297,9 +297,9 @@ func (t *GithubTools) resolveThread(ctx context.Context, args map[string]any) (s
 	if err := t.client.ResolveReviewThread(ctx, threadID); err != nil {
 		if errors.Is(err, ghapp.ErrThreadResolveUnsupported) {
 			// The reason is already in the thread, so whoever reads it sees why
-			// the finding is gone even though GitHub will not let the App close
+			// the finding is gone even though GitHub will not let this App close
 			// it. Calling again would only post a second one.
-			return "", fmt.Errorf("resolve_review_thread cannot close a thread here: %w. The reason you posted is in the thread; say in the review summary which threads the commits have fixed instead of calling this tool again", err)
+			return "", fmt.Errorf("resolve_review_thread cannot close a thread for this App: %w. Closing a review thread needs the App's Contents permission to be Read and write, and this one is read. The reason you posted is in the thread; say in the review summary which threads the commits have fixed instead of calling this tool again", err)
 		}
 		return "", fmt.Errorf("resolve_review_thread failed: %w", err)
 	}

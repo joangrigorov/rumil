@@ -79,21 +79,29 @@ func (a *AppAuth) Client() *github.Client {
 	return apiClient(a.transport, a.baseURL)
 }
 
-// Slug reads the App's own record and returns the slug GitHub knows it by,
-// which is the login people mention in comments and the login the App's own
-// reviews are attributed to. GET /app is app-authenticated rather than
+// AppRecord is what the App's own record says about it: the login people
+// mention in comments, and the permissions it holds.
+type AppRecord struct {
+	// Slug is the App's login, which is what its reviews are attributed to.
+	Slug string
+	// Permissions is the permission set GitHub reports for the App.
+	Permissions *github.InstallationPermissions
+}
+
+// Record reads the App's own record. GET /app is app-authenticated rather than
 // installation-authenticated, so this is the one read that works before an
-// installation token is minted.
-func (a *AppAuth) Slug(ctx context.Context) (string, error) {
+// installation token is minted, and it is the only place an operator's
+// configuration can be held against what GitHub knows instead of against itself.
+func (a *AppAuth) Record(ctx context.Context) (AppRecord, error) {
 	app, _, err := apiClient(a.apps, a.baseURL).Apps.Get(ctx, "")
 	if err != nil {
-		return "", fmt.Errorf("reading the App's own record: %w", err)
+		return AppRecord{}, fmt.Errorf("reading the App's own record: %w", err)
 	}
 	slug := app.GetSlug()
 	if slug == "" {
-		return "", errors.New("the App's own record carries no slug")
+		return AppRecord{}, errors.New("the App's own record carries no slug")
 	}
-	return slug, nil
+	return AppRecord{Slug: slug, Permissions: app.Permissions}, nil
 }
 
 // apiClient points a go-github client at the configured API endpoint, which is

@@ -181,6 +181,10 @@ type FakeGitHub struct {
 	// AppSlug is the slug the fake's own App record carries, which is what the
 	// configured bot handle is held against.
 	AppSlug string
+	// AppPermissions is the permission set the fake's App record carries, which
+	// is what tells an operator that a capability will be refused before a run
+	// spends anything on it.
+	AppPermissions map[string]string
 	// AppStatus, when non-zero, is returned by the App record instead of it.
 	AppStatus int
 
@@ -202,16 +206,17 @@ func NewFakeGitHub(t *testing.T) *FakeGitHub {
 	t.Helper()
 
 	f := &FakeGitHub{
-		Owner:    "acme",
-		Repo:     "payments",
-		Number:   42,
-		AppSlug:  "rumil",
-		PRTitle:  "Add retry to the settlement worker",
-		PRBody:   "Adds bounded retries around the settlement call.",
-		PRAuthor: "octocat",
-		PRState:  "open",
-		BaseSHA:  "1111111111111111111111111111111111111111",
-		HeadSHA:  "2222222222222222222222222222222222222222",
+		Owner:          "acme",
+		Repo:           "payments",
+		Number:         42,
+		AppSlug:        "rumil",
+		AppPermissions: map[string]string{"contents": "write", "pull_requests": "write"},
+		PRTitle:        "Add retry to the settlement worker",
+		PRBody:         "Adds bounded retries around the settlement call.",
+		PRAuthor:       "octocat",
+		PRState:        "open",
+		BaseSHA:        "1111111111111111111111111111111111111111",
+		HeadSHA:        "2222222222222222222222222222222222222222",
 		Diff: strings.Join([]string{
 			"diff --git a/main.go b/main.go",
 			"index 1111111..2222222 100644",
@@ -384,14 +389,14 @@ func (f *FakeGitHub) handleMint(w http.ResponseWriter) {
 // without an installation token.
 func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
 	f.mu.Lock()
-	slug, status := f.AppSlug, f.AppStatus
+	slug, permissions, status := f.AppSlug, f.AppPermissions, f.AppStatus
 	f.mu.Unlock()
 
 	if status != 0 {
 		f.writeJSON(w, status, map[string]string{"message": "Not Found"})
 		return
 	}
-	f.writeJSON(w, http.StatusOK, map[string]any{"id": 1, "slug": slug})
+	f.writeJSON(w, http.StatusOK, map[string]any{"id": 1, "slug": slug, "permissions": permissions})
 }
 
 func (f *FakeGitHub) handlePull(w http.ResponseWriter, r *http.Request) {
