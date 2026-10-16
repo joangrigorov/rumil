@@ -358,9 +358,10 @@ An organization-wide rule is offered to the model as such; keep repository-speci
 
 A proposed rule does nothing until a maintainer approves it. Nothing retrieves a pending rule, so a comment cannot put text in front of the reviewer on its own.
 
-Approve from the command line, using the short ID from the reply:
+On a terminal, `rumil mod` opens the rules in a browser: move through the queue with the arrow keys, press enter to open one and read everything recorded about it — the rule, why it was recorded, what it applies to, the comment it came from, who asked — and decide it there. The rule screen offers approving it, editing the wording before approving, rejecting it, and promoting it above the repository's `RUMIL.md`. `--moderator` names who the decision is recorded against. With the input or the error output redirected there is nothing to move around with, so it prints the queue instead:
 
 ```bash
+rumil mod                                   # the browser, on a terminal
 rumil mod list                              # everything, with its status
 rumil mod list --status pending             # what is waiting
 rumil mod list --status approved --repo acme/payments

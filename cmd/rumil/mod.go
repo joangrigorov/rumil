@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"text/tabwriter"
@@ -16,20 +17,74 @@ import (
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
+// printMemories writes the rule queue as a table, which is what the list
+// subcommand and the non-interactive form of the browser both print.
+func printMemories(out io.Writer, memories []store.Memory) error {
+	if len(memories) == 0 {
+		_, _ = fmt.Fprintln(out, "no rules match")
+		return nil
+	}
+
+	writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(writer, "ID\tSCOPE\tAUTHORITY\tSTATUS\tAPPLIES TO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
+	for _, memory := range memories {
+		_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			memory.ShortID(),
+			memory.Scope,
+			memory.Authority,
+			memory.Status,
+			moderationTarget(memory),
+			orDash(memory.PathGlob),
+			memory.RequestedBy,
+			memory.CreatedAt.UTC().Format(time.RFC3339),
+			oneLine(memory.RuleText),
+		)
+	}
+	return writer.Flush()
+}
+
 // defaultModerator is who a decision is recorded against when the operator does
 // not name one. It is deliberately not the local user: a rules record belongs
 // to the team that writes it, and nothing here reads the host's identity.
 const defaultModerator = "cli"
 
 func newModCmd(configPath *string) *cobra.Command {
+	var moderator string
+
 	cmd := &cobra.Command{
 		Use:   "mod",
 		Short: "Review the rules waiting for a maintainer's decision",
 		Long: "List, approve and reject the engineering rules Rumil recorded from comments.\n" +
-			"Only an approved rule is ever retrieved into a review.",
+			"Only an approved rule is ever retrieved into a review.\n\n" +
+			"On a terminal the command opens the rules in a browser: move through them, open one to read\n" +
+			"everything recorded about it, and decide it there. With the input or the error output\n" +
+			"redirected there is nothing to move around with, so the queue is printed and the subcommands\n" +
+			"below are the surface to use instead.",
 		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			service, _, closeDB, err := openModeration(*configPath)
+			if err != nil {
+				return err
+			}
+			defer closeDB()
+
+			if !isTerminal(cmd.InOrStdin()) || !isTerminal(cmd.ErrOrStderr()) {
+				memories, err := service.List(cmd.Context(), store.MemoryFilter{Limit: modTUIListLimit})
+				if err != nil {
+					return err
+				}
+				if err := printMemories(cmd.OutOrStdout(), memories); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(),
+					"\nto decide one: rumil mod approve <memory-id> --moderator <name>")
+				return nil
+			}
+			return runModTUI(cmd, service, moderator)
+		},
 	}
 
+	cmd.Flags().StringVar(&moderator, "moderator", defaultModerator, "who a decision made in the browser is recorded against")
 	cmd.AddCommand(newModListCmd(configPath))
 	cmd.AddCommand(newModApproveCmd(configPath))
 	cmd.AddCommand(newModRejectCmd(configPath))
@@ -68,27 +123,7 @@ func newModListCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			if len(memories) == 0 {
-				_, _ = fmt.Fprintln(out, "no rules match")
-				return nil
-			}
-
-			writer := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(writer, "ID\tSCOPE\tAUTHORITY\tSTATUS\tAPPLIES TO\tGLOB\tREQUESTED BY\tCREATED\tRULE")
-			for _, memory := range memories {
-				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					memory.ShortID(),
-					memory.Scope,
-					memory.Authority,
-					memory.Status,
-					moderationTarget(memory),
-					orDash(memory.PathGlob),
-					memory.RequestedBy,
-					memory.CreatedAt.UTC().Format(time.RFC3339),
-					oneLine(memory.RuleText),
-				)
-			}
-			return writer.Flush()
+			return printMemories(out, memories)
 		},
 	}
 
