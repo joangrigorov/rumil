@@ -84,10 +84,14 @@ func runInit(cmd *cobra.Command, configFlag string, force, printOnly bool) error
 	}
 
 	in := cmd.InOrStdin()
-	interactive := isTerminal(in)
+	errOut := cmd.ErrOrStderr()
+	// A terminal on both sides, because huh reads the keys from the input and
+	// measures the terminal it draws the form on. With the output redirected the
+	// width stays zero, and huh's text input panicked on it.
+	interactive := isTerminal(in) && isTerminal(errOut)
 
 	form := initForm(&given, target, interactive, printOnly).
-		WithOutput(cmd.ErrOrStderr()).
+		WithOutput(errOut).
 		WithInput(in)
 	if !interactive {
 		// Without a terminal huh asks its questions a line at a time, which is
@@ -281,10 +285,11 @@ func initForm(a *answers, target string, interactive, printOnly bool) *huh.Form 
 	return huh.NewForm(groups...)
 }
 
-// isTerminal reports whether the reader is a terminal. huh draws a full-screen
-// form on one, and asks line by line without one.
-func isTerminal(in io.Reader) bool {
-	f, ok := in.(interface{ Fd() uintptr })
+// isTerminal reports whether v is a terminal. It is asked of both the input the
+// questions are read from and the output they are drawn on, because the form
+// needs both: one to read keys, one to measure itself against.
+func isTerminal(v any) bool {
+	f, ok := v.(interface{ Fd() uintptr })
 	return ok && term.IsTerminal(f.Fd())
 }
 
