@@ -220,13 +220,16 @@ func initForm(a *answers, target string, interactive, printOnly bool) *huh.Form 
 					"states in review and applies the ones a maintainer approved, so a decision made once is not\n"+
 					"re-litigated on the next pull request. It also needs a database, which the next screen asks\n"+
 					"about.\n\n"+
-					"Leave the embedding model empty if you do not want this yet: reviews work without it.\n"+
-					"The endpoint must return 1536-dimension embeddings, which is what text-embedding-3-small does."),
+					"Leave the embedding model empty if you do not want this yet: reviews work without it.\n\n"+
+					"The model is an embeddings model of its own, and it may sit at another provider than the\n"+
+					"chat model: the endpoint below is empty to reuse the chat one. It has to return\n"+
+					"1536-dimension embeddings, which is what text-embedding-3-small does."),
 			huh.NewInput().
 				Title("Embedding model").
-				Description("Empty turns memory off.").
+				Description("An embeddings model, not the chat model above; empty turns memory off.").
 				Placeholder("text-embedding-3-small").
-				Value(&a.EmbeddingModel),
+				Value(&a.EmbeddingModel).
+				Validate(differentFromChat(&a.ChatModel)),
 			huh.NewInput().
 				Title("Embedding endpoint").
 				Description("Empty reuses the chat endpoint.").
@@ -344,6 +347,22 @@ func required(what string) func(string) error {
 			return fmt.Errorf("%s is required", what)
 		}
 		return nil
+	}
+}
+
+// differentFromChat refuses an embedding model that repeats the chat model. A
+// provider is either the chat model or the embedding model, and its id is the
+// name of its model, so the chat model here asks for a file the runtime
+// refuses. It reads the chat answer when the question is answered rather than
+// when the form is built, and config.Render refuses the same pair, which covers
+// an answer file and an answer that was changed after this screen was left.
+func differentFromChat(chat *string) func(string) error {
+	return func(value string) error {
+		value = strings.TrimSpace(value)
+		if value == "" || value != strings.TrimSpace(*chat) {
+			return nil
+		}
+		return fmt.Errorf("the chat model is already %q: the embedding model is a model of its own, or empty to run without memory", value)
 	}
 }
 

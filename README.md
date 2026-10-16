@@ -143,6 +143,8 @@ rumil init
 
 Every screen says what it is asking for, including where in GitHub the value comes from, so this README is not needed while it runs. The file is parsed before it is written, so `rumil init` cannot leave behind a configuration that Rumil refuses to start with. `--force` overwrites an existing file, `--print` writes to stdout instead of the filesystem, and `--config` says where the file belongs.
 
+Memory is optional, and it asks for an embeddings model of its own: a provider in the file is either the chat model or the embedding model, so the chat model is refused where the embeddings model is asked for. A chat endpoint that serves no embeddings — DeepSeek's, for one — is therefore paired with an embeddings model from another provider, which is what the separate embedding endpoint and key are for, or with an empty embeddings model, which turns memory off and leaves reviews working without it.
+
 An answer that is the name of an environment variable — `OPENAI_API_KEY` — is written as `${OPENAI_API_KEY}`, so the file holds no secrets and can be copied or committed. It writes the per-user file described below and creates its directory.
 
 Without a terminal it asks the same questions one line at a time, which is how a script or a container answers them:

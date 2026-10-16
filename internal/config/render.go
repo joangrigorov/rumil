@@ -90,6 +90,7 @@ func Render(a Answers) ([]byte, error) {
 		return nil, fmt.Errorf("the installation ID must be a positive number, got %q", a.InstallationID)
 	}
 
+	chatModel := strings.TrimSpace(a.ChatModel)
 	doc := document{
 		App: appSection{BotHandle: a.BotHandle},
 		GitHub: githubSection{
@@ -98,17 +99,26 @@ func Render(a Answers) ([]byte, error) {
 			PrivateKeyPath: secretOrLiteral(a.PrivateKeyPath),
 			WebhookSecret:  strings.TrimSpace(a.WebhookSecret),
 		},
-		Models: modelsSection{DefaultChat: strings.TrimSpace(a.ChatModel)},
+		Models: modelsSection{DefaultChat: chatModel},
 	}
 	doc.Models.Providers = append(doc.Models.Providers, providerSection{
-		ID:        strings.TrimSpace(a.ChatModel),
+		ID:        chatModel,
 		Provider:  "openai-compatible",
 		BaseURL:   strings.TrimSpace(a.ChatBaseURL),
-		ModelName: strings.TrimSpace(a.ChatModel),
+		ModelName: chatModel,
 		APIKey:    secretOrLiteral(a.ChatAPIKey),
 	})
 
 	if model := strings.TrimSpace(a.EmbeddingModel); model != "" {
+		// The id of a provider is the name of its model, and a provider is
+		// either the chat model or the embedding model: a file that names one
+		// model for both is one the loader rejects, so the answers are refused
+		// here, while the file is still the only thing that would have been
+		// written.
+		if model == chatModel {
+			return nil, fmt.Errorf("the embedding model is the chat model, %q: a provider is either the chat model or the embedding model, so the embedding answers need an embeddings model of their own, or an empty model to run without memory", model)
+		}
+
 		baseURL := strings.TrimSpace(a.EmbeddingBaseURL)
 		if baseURL == "" {
 			baseURL = strings.TrimSpace(a.ChatBaseURL)

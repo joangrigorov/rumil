@@ -223,3 +223,60 @@ func TestInitRefusesAnAnswerThatCannotWork(t *testing.T) {
 		t.Error("a file was written although the answers were refused")
 	}
 }
+
+// The chat model is not an embedding model: one provider is either the one or
+// the other, and the id of a provider is the name of its model, so the chat
+// model on the embedding screen makes a file the runtime refuses. The run stops
+// instead, and the operator is told which way out to take.
+func TestInitRefusesTheChatModelAsTheEmbeddingModel(t *testing.T) {
+	home := tempHome(t)
+
+	// Everything up to the embedding model, with the chat model answered again
+	// there. The rest of initAnswers is left off: the run has nothing more to
+	// read whatever it asks next.
+	uptoEmbedding := initAnswers[:strings.Index(initAnswers, "text-embedding-3-small")]
+	out, err := runInitCmd(t, uptoEmbedding+"deepseek-chat\n")
+	if err == nil {
+		t.Fatalf("init wrote a file from an embedding model that is the chat model:\n%s", out)
+	}
+	for _, want := range []string{"deepseek-chat", "embedding model", "without memory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to mention %q", err, want)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "rumil", "config.yaml")); statErr == nil {
+		t.Error("a file was written although the answers were refused")
+	}
+}
+
+// The embedding question refuses the chat model where it is asked, so the
+// operator hears about it at the screen rather than at the end of the run.
+func TestDifferentFromChat(t *testing.T) {
+	chat := "deepseek-chat"
+
+	for _, tc := range []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "accepts an embeddings model of its own", value: "text-embedding-3-small"},
+		{name: "accepts an empty answer, which turns memory off", value: ""},
+		{name: "accepts whitespace, which is an empty answer", value: "   "},
+		{name: "accepts a name that only starts the same", value: "deepseek-chat-embed"},
+		{name: "refuses the chat model", value: "deepseek-chat", wantErr: true},
+		{name: "refuses the chat model with space around it", value: " deepseek-chat ", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := differentFromChat(&chat)(tc.value)
+			if tc.wantErr && err == nil {
+				t.Fatalf("differentFromChat(%q) = nil, want an error", tc.value)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("differentFromChat(%q) = %v, want nil", tc.value, err)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), chat) {
+				t.Errorf("error = %v, want it to name %q", err, chat)
+			}
+		})
+	}
+}
