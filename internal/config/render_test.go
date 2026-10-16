@@ -75,7 +75,7 @@ func TestRenderProducesAFileTheLoaderAccepts(t *testing.T) {
 	if chat.ID != "deepseek-chat" || chat.APIKey != "sk-deepseek" || chat.Dimensions != 0 {
 		t.Errorf("chat provider = %+v", chat)
 	}
-	if embedding.ID != "text-embedding-3-small" || embedding.APIKey != "sk-openai" || embedding.Dimensions != EmbeddingDimensions {
+	if embedding.ID != "text-embedding-3-small" || embedding.APIKey != "sk-openai" || embedding.Dimensions != DefaultEmbeddingDimensions {
 		t.Errorf("embedding provider = %+v", embedding)
 	}
 	if cfg.Models.DefaultChat != "deepseek-chat" || cfg.Models.DefaultEmbedding != "text-embedding-3-small" {

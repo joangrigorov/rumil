@@ -53,7 +53,7 @@ func newReviewCmd(configPath *string) *cobra.Command {
 			// database (project_plan.md §3 rule 6).
 			var db *store.DB
 			if cfg.Database.DSN != "" {
-				db, err = store.Open(cmd.Context(), cfg.Database.DSN, cfg.Database.AutoMigrate)
+				db, err = store.Open(cmd.Context(), cfg.Database.DSN, cfg.Database.AutoMigrate, cfg.Models.EmbeddingDimensions())
 				if err != nil {
 					return err
 				}

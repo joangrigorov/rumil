@@ -10,7 +10,9 @@ import (
 )
 
 // initAnswers is what a full run of `rumil init` is fed, in the order the
-// questions are asked. The last line answers the confirmation.
+// questions are asked. The last line answers the confirmation. The embedding
+// width is not the default, so a run that writes it is distinguishable from a
+// run that ignores the answer.
 const initAnswers = "acme-rumil\n" +
 	"123456\n" +
 	"98765432\n" +
@@ -19,12 +21,17 @@ const initAnswers = "acme-rumil\n" +
 	"deepseek-chat\n" +
 	"DEEPSEEK_API_KEY\n" +
 	"text-embedding-3-small\n" +
+	initEmbeddingWidth + "\n" +
 	"https://api.openai.com/v1\n" +
 	"OPENAI_API_KEY\n" +
 	"a-webhook-secret-value\n" +
 	"DATABASE_URL\n" +
 	"RUMIL_ADMIN_TOKEN\n" +
 	"y\n"
+
+// initEmbeddingWidth is the width of the vectors a local embeddings model
+// returns, which is what the answers above name.
+const initEmbeddingWidth = "768"
 
 // tempHome points HOME at a directory the test owns and clears
 // XDG_CONFIG_HOME, so the file lands where the test looks for it whatever the
@@ -106,8 +113,8 @@ func TestInitWritesTheFileDiscoveryFinds(t *testing.T) {
 	if len(cfg.Models.Providers) != 2 {
 		t.Fatalf("providers = %d, want the chat and embedding providers", len(cfg.Models.Providers))
 	}
-	if cfg.Models.Providers[1].Dimensions != config.EmbeddingDimensions {
-		t.Errorf("embedding provider = %+v", cfg.Models.Providers[1])
+	if cfg.Models.EmbeddingDimensions() != 768 {
+		t.Errorf("embedding provider = %+v, want the 768 dimensions that were answered", cfg.Models.Providers[1])
 	}
 
 	// The secrets the answers named are variables in the file, not values.

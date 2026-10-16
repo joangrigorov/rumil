@@ -11,7 +11,13 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 )
 
-const testKey = "test-key"
+// testDimensions is the width these tests serve and expect. The width is the
+// provider's, so the client checks against whatever its provider declares;
+// TestEmbedRunsAtTheProviderWidth shows a second one.
+const (
+	testKey        = "test-key"
+	testDimensions = 1536
+)
 
 // vector returns values that are exact in binary floating point, so a JSON
 // round trip preserves them.
@@ -33,7 +39,7 @@ func newProvider(t *testing.T, handler http.HandlerFunc) *config.Provider {
 		BaseURL:    server.URL,
 		ModelName:  "text-embedding-3-small",
 		APIKey:     testKey,
-		Dimensions: config.EmbeddingDimensions,
+		Dimensions: testDimensions,
 	}
 }
 
@@ -59,7 +65,7 @@ func TestEmbedSendsTheConfiguredRequestAndReturnsTheVector(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("decoding the request: %v", err)
 		}
-		writeEmbedding(t, w, vector(config.EmbeddingDimensions))
+		writeEmbedding(t, w, vector(testDimensions))
 	})
 
 	client, err := New(provider)
@@ -89,11 +95,11 @@ func TestEmbedSendsTheConfiguredRequestAndReturnsTheVector(t *testing.T) {
 	if body.Input != "we allow 60s of clock skew here" {
 		t.Errorf("input = %q, want the text that was passed in", body.Input)
 	}
-	if client.Dimension() != config.EmbeddingDimensions {
-		t.Errorf("Dimension() = %d, want %d", client.Dimension(), config.EmbeddingDimensions)
+	if client.Dimension() != testDimensions {
+		t.Errorf("Dimension() = %d, want %d", client.Dimension(), testDimensions)
 	}
 
-	want := vector(config.EmbeddingDimensions)
+	want := vector(testDimensions)
 	if len(got) != len(want) {
 		t.Fatalf("vector width = %d, want %d", len(got), len(want))
 	}
@@ -101,6 +107,35 @@ func TestEmbedSendsTheConfiguredRequestAndReturnsTheVector(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("vector[%d] = %v, want %v", i, got[i], want[i])
 		}
+	}
+}
+
+// The width belongs to the provider, not to the runtime: a 768-dimension model
+// is served by a provider that declares 768 (project_plan.md §3 rule 5), which
+// is what lets memory run on a local model whose vectors are narrower than
+// OpenAI's.
+func TestEmbedRunsAtTheProviderWidth(t *testing.T) {
+	const localWidth = 768
+
+	provider := newProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeEmbedding(t, w, vector(localWidth))
+	})
+	provider.Dimensions = localWidth
+
+	client, err := New(provider)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.Dimension() != localWidth {
+		t.Errorf("Dimension() = %d, want %d", client.Dimension(), localWidth)
+	}
+
+	got, err := client.Embed(context.Background(), "we allow 60s of clock skew here")
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(got) != localWidth {
+		t.Fatalf("vector width = %d, want %d", len(got), localWidth)
 	}
 }
 
@@ -157,7 +192,7 @@ func TestEmbedTruncatesAnOversizedInput(t *testing.T) {
 			t.Errorf("decoding the request: %v", err)
 		}
 		received = len(body.Input)
-		writeEmbedding(t, w, vector(config.EmbeddingDimensions))
+		writeEmbedding(t, w, vector(testDimensions))
 	})
 
 	client, err := New(provider)
@@ -200,7 +235,7 @@ func TestNewRejectsAProviderThatIsNotAnEmbedder(t *testing.T) {
 }
 
 func TestNewRejectsAnIncompleteProvider(t *testing.T) {
-	_, err := New(&config.Provider{ID: "embed", Dimensions: config.EmbeddingDimensions})
+	_, err := New(&config.Provider{ID: "embed", Dimensions: testDimensions})
 	if err == nil {
 		t.Fatal("New accepted a provider without a base URL, want an error")
 	}

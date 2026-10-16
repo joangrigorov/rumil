@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -328,6 +329,97 @@ github:
 	}
 }
 
+// The width memory is stored and searched at is the one the embedding provider
+// declares (§3 rule 5): internal/store sizes memories.embedding to it, so a
+// 768-dimension model is a correct configuration, and a wide one is refused
+// where pgvector's index stops.
+func TestEmbeddingDimensionsComeFromTheProvider(t *testing.T) {
+	doc := func(width int) []byte {
+		return []byte(fmt.Sprintf(`
+models:
+  default_chat: "chat"
+  default_embedding: "local"
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+    - id: "local"
+      provider: "openai-compatible"
+      base_url: "http://127.0.0.1:52625/v1"
+      model_name: "embed-gemma"
+      api_key: "local"
+      dimensions: %d
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+`, width))
+	}
+
+	cfg, err := Parse(doc(768), "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse rejected a 768-dimension provider: %v", err)
+	}
+	if got := cfg.Models.EmbeddingDimensions(); got != 768 {
+		t.Errorf("EmbeddingDimensions() = %d, want the provider's 768", got)
+	}
+
+	// Memory off is no width at all, which is what leaves the column alone.
+	cfg.Models.DefaultEmbedding = ""
+	if got := cfg.Models.EmbeddingDimensions(); got != 0 {
+		t.Errorf("EmbeddingDimensions() = %d with memory off, want 0", got)
+	}
+
+	// The column has a lower bound as well: a zero width is not a width.
+	if _, err := Parse(doc(0), "test.yaml"); err == nil {
+		t.Error("Parse accepted a provider with no dimensions as an embedding provider")
+	}
+}
+
+// One column backs memory, so every embedding provider in the file states the
+// same width: a disagreement is refused where it is written rather than
+// resurfacing later as a column sized to the other one.
+func TestEmbeddingProvidersMustAgreeOnTheWidth(t *testing.T) {
+	const doc = `
+models:
+  default_chat: "chat"
+  default_embedding: "small"
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+    - id: "small"
+      provider: "openai-compatible"
+      base_url: "https://embed.example.com/v1"
+      model_name: "small"
+      api_key: "k"
+      dimensions: 768
+    - id: "large"
+      provider: "openai-compatible"
+      base_url: "https://embed.example.com/v1"
+      model_name: "large"
+      api_key: "k"
+      dimensions: 1536
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+`
+	_, err := Parse([]byte(doc), "test.yaml")
+	if err == nil {
+		t.Fatal("Parse accepted two embedding providers of different widths")
+	}
+	for _, want := range []string{"disagrees", "768", "1536"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
 func TestReviewGuidelinesRef(t *testing.T) {
 	doc := func(ref string) []byte {
 		return []byte(`
@@ -552,7 +644,7 @@ models:
 			wantErr: ErrNoChatProvider,
 		},
 		{
-			name: "embedding dimensions mismatch",
+			name: "embedding provider wider than pgvector indexes",
 			doc: `
 github:
   app_id: 1
@@ -565,9 +657,9 @@ models:
       base_url: "https://embed.example.com/v1"
       model_name: "embed"
       api_key: "k"
-      dimensions: 768
+      dimensions: 4096
 `,
-			wantSub: "vector(1536)",
+			wantSub: "outside 1-2000",
 		},
 		{
 			name: "duplicate provider id",

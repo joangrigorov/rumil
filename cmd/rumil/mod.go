@@ -207,7 +207,7 @@ func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(
 	}
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, cfg.Database.DSN, cfg.Database.AutoMigrate)
+	db, err := store.Open(ctx, cfg.Database.DSN, cfg.Database.AutoMigrate, cfg.Models.EmbeddingDimensions())
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/joangrigorov/rumil/internal/config"
+	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
 const (
@@ -18,7 +19,7 @@ const (
 // so two different indexes are unrelated rules and the same index is an exact
 // match.
 func embeddingAt(index int) []float32 {
-	v := make([]float32, config.EmbeddingDimensions)
+	v := make([]float32, testutil.EmbeddingDimensions)
 	v[index] = 1
 	return v
 }
@@ -35,7 +36,7 @@ func embeddingTilted(cos float64) []float32 {
 // rules that both sit at a chosen distance from the query without being
 // near-duplicates of one another.
 func embeddingLike(cos float64, axis int) []float32 {
-	v := make([]float32, config.EmbeddingDimensions)
+	v := make([]float32, testutil.EmbeddingDimensions)
 	v[0] = float32(cos)
 	v[axis] = float32(math.Sqrt(1 - cos*cos))
 	return v

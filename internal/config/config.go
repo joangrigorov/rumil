@@ -15,9 +15,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// EmbeddingDimensions is the fixed width of the memories.embedding column
-// (project_plan.md §4). A configured embedding provider must match it.
-const EmbeddingDimensions = 1536
+// DefaultEmbeddingDimensions is the width `rumil init` offers and the width an
+// embedding provider is taken to have when it states none. Memory runs at the
+// width its embedding provider declares, because internal/store sizes
+// memories.embedding to that width at startup (project_plan.md §3 rule 5).
+const DefaultEmbeddingDimensions = 1536
+
+// MaxEmbeddingDimensions is the widest vector memory can hold: pgvector builds
+// the HNSW index memory search uses up to 2000 dimensions.
+const MaxEmbeddingDimensions = 2000
 
 // ProviderOpenAICompatible is the only provider kind supported in v0.0.1.
 const ProviderOpenAICompatible = "openai-compatible"
@@ -328,9 +334,28 @@ func (m Models) validate() error {
 		if p.APIKey == "" {
 			return fmt.Errorf("models.providers[%d].api_key is required", i)
 		}
-		if p.Dimensions != 0 && p.Dimensions != EmbeddingDimensions {
-			return fmt.Errorf("models.providers[%d].dimensions %d does not match the memories.embedding column (vector(%d))",
-				i, p.Dimensions, EmbeddingDimensions)
+		if p.Dimensions < 0 || p.Dimensions > MaxEmbeddingDimensions {
+			return fmt.Errorf("models.providers[%d].dimensions %d is outside 1-%d, the range pgvector indexes, and 0 to mark a provider as the chat model",
+				i, p.Dimensions, MaxEmbeddingDimensions)
+		}
+	}
+
+	// One column backs memory, so two embedding providers have to agree on its
+	// width. Only the selected one is used, and a disagreement would otherwise
+	// surface at startup as a column sized to the other provider.
+	var width int
+	var widthID string
+	for i, p := range m.Providers {
+		if !p.IsEmbedding() {
+			continue
+		}
+		if width == 0 {
+			width, widthID = p.Dimensions, p.ID
+			continue
+		}
+		if p.Dimensions != width {
+			return fmt.Errorf("models.providers[%d].dimensions %d disagrees with %q (%d): one column backs memory, so every embedding provider states the same width",
+				i, p.Dimensions, widthID, width)
 		}
 	}
 
@@ -360,6 +385,21 @@ func (m Models) EmbeddingProvider() (*Provider, error) {
 		return nil, fmt.Errorf("models.default_embedding %q refers to a provider without dimensions", m.DefaultEmbedding)
 	}
 	return p, nil
+}
+
+// EmbeddingDimensions is the width the selected embedding provider declares,
+// and zero when memory is off. internal/store sizes memories.embedding to it,
+// so the width is decided here and nowhere else.
+//
+// A configuration that names an unusable embedding provider is refused by
+// validate before this is asked, so an error here resolves to the zero width
+// rather than being reported twice.
+func (m Models) EmbeddingDimensions() int {
+	p, err := m.EmbeddingProvider()
+	if err != nil || p == nil {
+		return 0
+	}
+	return p.Dimensions
 }
 
 // ChatProvider resolves the chat provider using the project_plan.md §3 model

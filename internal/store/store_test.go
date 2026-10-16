@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,24 +11,29 @@ import (
 )
 
 // testDB connects to a schema of its own on TEST_DATABASE_URL and applies the
-// migrations. Tests skip when the variable is unset, so `go test ./...` still
-// passes without a database; CI and docker-compose provide one.
+// migrations, at the width the fixtures build vectors and configurations at.
+// Tests skip when the variable is unset, so `go test ./...` still passes
+// without a database; CI and docker-compose provide one.
 func testDB(t *testing.T) *DB {
 	t.Helper()
 
 	dsn := testutil.TestDatabaseURL(t, "rumil_store_test")
 
 	ctx := context.Background()
-	db, err := Open(ctx, dsn, true)
+	db, err := Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}
 	t.Cleanup(db.Close)
 
 	// Tests in this package share the schema, so each starts from an empty
-	// queue and an empty memory table.
+	// queue and an empty memory table. A test that resized the embedding
+	// column puts the fixture width back, because the width outlives the rows.
 	if _, err := db.pool.Exec(ctx, `TRUNCATE webhook_jobs, memories`); err != nil {
 		t.Fatalf("truncating the test tables: %v", err)
+	}
+	if err := db.EnsureEmbeddingWidth(ctx, testutil.EmbeddingDimensions); err != nil {
+		t.Fatalf("restoring the fixture embedding width: %v", err)
 	}
 	return db
 }
@@ -61,6 +67,9 @@ func TestMigrateCreatesTheSchema(t *testing.T) {
 		}
 	}
 
+	// The width memory runs at is the embedding provider's, which SQL cannot
+	// read, so 001_init.sql declares the column bare and Open sizes it and
+	// builds the index over it (TestEnsureEmbeddingWidth covers the change).
 	var embeddingType string
 	err := db.pool.QueryRow(context.Background(), `
 		SELECT format_type(atttypid, atttypmod) FROM pg_attribute
@@ -68,14 +77,16 @@ func TestMigrateCreatesTheSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the embedding column type: %v", err)
 	}
-	if embeddingType != "vector(1536)" {
-		t.Errorf("memories.embedding is %s, want vector(1536)", embeddingType)
+	if want := fmt.Sprintf("vector(%d)", testutil.EmbeddingDimensions); embeddingType != want {
+		t.Errorf("memories.embedding is %s, want %s", embeddingType, want)
+	}
+	if !hasEmbeddingIndex(t, db) {
+		t.Error("idx_memories_embedding is missing, want memory search indexed")
 	}
 
-	// The authority a rule carries arrives in a later, additive migration
-	// (§4, §10 item 5). What matters is that it is not nullable and that a row
-	// which does not name it reads back as recorded context, which is what makes
-	// the migration safe on an installation that already holds rules.
+	// The authority a rule carries over the repository's guidelines (§4, §10
+	// item 5). What matters is that it is not nullable and that a row which
+	// does not name it reads back as recorded context.
 	var authorityType, authorityDefault, nullable string
 	err = db.pool.QueryRow(context.Background(), `
 		SELECT udt_name, coalesce(column_default, ''), is_nullable

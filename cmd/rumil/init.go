@@ -78,7 +78,10 @@ func runInit(cmd *cobra.Command, configFlag string, force, printOnly bool) error
 			ChatBaseURL:    "https://api.openai.com/v1",
 			ChatModel:      "gpt-4o-mini",
 			ChatAPIKey:     "OPENAI_API_KEY",
-			DatabaseDSN:    "DATABASE_URL",
+			// The width most embeddings models are served at, so the common
+			// case is answered by pressing Enter.
+			EmbeddingDimensions: strconv.Itoa(config.DefaultEmbeddingDimensions),
+			DatabaseDSN:         "DATABASE_URL",
 		},
 		confirm: true,
 	}
@@ -222,14 +225,22 @@ func initForm(a *answers, target string, interactive, printOnly bool) *huh.Form 
 					"about.\n\n"+
 					"Leave the embedding model empty if you do not want this yet: reviews work without it.\n\n"+
 					"The model is an embeddings model of its own, and it may sit at another provider than the\n"+
-					"chat model: the endpoint below is empty to reuse the chat one. It has to return\n"+
-					"1536-dimension embeddings, which is what text-embedding-3-small does."),
+					"chat model: the endpoint below is empty to reuse the chat one. The next question asks how\n"+
+					"wide the vectors it returns are, which is what memory is stored and searched at: 1536 for\n"+
+					"text-embedding-3-small, 768 for a local EmbeddingGemma. It is the width the model itself\n"+
+					"returns, and a run at the wrong one is refused rather than stored."),
 			huh.NewInput().
 				Title("Embedding model").
 				Description("An embeddings model, not the chat model above; empty turns memory off.").
 				Placeholder("text-embedding-3-small").
 				Value(&a.EmbeddingModel).
 				Validate(differentFromChat(&a.ChatModel)),
+			huh.NewInput().
+				Title("Embedding dimensions").
+				Description("The width of the vectors the model returns.").
+				Placeholder(strconv.Itoa(config.DefaultEmbeddingDimensions)).
+				Value(&a.EmbeddingDimensions).
+				Validate(embeddingDimensions),
 			huh.NewInput().
 				Title("Embedding endpoint").
 				Description("Empty reuses the chat endpoint.").
@@ -374,6 +385,17 @@ func positiveNumber(what string) func(string) error {
 		}
 		return nil
 	}
+}
+
+// embeddingDimensions accepts the width of the vectors the embedding model
+// returns, which is the width the column memory searches is built at.
+func embeddingDimensions(value string) error {
+	width, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || width < 1 || width > config.MaxEmbeddingDimensions {
+		return fmt.Errorf("the width is a whole number between 1 and %d, the widest vector pgvector indexes",
+			config.MaxEmbeddingDimensions)
+	}
+	return nil
 }
 
 // startURL accepts an http or https URL.

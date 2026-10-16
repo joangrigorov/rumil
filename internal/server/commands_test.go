@@ -653,7 +653,7 @@ func storedMemories(t *testing.T, dsn string) []store.Memory {
 	t.Helper()
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, dsn, true)
+	db, err := store.Open(ctx, dsn, true, testutil.EmbeddingDimensions)
 	if err != nil {
 		t.Fatalf("opening the test database: %v", err)
 	}

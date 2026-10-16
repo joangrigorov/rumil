@@ -28,7 +28,7 @@ It is read-only: the review, the replies in the threads it opened, and the confi
 - **An OpenAI-compatible chat endpoint** and an API key for it. It has to support OpenAI-style tool calling: a review is an agent session that calls tools, and an endpoint that answers chat completions without them produces no review.
 - **A GitHub App of your own**, installed on the repositories Rumil should review. [Configure](#configure) creates it.
 - **A Postgres 16+ database with the `pgvector` extension** — for `rumil serve` only. The `pgvector/pgvector:pg16` image is the easiest way to get one. Rumil creates its own tables on boot when `database.auto_migrate` is on, so its database user needs the right to create extensions; on a managed Postgres, check that before you start.
-- **Optionally, an embedding provider** with 1536-dimension embeddings. That is what turns on recorded rules; without it Rumil reviews normally and has no memory.
+- **Optionally, an embedding provider** of its own, for example `text-embedding-3-small`. That is what turns on recorded rules; without it Rumil reviews normally and has no memory. The provider states how wide its vectors are, and memory is stored and searched at that width, so a local model is enough: `embed-gemma` at 768 dimensions works.
 - **Inbound HTTPS to your instance** — for `rumil serve` only, so that GitHub can deliver webhooks. Any reverse proxy works; a local run needs a tunnel that GitHub can reach.
 
 Every review spends tokens on your chat provider, and recording or retrieving a rule spends them on your embedding provider. Nobody bills you but your provider.
@@ -143,7 +143,7 @@ rumil init
 
 Every screen says what it is asking for, including where in GitHub the value comes from, so this README is not needed while it runs. The file is parsed before it is written, so `rumil init` cannot leave behind a configuration that Rumil refuses to start with. `--force` overwrites an existing file, `--print` writes to stdout instead of the filesystem, and `--config` says where the file belongs.
 
-Memory is optional, and it asks for an embeddings model of its own: a provider in the file is either the chat model or the embedding model, so the chat model is refused where the embeddings model is asked for. A chat endpoint that serves no embeddings — DeepSeek's, for one — is therefore paired with an embeddings model from another provider, which is what the separate embedding endpoint and key are for, or with an empty embeddings model, which turns memory off and leaves reviews working without it.
+Memory is optional, and it asks for an embeddings model of its own: a provider in the file is either the chat model or the embedding model, so the chat model is refused where the embeddings model is asked for. A chat endpoint that serves no embeddings — DeepSeek's, for one — is therefore paired with an embeddings model from another provider, which is what the separate embedding endpoint and key are for, or with an empty embeddings model, which turns memory off and leaves reviews working without it. When an embeddings model is given, the next question asks how wide its vectors are — 1536 for `text-embedding-3-small`, 768 for a local EmbeddingGemma — because memory is stored and searched at that width.
 
 An answer that is the name of an environment variable — `OPENAI_API_KEY` — is written as `${OPENAI_API_KEY}`, so the file holds no secrets and can be copied or committed. It writes the per-user file described below and creates its directory.
 
@@ -230,7 +230,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
-| `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions: 1536` |
+| `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
 | `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. Unset means both refuse every request |
@@ -322,7 +322,7 @@ This is where a team writes down the conventions it wants enforced: "we do not u
 
 Rumil can record rules from the conversation, so a decision made once in review is not re-litigated on the next pull request.
 
-**This is opt-in.** Set `database.dsn` and `models.default_embedding` with a 1536-dimension provider to turn it on. Without them, Rumil reviews normally and records nothing.
+**This is opt-in.** Set `database.dsn` and `models.default_embedding` at an embedding provider to turn it on. Without them, Rumil reviews normally and records nothing. The provider's `dimensions` is the width of the vectors its model returns, and memory is stored and searched at that width: any width up to 2000 works, so a local embedding server is as good as a hosted one.
 
 ### Recording a rule
 
@@ -401,7 +401,7 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 
 **The container will not start on this machine.** The published image is `linux/amd64`. Use `docker compose up`, which compiles Rumil for the host architecture.
 
-**Rules are recorded but never used in a review.** Memory needs `models.default_embedding` pointing at a provider with `dimensions: 1536`, and the approved status: `rumil mod list --status approved` should show the rule.
+**Rules are recorded but never used in a review.** Memory needs `models.default_embedding` pointing at a provider whose `dimensions` match the width its model returns, and the approved status: `rumil mod list --status approved` should show the rule. If the provider's width has changed since the rules were recorded, startup says so and names the existing width, because vectors of two widths cannot be compared.
 
 ## License
 

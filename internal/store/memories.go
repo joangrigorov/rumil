@@ -386,7 +386,8 @@ func scanMemory(rows pgx.Rows) (*Memory, error) {
 
 // vectorLiteral renders an embedding in the text form pgvector parses. The
 // width is the embedder's business: it refuses a provider that does not return
-// config.EmbeddingDimensions floats, so the column is never handed the wrong
+// as many floats as the provider declares, and the column was sized to that
+// declaration by EnsureEmbeddingWidth, so the column is never handed the wrong
 // size.
 func vectorLiteral(v []float32) string {
 	var b strings.Builder

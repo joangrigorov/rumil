@@ -78,8 +78,9 @@ rumil/
 │   │   ├── history.go            # The <prior_reviews> context a later round reads (v0.0.4+)
 │   │   └── engine_test.go
 │   ├── store/                    # Introduced in v0.0.3 / v0.0.4
-│   │   ├── migrations/           # Embedded SQL files (*.sql)
+│   │   ├── migrations/           # Embedded SQL files (*.sql); 001_init.sql is the only one until 0.1.0 (§4)
 │   │   ├── db.go                 # pgxpool init + goose auto-migrator
+│   │   ├── embedding.go          # Sizes memories.embedding to the configured width and indexes it (§3 rule 5)
 │   │   ├── jobs.go               # Webhook idempotency & async worker queue
 │   │   ├── memories.go           # pgvector CRUD, hybrid search, moderation state machine
 │   │   ├── moderation.go         # List/resolve/decide the rules waiting for a decision (v0.0.5+)
@@ -159,7 +160,7 @@ models:
       base_url: "[https://api.openai.com/v1](https://api.openai.com/v1)"
       model_name: "text-embedding-3-small"
       api_key: "${OPENAI_API_KEY}"
-      dimensions: 1536
+      dimensions: 1536                            # The width of the model's vectors; any width up to 2000 (§3 rule 3)
 
 database:                                         # Required in v0.0.3+
   dsn: "${DATABASE_URL}"                          # postgres://user:pass@db:5432/rumil?sslmode=disable
@@ -194,9 +195,9 @@ Rumil ships no centralized GitHub App. Because it is open source, every operator
 ### Model Selection Rule
 1. If `models.default_chat` is set, look up the matching `id` in `models.providers`.
 2. If `models.default_chat` is omitted, select the **first** non-embedding entry in `models.providers`.
-3. A provider is an **embedding provider** when it declares `dimensions` greater than zero. §3 has no explicit provider kind, so this is the marker `internal/config` uses; the embedding dimension is fixed at `1536`.
+3. A provider is an **embedding provider** when it declares `dimensions` greater than zero. §3 has no explicit provider kind, so this is the marker `internal/config` uses. The dimension is the width of the vectors that model returns, between `1` and `2000` (the widest vector pgvector builds an HNSW index over), and every embedding provider in the file states the same width, because one column backs them all.
 4. If `models.providers` is empty, if the referenced `id` does not exist, or if `models.default_chat` resolves to an embedding provider, fail fast at startup with a descriptive configuration error.
-5. The embedding dimension resolved from `models.default_embedding` MUST match the `vector(1536)` column backing `memories.embedding`; a mismatch fails fast at startup.
+5. The width of the vectors memory holds is the one `models.default_embedding` declares, and `internal/store` sizes `memories.embedding` to it on boot and builds the index over it. A change of width against a table that already holds rules fails fast at startup, naming the width that is stored: vectors of two widths are not comparable, and mixing them would rank rules by a distance that means nothing.
 6. Memory is **opt-in**. Pre-retrieval and the `memory` tool set exist only when `database.dsn` is set and `models.default_embedding` resolves to an embedding provider; without both, a review runs with no `<project_memories>` block and no memory tools, and startup logs one warning. `models.default_embedding` therefore stays optional, which keeps the one-shot `rumil review` working with neither a database nor an embedding provider. The absence of memory can only mean *no memories*; it can never mean unvetted memories.
 
 ---
@@ -205,7 +206,7 @@ Rumil ships no centralized GitHub App. Because it is open source, every operator
 
 Even though vector memory launches in `v0.0.4`, moderation in `v0.0.5`, and org-scoping in `v0.0.6`, the database schema MUST include all columns from the moment Postgres is introduced so later phases require zero destructive migrations. Every table includes `installation_id` to support future multi-tenant SaaS hosting.
 
-A capability added after a release arrives as a further additive migration rather than as an edit to `001_init.sql`: goose records each version it has run, so a change to a file a database has already run reaches that database only through a later file. `002_memory_authority.sql` is the first of those, and the rule above still holds — a destructive migration is never written.
+**Everything lives in `001_init.sql` until `0.1.0`.** Rumil is being built and holds no data worth keeping, so a schema change edits that one file: a set of experimental migrations is a history of a schema that nobody ever ran in production. From `0.1.0` on, the rule is the opposite and it is not negotiable: a capability added after a release arrives as a further additive migration rather than as an edit to a file a database has already run, because goose records each version it ran and a change to an applied file reaches that database only through a later one. A destructive migration is never written under either rule.
 
 ```sql
 -- +goose Up
@@ -217,6 +218,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 CREATE TYPE memory_scope AS ENUM ('REPO', 'ORG');
 CREATE TYPE memory_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE memory_authority AS ENUM ('CONTEXT', 'DIRECTIVE');
 CREATE TYPE job_status AS ENUM ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED');
 
 CREATE TABLE webhook_jobs (
@@ -244,6 +246,7 @@ CREATE TABLE memories (
     repo_name       TEXT,                         -- Nullable when scope = 'ORG' (though origin repo is still recorded)
     scope           memory_scope NOT NULL DEFAULT 'REPO',
     status          memory_status NOT NULL DEFAULT 'PENDING',
+    authority       memory_authority NOT NULL DEFAULT 'CONTEXT',
     path_glob       TEXT,                         -- Optional file glob e.g. 'internal/payments/**'
     rule_text       TEXT NOT NULL,                -- Distilled standalone engineering rule
     rationale       TEXT,                         -- Why this rule exists
@@ -251,55 +254,33 @@ CREATE TABLE memories (
     source_comment  TEXT NOT NULL,                -- Permalink or comment ID
     requested_by    TEXT NOT NULL,                -- GitHub login of requester
     reviewed_by     TEXT,                         -- Moderator identifier
-    embedding       vector(1536) NOT NULL,
+    embedding       vector NOT NULL,              -- Width set on boot from the embedding provider (§3 rule 5)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_memories_tenant_lookup ON memories (installation_id, org_name, status, scope);
-CREATE INDEX idx_memories_embedding ON memories USING hnsw (embedding vector_cosine_ops);
-
--- +goose Down
-DROP TABLE IF EXISTS memories;
-DROP TABLE IF EXISTS webhook_jobs;
-DROP TYPE IF EXISTS job_status;
-DROP TYPE IF EXISTS memory_status;
-DROP TYPE IF EXISTS memory_scope;
-```
-
-The authority a rule carries over the repository's own guidelines (§10 item 5) has its own file, and it is additive: the column is defaulted, so an installation that already holds rules self-migrates on boot and every stored row reads back as `CONTEXT`, which is how each of those rules behaved before the column existed.
-
-```sql
--- +goose Up
--- A rule's authority over the repository's own guidelines. CONTEXT is what
--- every rule stored before this migration keeps: recorded context that the
--- guidelines outrank. DIRECTIVE is set only at the approval gate, by a
--- maintainer, and puts one rule above RUMIL.md for the case it names.
---
--- This is the first migration after the initial schema, and it is additive: the
--- column is added with a non-volatile default, so an installation that already
--- holds rules self-migrates on boot and every stored row reads back as CONTEXT,
--- which is how each of those rules behaved before the column existed. A
--- destructive migration is still never written; §4 of project_plan.md carries
--- that rule.
-CREATE TYPE memory_authority AS ENUM ('CONTEXT', 'DIRECTIVE');
-
-ALTER TABLE memories
-    ADD COLUMN authority memory_authority NOT NULL DEFAULT 'CONTEXT';
 
 -- A promotion reaches one repository, so the pair is refused at rest as well as
 -- by the statement that writes it: a reader can rely on a DIRECTIVE rule being a
--- repository's own, whatever wrote the row. Every row this migration meets is
--- CONTEXT, so the constraint holds for all of them.
+-- repository's own, whatever wrote the row.
 ALTER TABLE memories
     ADD CONSTRAINT memories_directive_is_a_repository_rule
         CHECK (authority <> 'DIRECTIVE' OR scope = 'REPO');
 
 -- +goose Down
-ALTER TABLE memories DROP CONSTRAINT memories_directive_is_a_repository_rule;
-ALTER TABLE memories DROP COLUMN authority;
+DROP TABLE IF EXISTS memories;
+DROP TABLE IF EXISTS webhook_jobs;
+DROP TYPE IF EXISTS job_status;
 DROP TYPE IF EXISTS memory_authority;
+DROP TYPE IF EXISTS memory_status;
+DROP TYPE IF EXISTS memory_scope;
 ```
+
+Two properties of `memories` are **not** in the migration, because neither is SQL's to know.
+
+1. `embedding` is declared without a width. The width is the embedding provider's, and a migration is a file: it cannot read the configuration. `store.EnsureEmbeddingWidth` therefore types the column to the configured width on boot, in a transaction, and builds the HNSW index over it. A column the configuration changes brings its index with it — the index is dropped and rebuilt because it cannot outlive the width it was built for — and a change of width against a table that already holds rules is refused before anything is altered (§3 rule 5).
+2. The authority a rule carries over the repository's own guidelines (§10 item 5) is in this same file, as the column and the constraint above. It was written as `002_memory_authority.sql` while phases were landing one after another; it moved into `001_init.sql` with the rule that there is one migration until `0.1.0`.
 
 ---
 
@@ -409,7 +390,7 @@ Scoped to `(installation_id, org_name, repo_name, pr_number)`.
 ### Phase 4: `v0.0.4` — Vector Database (`pgvector`), `memory` Tools & Comment Commands
 
 #### Scope & Deliverables
-1. Implement `internal/embedder` for generating 1536-dim vectors via the configured OpenAI-compatible embedding provider. The embedder checks that the provider returned exactly `config.EmbeddingDimensions` floats and fails the call when it did not, so a mismatched provider is caught where it happens rather than at `INSERT`.
+1. Implement `internal/embedder` for generating vectors via the configured OpenAI-compatible embedding provider. The embedder checks that the provider returned exactly as many floats as its own provider declares and fails the call when it did not, so a mismatched provider is caught where it happens rather than at `INSERT`.
 2. Implement `internal/mcpservers/memory_mcp.go` exposing the `search_memory` and `propose_memory` specs.
 3. **Deterministic Pre-Retrieval + Agentic Search:**
    * At the start of every PR review, and only when memory is configured (§3 rule 6), `engine.go` makes **one** embedding call over a compact query — the PR title plus the changed file paths — and selects `APPROVED` rules with the `search_memory` predicates, ranking `REPO` scope above `ORG` when both match.
@@ -638,7 +619,8 @@ Deliberately unresolved, to be decided with the phase that needs them. An item t
 2. **Single-platform container image.** The GHCR image is `linux/amd64` until a QEMU step is added to the release workflow.
 3. **`app.bot_handle` has no consumer yet.** It is validated and defaulted in `internal/config`, and read by nothing until the `@rumil` comment commands of Phase 4.
 4. **Upstream kit race.** `MCPToolManager.GetTools` reads the tool slice without holding the mutex that the parallel server loader writes under, and the bug is present on kit `master`. §1 avoids it by registering the specs as raw tools. Reporting it upstream is worthwhile and is not tracked by any phase.
-5. **A memory's authority is not adjustable — decided after the six phases, in `v0.0.7`.** §7.1 rule 2 made `RUMIL.md` outrank every memory and rule 3 only ordered `ORG` against `REPO`, so nothing let a maintainer promote one rule above the repository guidelines for a specific case. The approval gate now records an `authority` on a rule: `CONTEXT` is recorded context that the guidelines outrank, which is what every rule was before, and `DIRECTIVE` is the rule a maintainer promoted above them for the case it names. A promotion is recorded for one repository, and an organization-wide rule is narrowed to a repository in the same decision; the store holds that pair at rest as well as in the statement that writes it. A promoted rule is ranked above every other candidate, so a limit never leaves it out, and the `<project_memories>` label that says so is a line of its own, because a rule's text is a line too. §4 carries the column, its additive migration and the constraint, §5.2 the ranking and the field a caller reads back, and §7.1 rule 2 the precedence the reviewer is told.
+5. **A memory's authority is not adjustable — decided after the six phases, in `v0.0.7`.** §7.1 rule 2 made `RUMIL.md` outrank every memory and rule 3 only ordered `ORG` against `REPO`, so nothing let a maintainer promote one rule above the repository guidelines for a specific case. The approval gate now records an `authority` on a rule: `CONTEXT` is recorded context that the guidelines outrank, which is what every rule was before, and `DIRECTIVE` is the rule a maintainer promoted above them for the case it names. A promotion is recorded for one repository, and an organization-wide rule is narrowed to a repository in the same decision; the store holds that pair at rest as well as in the statement that writes it. A promoted rule is ranked above every other candidate, so a limit never leaves it out, and the `<project_memories>` label that says so is a line of its own, because a rule's text is a line too. §4 carries the column and the constraint, §5.2 the ranking and the field a caller reads back, and §7.1 rule 2 the precedence the reviewer is told.
 6. **`rumil mcp [github|memory]`.** §2 lists `cmd/rumil/mcp.go` as a stdio adapter over the tool specs, and no phase owns it. It stays unscheduled until a client needs it; the specs are reachable without it because they are registered as raw tools in the review session.
 7. **Configuration discovery — decided after the six phases.** `--config` defaulted to the literal `rumil.yaml`, resolved against the working directory, which made the flag unavoidable for the two runs that need a configuration the most: a container, and a daemon started by systemd with no useful working directory or `HOME`. A flag or `RUMIL_CONFIG` still wins and the working directory still works, so nothing that ran before runs differently; the per-user and machine-wide directories are added underneath, in the order §3 records. Every command logs the path it read, and finding nothing fails with every path that was tried, because a search that cannot be seen is worse than a flag that must be typed.
-8. **`rumil init` — decided after the six phases, with item 7.** Writing a configuration by hand meant copying `rumil.example.yaml` and reading §3 to know what each key means, which is a poor first ten minutes for a tool the operator runs themselves. `rumil init` asks for the App credentials, the model endpoint, and optionally memory and the webhook, saying on every screen what it is asking for and where in GitHub the value comes from, and writes the file to the path item 7 resolves for writing: `--config` when named, otherwise the per-user file. The answers are assembled by `internal/config/render.go` and parsed before anything reaches the disk, so the command cannot leave behind a configuration the runtime refuses; an answer that is the name of an environment variable is written as `${THAT_VARIABLE}`, which keeps the whole file free of secrets. The form needs a terminal on both sides, because huh reads the keys from the input and measures the terminal it draws the form on: with either side redirected, the questions run a line at a time instead, which is how they are tested and how a container answers them. Memory asks for an embeddings model of its own, because a provider is either the chat model or the embedding model (§3): the chat model is refused where the embeddings model is asked for, `internal/config/render.go` refuses the same pair for the answers that arrive without a terminal, and the screen says that an endpoint which serves no embeddings takes a second provider or an empty answer, which is what runs Rumil without memory.
+8. **`rumil init` — decided after the six phases, with item 7.** Writing a configuration by hand meant copying `rumil.example.yaml` and reading §3 to know what each key means, which is a poor first ten minutes for a tool the operator runs themselves. `rumil init` asks for the App credentials, the model endpoint, and optionally memory and the webhook, saying on every screen what it is asking for and where in GitHub the value comes from, and writes the file to the path item 7 resolves for writing: `--config` when named, otherwise the per-user file. The answers are assembled by `internal/config/render.go` and parsed before anything reaches the disk, so the command cannot leave behind a configuration the runtime refuses; an answer that is the name of an environment variable is written as `${THAT_VARIABLE}`, which keeps the whole file free of secrets. The form needs a terminal on both sides, because huh reads the keys from the input and measures the terminal it draws the form on: with either side redirected, the questions run a line at a time instead, which is how they are tested and how a container answers them. Memory asks for an embeddings model of its own, because a provider is either the chat model or the embedding model (§3): the chat model is refused where the embeddings model is asked for, `internal/config/render.go` refuses the same pair for the answers that arrive without a terminal, and the screen says that an endpoint which serves no embeddings takes a second provider or an empty answer, which is what runs Rumil without memory. The width of that model's vectors is asked for as well, because memory is stored and searched at it and the operator is the only one who knows what their endpoint returns.
+9. **The embedding width is the provider's, not the runtime's — decided after the six phases.** Memory was pinned to `vector(1536)`: a fixed constant, a fixed column, and a refusal for any provider that returned anything else. That made the memory feature reachable only through providers serving 1536 dimensions, which is what OpenAI's `text-embedding-3-small` does and what most local models do not — `embed-gemma`, for one, returns 768 — so an operator running inference on their own machine, with no key and nothing leaving the network, could not record a single rule. The width is now declared by the embedding provider, between 1 and 2000 (pgvector's ceiling for the HNSW index memory search uses), and `internal/store` sizes `memories.embedding` to it and indexes it on boot (§4). A change of width against rules that are already stored is refused, naming the stored width, because two widths cannot be compared and a silent mix would rank rules by a distance that means nothing. §3 rules 3 and 5 carry the validation and the sizing, §4 the column and why it is declared without a width, and `rumil init` asks for it.
