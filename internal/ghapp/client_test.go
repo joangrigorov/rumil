@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -399,6 +400,57 @@ func TestNewAppAuthRejectsInvalidPrivateKey(t *testing.T) {
 	if !errors.Is(err, ErrInvalidPrivateKey) {
 		t.Fatalf("error = %v, want it to wrap ErrInvalidPrivateKey", err)
 	}
+}
+
+// The App's own record is the only source for the login people mention and the
+// login its reviews are attributed to, and it is the one read that needs no
+// installation token.
+func TestSlugReadsTheAppsOwnRecord(t *testing.T) {
+	t.Run("returns the slug the record carries", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppSlug = "rumil-testing"
+
+		auth, err := NewAppAuth(config.GitHub{AppID: 123, InstallationID: 987}, testutil.TestPrivateKeyPEM(t), gh.URL())
+		if err != nil {
+			t.Fatalf("NewAppAuth returned error: %v", err)
+		}
+
+		slug, err := auth.Slug(context.Background())
+		if err != nil {
+			t.Fatalf("Slug returned error: %v", err)
+		}
+		if slug != "rumil-testing" {
+			t.Errorf("slug = %q, want rumil-testing", slug)
+		}
+	})
+
+	t.Run("surfaces a record that could not be read", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppStatus = http.StatusInternalServerError
+
+		auth, err := NewAppAuth(config.GitHub{AppID: 123, InstallationID: 987}, testutil.TestPrivateKeyPEM(t), gh.URL())
+		if err != nil {
+			t.Fatalf("NewAppAuth returned error: %v", err)
+		}
+
+		if _, err := auth.Slug(context.Background()); err == nil {
+			t.Fatal("Slug succeeded, want the API error surfaced")
+		}
+	})
+
+	t.Run("refuses a record with no slug", func(t *testing.T) {
+		gh := testutil.NewFakeGitHub(t)
+		gh.AppSlug = ""
+
+		auth, err := NewAppAuth(config.GitHub{AppID: 123, InstallationID: 987}, testutil.TestPrivateKeyPEM(t), gh.URL())
+		if err != nil {
+			t.Fatalf("NewAppAuth returned error: %v", err)
+		}
+
+		if _, err := auth.Slug(context.Background()); err == nil {
+			t.Fatal("Slug succeeded, want an empty record refused")
+		}
+	})
 }
 
 func TestVerifyReportsMissingInstallation(t *testing.T) {

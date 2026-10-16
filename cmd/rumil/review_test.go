@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
@@ -16,15 +17,27 @@ import (
 // its path.
 func writeConfig(t *testing.T, llmURL string) string {
 	t.Helper()
+	return writeConfigFor(t, llmURL, "")
+}
+
+// writeConfigFor renders a configuration with app.bot_handle set. An empty
+// handle leaves the key out, which is the default the runtime applies.
+func writeConfigFor(t *testing.T, llmURL, handle string) string {
+	t.Helper()
 
 	keyPath := filepath.Join(t.TempDir(), "app.pem")
 	if err := os.WriteFile(keyPath, testutil.TestPrivateKeyPEM(t), 0o600); err != nil {
 		t.Fatalf("writing test private key: %v", err)
 	}
 
+	botHandle := ""
+	if handle != "" {
+		botHandle = fmt.Sprintf("  bot_handle: %q\n", handle)
+	}
+
 	doc := fmt.Sprintf(`
 app:
-  max_agent_turns: 5
+%s  max_agent_turns: 5
 github:
   app_id: 123456
   installation_id: 98765432
@@ -36,7 +49,7 @@ models:
       base_url: %q
       model_name: "test-model"
       api_key: "test-key"
-`, keyPath, llmURL+"/v1")
+`, botHandle, keyPath, llmURL+"/v1")
 
 	configPath := filepath.Join(t.TempDir(), "rumil.yaml")
 	if err := os.WriteFile(configPath, []byte(doc), 0o600); err != nil {
@@ -124,6 +137,58 @@ func TestT001_07_ReviewCommandExitsZeroAtTurnLimit(t *testing.T) {
 	}
 	if !strings.Contains(out, "no review submitted for acme/payments#42") {
 		t.Errorf("output = %q, want the clean-stop message", out)
+	}
+}
+
+// A handle that is not the App's slug costs a run its own review history and its
+// ability to close its own threads, so the run stops before it spends a model
+// call on a review it cannot finish.
+func TestReviewCommandStopsWhenTheHandleIsNotTheAppsSlug(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.AppSlug = "rumil-testing"
+	llm := testutil.NewFakeLLM(t)
+
+	githubAPIBaseURL = gh.URL()
+	t.Cleanup(func() { githubAPIBaseURL = "" })
+
+	out, err := runReviewCmd(t, writeConfigFor(t, llm.URL(), "testing-rumil"))
+	if err == nil {
+		t.Fatalf("review command succeeded, want a non-zero exit (output: %s)", out)
+	}
+	if !errors.Is(err, reviewer.ErrHandleMismatch) {
+		t.Errorf("error = %v, want it to wrap reviewer.ErrHandleMismatch", err)
+	}
+	if !strings.Contains(err.Error(), `"rumil-testing"`) {
+		t.Errorf("error = %v, want it to name the App's slug", err)
+	}
+	if llm.Count() != 0 {
+		t.Errorf("model requests = %d, want none before the handle is checked", llm.Count())
+	}
+}
+
+// A record that could not be read is a GitHub failure rather than a
+// configuration one, so the run continues and the warning carries the detail.
+func TestReviewCommandContinuesWhenTheAppRecordCannotBeRead(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.AppStatus = 502
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueToolCall("get_pr_metadata", nil)
+	llm.QueueToolCall("get_pr_diff", nil)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
+		"event":        "COMMENT",
+		"summary_body": "Looks fine.",
+	})
+	llm.QueueText("Review submitted.")
+
+	githubAPIBaseURL = gh.URL()
+	t.Cleanup(func() { githubAPIBaseURL = "" })
+
+	out, err := runReviewCmd(t, writeConfig(t, llm.URL()))
+	if err != nil {
+		t.Fatalf("review command returned error: %v (output: %s)", err, out)
+	}
+	if len(gh.SubmittedReviews()) != 1 {
+		t.Errorf("submitted %d reviews, want the review to run anyway", len(gh.SubmittedReviews()))
 	}
 }
 
