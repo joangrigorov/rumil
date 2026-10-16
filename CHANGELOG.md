@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.13](https://github.com/joangrigorov/rumil/compare/v0.0.12...v0.0.13) (2026-10-16)
+
+
+### Bug Fixes
+
+* name the permission thread resolution needs, and warn about it at startup ([#35](https://github.com/joangrigorov/rumil/issues/35)) ([f58f509](https://github.com/joangrigorov/rumil/commit/f58f50911f603d328e97731896350600979da3a6))
+
 ## [0.0.12](https://github.com/joangrigorov/rumil/compare/v0.0.11...v0.0.12) (2026-10-16)
 
 
