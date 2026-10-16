@@ -2,12 +2,12 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -45,10 +45,42 @@ const (
 	MemoryLimitMax     = 15
 )
 
-// nearDuplicateSimilarity is the cosine similarity at which two proposals count
-// as the same rule, so the second is answered with the first rather than stored
-// twice (T-020-04).
+// nearDuplicateSimilarity is the cosine similarity above which an existing rule
+// is a candidate for being the rule a proposal restates, so the second is
+// answered with the first rather than stored twice (T-020-04).
+//
+// It is a candidate filter and not the decision. A similarity is a distance on
+// one embedding model's scale, and models differ in how far apart they place
+// two texts that share nothing but their subject: a review of a proposal found
+// that a rule about link targets, worded by the synthesis session as "In the
+// snip HTTP API (internal/httpapi), a link target must be stored exactly as
+// NormalizeTarget returns it" scored 0.9208 against "In the snip HTTP API
+// (internal/httpapi), every request-handling route that mutates state must be
+// registered behind the requireAdmin middleware" — over a threshold that was
+// the whole decision, so a rule nobody had recorded was answered as already
+// covered and never stored. On that model, rules of one repository sit between
+// 0.78 and 0.89 from one another whatever they say, so no single threshold
+// separates the two pairs.
 const nearDuplicateSimilarity = 0.92
+
+// duplicateCandidates is how many rules above nearDuplicateSimilarity the word
+// check looks at. A candidate that the words refuse does not end the search,
+// because the closest rule to a proposal is not always the one it restates.
+const duplicateCandidates = 3
+
+// duplicateWordOverlap is the share of words two rule texts have in common
+// before the second is answered as the first. The words are what carries the
+// decision, because they are what a compressed embedding scale loses: the two
+// rules above share the four words of their opening clause and nothing else,
+// which is 0.15, while a rule restated in a reviewer's own words keeps the
+// words of the decision itself — "clock skew in the JWT validator" against "the
+// JWT validator allowing 60s of clock skew" is 0.62.
+//
+// The bias is deliberate. A rule that is stored twice costs a maintainer one
+// rejection at the gate, and the reply to the second person names the rule it
+// looks like. A rule that is answered as a duplicate it is not is stored
+// nowhere, and nobody sees it go.
+const duplicateWordOverlap = 0.45
 
 // pathOverFetch is how many candidates extra the search asks Postgres for when
 // a file path is set. The glob is a row value, so Postgres cannot apply it to
@@ -81,11 +113,18 @@ type Memory struct {
 
 // ShortID is the leading UUID group, which is what a confirmation reply names
 // so a maintainer can paste it into a moderation command.
-func (m Memory) ShortID() string {
-	if i := strings.IndexByte(m.ID, '-'); i > 0 {
-		return m.ID[:i]
+func (m Memory) ShortID() string { return shortID(m.ID) }
+
+// ShortID is the same short form for a match, which is what a log line names so
+// the rules a review retrieved can be looked up afterwards.
+func (m MemoryMatch) ShortID() string { return shortID(m.ID) }
+
+// shortID is the leading UUID group of an id.
+func shortID(id string) string {
+	if i := strings.IndexByte(id, '-'); i > 0 {
+		return id[:i]
 	}
-	return m.ID
+	return id
 }
 
 // Proposal is a memory a comment asked Rumil to record. The columns the model
@@ -155,9 +194,10 @@ const memoryColumns = `id, installation_id, org_name, coalesce(repo_name, ''), s
 	requested_by, coalesce(reviewed_by, ''), created_at, updated_at`
 
 // ProposeMemory stores a proposal and reports whether it inserted a row. A rule
-// already stored that sits within nearDuplicateSimilarity of this one is
-// returned instead of a second row, counting PENDING rows too so a proposal
-// awaiting moderation is not duplicated either.
+// already stored that sits within nearDuplicateSimilarity of this one and shares
+// the words of the decision with it is returned instead of a second row,
+// counting PENDING rows too so a proposal awaiting moderation is not duplicated
+// either.
 //
 // What a proposal is compared against is what the review of this repository
 // would already retrieve: the repository's own rules and its organization's. A
@@ -169,12 +209,14 @@ const memoryColumns = `id, installation_id, org_name, coalesce(repo_name, ''), s
 // asking for the wider rule is a request to record rather than a duplicate to
 // report.
 //
-// The threshold is a similarity, not a meaning, so a repository exception
-// worded closely enough to its organization's rule to sit above it is read as
-// the same rule and not stored separately. That is the pair the ranking boost
-// exists to order, and it is the pair whose wording is a whole sentence apart:
-// at this distance the two rules say the same thing, and the confirmation tells
-// the person which rule answered them and what it reaches.
+// Both signals have to agree: the similarity puts a rule in the running and the
+// words of the two rules decide, because a distance alone merges rules that
+// share nothing but the clause they open with.
+//
+// The trade the words make is deliberate. Two rules that say one thing in
+// different words are stored twice, which costs a maintainer a rejection at the
+// gate, while a rule answered as a duplicate it is not is stored nowhere and
+// nobody sees it go.
 //
 // The duplicate check and the insert are separate statements. Two proposals
 // arriving at once can therefore both pass the check; the cost is a duplicate
@@ -233,21 +275,77 @@ func (d *DB) nearDuplicate(ctx context.Context, p Proposal) (*Memory, error) {
 		      END
 		  AND 1 - (embedding <=> $5::vector) > $6
 		ORDER BY embedding <=> $5::vector
-		LIMIT 1`,
-		p.InstallationID, p.OrgName, scope, p.RepoName, vectorLiteral(p.Embedding), nearDuplicateSimilarity)
+		LIMIT $7`,
+		p.InstallationID, p.OrgName, scope, p.RepoName, vectorLiteral(p.Embedding), nearDuplicateSimilarity, duplicateCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("looking for a near-duplicate memory: %w", err)
 	}
 	defer rows.Close()
 
-	found, err := scanMemory(rows)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	for {
+		found, err := scanMemory(rows)
+		if err != nil {
+			return nil, err
+		}
+		if found == nil {
+			// No candidate left: the proposal is a rule of its own.
 			return nil, nil
 		}
-		return nil, err
+		// The similarity only put this rule in the running. What decides is
+		// whether the two say the same thing, which on a compressed embedding
+		// scale the distance cannot tell (see duplicateWordOverlap).
+		if wordOverlap(found.RuleText, p.RuleText) >= duplicateWordOverlap {
+			return found, nil
+		}
 	}
-	return found, nil
+}
+
+// ruleWords returns the words a rule is made of: lowercased, without
+// punctuation, and without the words that say nothing about which decision the
+// rule records. Numbers are kept, because "60s" and "7 characters" are part of
+// the decision.
+func ruleWords(text string) map[string]struct{} {
+	words := make(map[string]struct{})
+	for _, field := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if _, stop := ruleStopWords[field]; stop {
+			continue
+		}
+		words[field] = struct{}{}
+	}
+	return words
+}
+
+// wordOverlap is the share of words two rule texts have in common, counted over
+// the words both of them use at most once, so a rule that repeats a word is not
+// closer to another for it.
+func wordOverlap(a, b string) float64 {
+	first, second := ruleWords(a), ruleWords(b)
+	if len(first) == 0 || len(second) == 0 {
+		return 0
+	}
+	shared := 0
+	for word := range first {
+		if _, ok := second[word]; ok {
+			shared++
+		}
+	}
+	return float64(shared) / float64(len(first)+len(second)-shared)
+}
+
+// ruleStopWords are the words a rule shares with every other rule, so counting
+// them would make two rules look alike for being written in English.
+var ruleStopWords = map[string]struct{}{
+	"a": {}, "all": {}, "also": {}, "an": {}, "and": {}, "any": {}, "are": {},
+	"as": {}, "at": {}, "be": {}, "because": {}, "but": {}, "by": {}, "can": {},
+	"do": {}, "does": {}, "every": {}, "for": {}, "from": {}, "has": {}, "have": {},
+	"in": {}, "into": {}, "is": {}, "it": {}, "its": {}, "may": {}, "must": {},
+	"no": {}, "not": {}, "of": {}, "on": {}, "one": {}, "only": {}, "or": {},
+	"other": {}, "so": {}, "that": {}, "the": {}, "their": {}, "them": {},
+	"then": {}, "there": {}, "these": {}, "they": {}, "this": {}, "to": {},
+	"use": {}, "used": {}, "uses": {}, "when": {}, "which": {}, "with": {},
+	"without": {}, "would": {},
 }
 
 // SearchMemories returns the approved rules closest to the query, best first.

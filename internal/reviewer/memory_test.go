@@ -2,8 +2,10 @@ package reviewer
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +15,10 @@ import (
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
+
+// hexShortID is the shape of the id a log line names and a moderation command
+// takes: the leading UUID group.
+var hexShortID = regexp.MustCompile(`^[0-9a-f]{8}$`)
 
 // The tenant the test configuration and the fake pull request agree on.
 const (
@@ -158,6 +164,26 @@ func TestPreRetrievalInjectsApprovedRules(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), "pre-retrieved recorded rules") {
 		t.Errorf("logs do not record the pre-retrieval:\n%s", h.logs.String())
+	}
+	// The log names the rules the review ran with, so which ones a review used
+	// is a fact afterwards rather than a count that has to be guessed at.
+	for _, line := range strings.Split(h.logs.String(), "\n") {
+		if !strings.Contains(line, "pre-retrieved recorded rules") {
+			continue
+		}
+		var entry struct {
+			Rules int      `json:"rules"`
+			IDs   []string `json:"ids"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("the pre-retrieval log line is not JSON: %v\n%s", err, line)
+		}
+		if entry.Rules != 1 || len(entry.IDs) != 1 {
+			t.Fatalf("the log names %d of %d rules, want the one that reached the prompt", len(entry.IDs), entry.Rules)
+		}
+		if !hexShortID.MatchString(entry.IDs[0]) {
+			t.Errorf("logged rule id = %q, want the short id a moderation command takes", entry.IDs[0])
+		}
 	}
 
 	texts := llm.EmbeddedTexts()

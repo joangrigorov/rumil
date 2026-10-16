@@ -114,8 +114,10 @@ func TestProposeMemorySkipsANearDuplicate(t *testing.T) {
 				t.Fatalf("first ProposeMemory returned error: %v", err)
 			}
 
-			// The same rule worded differently lands at cosine 0.95.
-			second := testProposal("A minute of clock skew is fine here", embeddingTilted(0.95))
+			// The same rule in another reviewer's words: cosine 0.95, and the
+			// words of the decision itself are shared, which is what the check
+			// asks beside the distance.
+			second := testProposal("The JWT validator allowing 60s of clock skew is deliberate", embeddingTilted(0.95))
 			duplicate, inserted, err := db.ProposeMemory(ctx, second)
 			if err != nil {
 				t.Fatalf("second ProposeMemory returned error: %v", err)
@@ -151,6 +153,100 @@ func TestProposeMemoryStoresARuleBelowTheDuplicateThreshold(t *testing.T) {
 	}
 	if got := countMemories(t, db); got != 2 {
 		t.Errorf("memories = %d, want 2", got)
+	}
+}
+
+// The two rules here are the pair a review of a proposal found: the synthesis
+// session wrote both of them opening with the same clause, which on the
+// embedder that recorded them put them 0.9208 apart. They record different
+// decisions, so both are stored.
+func TestProposeMemoryKeepsRulesThatOnlyOpenAlike(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	first := testProposal("In the snip HTTP API (internal/httpapi), every request-handling route that mutates state must be registered behind the `requireAdmin` middleware, including bulk endpoints such as POST /links/import.", embeddingAt(0))
+	if _, _, err := db.ProposeMemory(ctx, first); err != nil {
+		t.Fatalf("first ProposeMemory returned error: %v", err)
+	}
+
+	second := testProposal("In the snip HTTP API (internal/httpapi), a link target must be stored exactly as NormalizeTarget returns it, with its query string and tracking parameters kept intact.", embeddingTilted(0.93))
+	stored, inserted, err := db.ProposeMemory(ctx, second)
+	if err != nil {
+		t.Fatalf("second ProposeMemory returned error: %v", err)
+	}
+	if !inserted {
+		t.Errorf("a rule about link targets was answered as %s, which records a different decision", stored.ShortID())
+	}
+	if got := countMemories(t, db); got != 2 {
+		t.Errorf("memories = %d, want 2", got)
+	}
+}
+
+// The closest rule to a proposal is not always the one it restates, so a
+// candidate the words refuse does not end the search.
+func TestProposeMemoryLooksPastACandidateTheWordsRefuse(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	// The nearer rule is the one above, at 0.94 rather than 0.93.
+	nearer := testProposal("In the snip HTTP API (internal/httpapi), every request-handling route that mutates state must be registered behind the `requireAdmin` middleware, including bulk endpoints such as POST /links/import.", embeddingLike(0.94, 1))
+	if _, _, err := db.ProposeMemory(ctx, nearer); err != nil {
+		t.Fatalf("first ProposeMemory returned error: %v", err)
+	}
+
+	// The rule the proposal restates sits behind it, at 0.93.
+	restated, _, err := db.ProposeMemory(ctx, testProposal("Rate limiting is owned by the edge proxy, and the redirect path keeps no per-IP state", embeddingLike(0.93, 2)))
+	if err != nil {
+		t.Fatalf("second ProposeMemory returned error: %v", err)
+	}
+
+	same, inserted, err := db.ProposeMemory(ctx, testProposal("The edge proxy owns rate limiting, and the redirect path holds no per-IP state", embeddingAt(0)))
+	if err != nil {
+		t.Fatalf("third ProposeMemory returned error: %v", err)
+	}
+	if inserted {
+		t.Error("the restated rule was stored beside the rule it restates")
+	}
+	if same.ID != restated.ID {
+		t.Errorf("answered with %s, want the rule it restates, %s", same.ShortID(), restated.ShortID())
+	}
+}
+
+// The words decide, so the share of them two rules have in common is what the
+// check reads. The two pairs are the ones the threshold exists to separate.
+func TestWordOverlap(t *testing.T) {
+	cases := []struct {
+		name  string
+		first string
+		other string
+		want  float64
+	}{
+		{
+			name:  "rules that open alike share their opening clause",
+			first: "In the snip HTTP API (internal/httpapi), every request-handling route that mutates state must be registered behind the `requireAdmin` middleware, including bulk endpoints such as POST /links/import.",
+			other: "In the snip HTTP API (internal/httpapi), a link target must be stored exactly as NormalizeTarget returns it, with its query string and tracking parameters kept intact.",
+			want:  0.15,
+		},
+		{
+			name:  "a rule restated keeps the words of the decision",
+			first: "Allow 60s of clock skew in the JWT validator",
+			other: "The JWT validator allowing 60s of clock skew is deliberate",
+			want:  0.62,
+		},
+		{name: "nothing in common", first: "Tables are singular", other: "The sweep removes expired links", want: 0},
+		{name: "one side empty", first: "Tables are singular", other: "of the and a", want: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wordOverlap(tc.first, tc.other)
+			if math.Abs(got-tc.want) > 0.01 {
+				t.Errorf("wordOverlap = %.2f, want %.2f", got, tc.want)
+			}
+			if back := wordOverlap(tc.other, tc.first); math.Abs(back-got) > 1e-9 {
+				t.Errorf("wordOverlap is not symmetric: %.2f against %.2f", got, back)
+			}
+		})
 	}
 }
 
