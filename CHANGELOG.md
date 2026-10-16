@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.11](https://github.com/joangrigorov/rumil/compare/v0.0.10...v0.0.11) (2026-10-16)
+
+
+### Bug Fixes
+
+* advertise the tool schemas a provider validates ([#27](https://github.com/joangrigorov/rumil/issues/27)) ([0fa8188](https://github.com/joangrigorov/rumil/commit/0fa818871cf6f4eb0242f733b299fd61d78b53dc))
+
 ## [0.0.10](https://github.com/joangrigorov/rumil/compare/v0.0.9...v0.0.10) (2026-10-16)
 
 
