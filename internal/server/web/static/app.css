@@ -642,479 +642,828 @@ textarea:focus {
   font-size: 13.5px;
 }
 
-/* ---- review sessions list -------------------------------------------- */
+/* ---- observation deck console ----------------------------------------- */
 
-.sessions {
-  display: grid;
-  gap: 10px;
+body.console {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --surface: #0f1217;
+  --surface-muted: #141920;
+  --ink: #d7dde5;
+  --muted: #8b949e;
+  --faint: #5b6572;
+  --line: #20262f;
+  --line-strong: #303844;
+  --accent: #58a6ff;
+  --accent-ink: #04101f;
+  --accent-soft: #0d2136;
+  --danger: #f85149;
+  --danger-soft: #2a1415;
+  --ok: #3fb950;
+  --ok-soft: #0e2416;
+  --warn: #d29922;
+  --warn-soft: #2a2110;
+  --shadow: none;
+  --radius: 6px;
+  --radius-sm: 4px;
+  font-family: var(--mono);
+  font-size: 13.5px;
+}
+
+body.console ::selection {
+  background: #1f6feb;
+  color: #ffffff;
+}
+
+body.console .topbar {
+  background: #0d1117;
+  border-bottom-color: var(--line);
+}
+
+body.console .topbar-inner {
+  max-width: 1180px;
+  height: 50px;
+}
+
+body.console .brand {
+  color: var(--ink);
+  font-family: var(--mono);
+  letter-spacing: -0.02em;
+}
+
+body.console .brand-mark {
+  border-radius: 4px;
+  background: #1f6feb;
+  color: #ffffff;
+}
+
+body.console .nav a {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+body.console .nav a:hover {
+  background: #161b22;
+}
+
+body.console .nav a[aria-current="page"] {
+  background: #161b22;
+  color: var(--accent);
+}
+
+body.console .env {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .page {
+  max-width: 1180px;
+  padding: 24px 20px 56px;
+}
+
+body.console .foot {
+  border-top-color: var(--line);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+body.console .foot p {
+  max-width: 1180px;
+}
+
+body.console .page-head {
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+body.console .eyebrow {
+  margin-bottom: 2px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+body.console .eyebrow a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+body.console .eyebrow a:hover {
+  color: var(--ink);
+}
+
+body.console h1 {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+body.console .lede {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+body.console .count {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .count strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+body.console .pill {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+body.console .status-running {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn);
+}
+
+body.console .status-succeeded {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+
+body.console .status-failed {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  color: var(--danger);
+}
+
+body.console .muted {
+  color: var(--faint);
+}
+
+/* ---- console list ----------------------------------------------------- */
+
+body.console .filters {
+  margin-bottom: 14px;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.console .filters-head {
+  margin-bottom: 8px;
+}
+
+body.console .filters-title {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+body.console .filters-sub {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+body.console .filters-fields {
+  gap: 8px;
+}
+
+body.console .field-label {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+body.console input[type="text"],
+body.console select {
+  height: 30px;
+  border-color: var(--line-strong);
+  border-radius: 3px;
+  background: #0d1117;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .btn {
+  height: 30px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .btn-primary {
+  background: #1f6feb;
+  color: #ffffff;
+}
+
+body.console .btn-primary:hover {
+  background: #388bfd;
+}
+
+body.console .btn-quiet {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
+body.console .btn-quiet:hover {
+  background: #161b22;
+  color: var(--ink);
+}
+
+body.console .sessions {
+  display: block;
   margin: 0;
   padding: 0;
+  border-top: 1px solid var(--line);
   list-style: none;
 }
 
-.session-row {
+body.console .session-row {
   display: block;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  padding: 10px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: inherit;
   text-decoration: none;
 }
 
-.session-row:hover {
-  border-color: var(--line-strong);
+body.console .session-row:hover {
+  background: #0d1117;
 }
 
-.session-row-top {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 6px;
+body.console .session-row-top {
+  gap: 8px;
+  margin-bottom: 2px;
 }
 
-.session-repo {
+body.console .session-repo {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .session-when {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .session-title {
+  margin: 0 0 3px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+body.console .session-meta {
+  gap: 3px 10px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .session-meta code {
+  color: var(--muted);
+}
+
+body.console .review-event {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+body.console .live-badge {
+  margin-left: 0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+body.console .empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+}
+
+body.console .empty p {
+  margin-left: 0;
+}
+
+/* ---- console session header ------------------------------------------- */
+
+body.console .session-head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+body.console .session-state {
+  gap: 8px;
+  padding-top: 2px;
+}
+
+body.console .session-clock {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.session-when {
-  margin-left: auto;
-  color: var(--faint);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.session-title {
-  margin: 0 0 7px;
-  font-size: 14.5px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.session-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  color: var(--faint);
   font-size: 12px;
 }
 
-.session-meta code {
-  color: var(--muted);
-}
-
-.review-event {
-  color: var(--muted);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.muted {
+body.console .session-facts {
+  gap: 2px 14px;
+  margin: 0 0 16px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
   color: var(--faint);
-  font-weight: 400;
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
-.status-running {
-  background: var(--warn-soft);
-  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
-  color: var(--warn);
-}
-
-.status-succeeded {
-  background: var(--ok-soft);
-  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
-  color: var(--ok);
-}
-
-.status-failed {
-  background: var(--danger-soft);
-  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
-  color: var(--danger);
-}
-
-.live-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
-  border-radius: 999px;
-  background: var(--ok-soft);
-  color: var(--ok);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  vertical-align: middle;
-}
-
-.live-badge[data-state="reconnecting"] {
-  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: live-pulse 1.8s ease-in-out infinite;
-}
-
-@keyframes live-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* ---- one review session ---------------------------------------------- */
-
-.session-head {
-  align-items: flex-start;
-}
-
-.session-state {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.session-clock {
-  color: var(--faint);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.session-facts {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin: 0 0 20px;
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+body.console .session-facts code {
   color: var(--muted);
-  font-size: 12.5px;
 }
 
-.session-facts code {
-  color: var(--ink);
+body.console .session-facts a {
+  color: var(--accent);
+  text-decoration: none;
 }
 
-.notice-bad {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
-  border-left-color: var(--danger);
+body.console .session-facts a:hover {
+  text-decoration: underline;
+}
+
+body.console .notice-bad {
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-left: 2px solid var(--danger);
+  border-radius: 0;
   background: var(--danger-soft);
   color: var(--danger);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
 }
 
-/* ---- timeline --------------------------------------------------------- */
+/* ---- console log ------------------------------------------------------ */
 
-.timeline {
-  display: grid;
-  gap: 10px;
+body.console .timeline {
+  display: block;
   margin: 0;
   padding: 0;
+  border-top: 1px solid var(--line);
   list-style: none;
 }
 
-.timeline-empty {
-  padding: 30px 20px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius);
+body.console .timeline-empty {
+  padding: 16px 0;
+  border: 0;
+  border-radius: 0;
   color: var(--muted);
-  font-size: 13.5px;
-  text-align: center;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  text-align: left;
 }
 
-.step-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-}
-
-.step-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
+body.console .step {
+  padding: 10px 0 12px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface-muted);
 }
 
-.step-index {
-  color: var(--muted);
+body.console .step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 0 4px;
+  border: 0;
+  background: transparent;
+}
+
+body.console .step-glyph {
+  color: var(--faint);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
+}
+
+body.console .step-index {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.step-reason {
+body.console .step-reason {
   margin-left: auto;
   color: var(--faint);
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 10.5px;
 }
 
-.step-usage {
-  margin: 0;
-  padding: 8px 14px;
-  border-top: 1px solid var(--line);
+body.console .step-body {
+  margin-left: 3px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line-strong);
+}
+
+body.console .step-foot {
+  margin-top: 5px;
+  padding-left: 19px;
   color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+body.console summary {
+  list-style: none;
+}
+
+body.console summary::marker {
+  content: "";
+}
+
+body.console summary::-webkit-details-marker {
+  display: none;
+}
+
+/* ---- thinking --------------------------------------------------------- */
+
+body.console .thinking {
+  margin: 2px 0 5px;
+}
+
+body.console .thinking > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  color: var(--muted);
   font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.block {
-  border-bottom: 1px solid var(--line);
-}
-
-.block:last-child {
-  border-bottom: 0;
-}
-
-.block summary {
-  padding: 9px 14px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  list-style-position: inside;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
-.block summary:hover {
-  color: var(--muted);
+body.console .thinking .glyph {
+  color: var(--warn);
 }
 
-.block-body {
-  padding: 0 14px 12px;
-  color: var(--ink);
-  font-size: 13.5px;
-  line-height: 1.6;
+body.console .thinking[data-state="streaming"] .glyph {
+  animation: console-pulse 1.4s ease-in-out infinite;
+}
+
+body.console .thinking .meta {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+body.console .thinking-text {
+  margin: 3px 0 6px 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.reasoning .block-body {
-  color: var(--muted);
-  font-style: italic;
-}
-
-.block.complete summary {
+body.console .thinking[data-state="complete"] > summary {
   color: var(--faint);
 }
 
-/* ---- tools ------------------------------------------------------------ */
-
-.tool {
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
+body.console .thinking[data-state="complete"] .glyph {
+  color: var(--faint);
 }
 
-.tool-head {
+/* ---- output ----------------------------------------------------------- */
+
+body.console .output {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
+  margin: 3px 0 6px;
 }
 
-.tool-name {
+body.console .output .glyph {
+  flex: none;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+body.console .output-text {
+  min-width: 0;
   color: var(--ink);
   font-size: 12.5px;
-  font-weight: 650;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
-.tool-state {
-  margin-left: auto;
-  color: var(--faint);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+/* ---- tool calls ------------------------------------------------------- */
+
+body.console .tool {
+  margin: 2px 0;
 }
 
-.tool[data-status="running"] .tool-name::before {
-  content: "";
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: live-pulse 1.2s ease-in-out infinite;
-}
-
-.tool[data-status="writing"] .tool-state,
-.tool[data-status="running"] .tool-state {
-  color: var(--accent);
-}
-
-.tool[data-status="done"] .tool-state {
-  color: var(--ok);
-}
-
-.tool[data-status="error"] .tool-state {
-  color: var(--danger);
-}
-
-.tool-args,
-.tool-output {
-  margin-top: 8px;
-}
-
-.tool-args summary,
-.tool-output summary {
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+body.console .tool > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  color: var(--ink);
+  font-size: 12.5px;
   cursor: pointer;
 }
 
-.tool-args pre,
-.tool-output pre,
-.tool-result pre {
-  max-height: 260px;
-  margin: 6px 0 0;
-  padding: 9px 11px;
+body.console .tool .glyph {
+  color: var(--ok);
+}
+
+body.console .tool[data-status="writing"] .glyph,
+body.console .tool[data-status="running"] .glyph {
+  color: var(--warn);
+  animation: console-pulse 1.2s ease-in-out infinite;
+}
+
+body.console .tool[data-status="failed"] .glyph {
+  color: var(--danger);
+}
+
+body.console .tool-label {
+  color: var(--ink);
+}
+
+body.console .tool-state {
+  margin-left: auto;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body.console .tool[data-status="writing"] .tool-state,
+body.console .tool[data-status="running"] .tool-state {
+  color: var(--warn);
+}
+
+body.console .tool[data-status="failed"] .tool-state {
+  color: var(--danger);
+}
+
+body.console .chev {
+  color: var(--faint);
+  font-size: 13px;
+  transition: transform 120ms ease;
+}
+
+body.console details.tool[open] > summary .chev {
+  transform: rotate(90deg);
+}
+
+body.console .tool-detail {
+  margin: 3px 0 4px 18px;
+}
+
+body.console .tool-detail-label {
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body.console .tool-args,
+body.console .result-raw pre {
+  max-height: 240px;
+  margin: 3px 0 0;
+  padding: 6px 8px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+  border-radius: 3px;
+  background: #07090c;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.5;
   overflow: auto;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.tool-output.stderr pre {
+body.console .tool-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 0 0 5px 18px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+body.console .tool-result .glyph {
+  color: var(--faint);
+}
+
+body.console .tool-result[data-error="true"] .glyph,
+body.console .tool-result[data-error="true"] .result-text {
   color: var(--danger);
 }
 
-.tool-result {
-  margin-top: 8px;
+body.console .result-raw {
+  margin-left: auto;
 }
 
-.tool-result-label {
-  margin: 0;
+body.console .result-raw[open] {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+
+body.console .result-raw > summary {
+  padding: 2px 0 2px 6px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+body.console .result-raw > summary::before {
+  content: "▸ ";
+}
+
+body.console .result-raw[open] > summary::before {
+  content: "▾ ";
+}
+
+/* ---- console markers -------------------------------------------------- */
+
+body.console .event {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+body.console .event-glyph {
+  flex: none;
+  width: 1ch;
   color: var(--faint);
   font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  text-align: center;
 }
 
-.tool-result.is-error .tool-result-label {
+body.console .event-info .event-glyph {
+  color: var(--accent);
+}
+
+body.console .event-review .event-glyph {
+  color: var(--ok);
+}
+
+body.console .event-warn .event-glyph {
+  color: var(--warn);
+}
+
+body.console .event-error .event-glyph {
   color: var(--danger);
 }
 
-.tool-result.is-error pre {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-/* ---- timeline markers ------------------------------------------------- */
-
-.event {
-  display: flex;
-  gap: 10px;
-  padding: 7px 4px;
-}
-
-.event-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  margin-top: 7px;
-  border-radius: 50%;
-  background: var(--line-strong);
-}
-
-.event-body {
+body.console .event-body {
   min-width: 0;
 }
 
-.event-text {
-  margin: 0;
+body.console .event-text {
+  display: block;
   color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.event-detail {
-  margin: 2px 0 0;
+body.console .event-detail {
+  display: block;
+  margin-top: 1px;
   color: var(--faint);
-  font-size: 12px;
+  font-size: 11px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-.event-info .event-dot {
-  background: var(--accent);
-}
-
-.event-review .event-dot {
-  background: var(--ok);
-}
-
-.event-warn .event-dot {
-  background: var(--warn);
-}
-
-.event-error .event-dot {
-  background: var(--danger);
-}
-
-.event-error .event-text {
+body.console .event-error .event-text {
   color: var(--danger);
+}
+
+/* ---- activity line ---------------------------------------------------- */
+
+body.console .activity {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .activity-glyph {
+  color: var(--warn);
+  animation: console-pulse 1.4s ease-in-out infinite;
+}
+
+body.console .activity-label {
+  color: var(--ink);
+}
+
+body.console .activity-time {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+body.console .cursor {
+  color: var(--accent);
+  animation: console-blink 1.1s steps(1) infinite;
+}
+
+@keyframes console-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes console-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 /* ---- summary ---------------------------------------------------------- */
 
-.summary {
-  margin-top: 20px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
+body.console .summary {
+  margin-top: 14px;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
-.summary h2 {
-  margin: 0 0 6px;
-  font-size: 15px;
-  letter-spacing: -0.01em;
+body.console .summary h2 {
+  margin: 0 0 5px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.summary p {
+body.console .summary p {
   margin: 0;
-  color: var(--muted);
-  font-size: 13.5px;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -1177,29 +1526,38 @@ textarea:focus {
     display: none;
   }
 
-  .session-row {
-    padding: 12px;
+  body.console .page {
+    padding: 18px 12px 44px;
   }
 
-  .session-when {
-    width: 100%;
+  body.console .session-row {
+    padding: 9px 4px;
+  }
+
+  body.console .session-state,
+  body.console .session-when {
+    width: auto;
     margin-left: 0;
   }
 
-  .session-state {
-    width: 100%;
+  body.console .session-facts {
+    gap: 3px 10px;
   }
 
-  .step-head,
-  .block summary,
-  .block-body,
-  .tool,
-  .step-usage {
-    padding-left: 11px;
-    padding-right: 11px;
+  body.console .step-body {
+    padding-left: 10px;
   }
 
-  .step-reason {
-    font-size: 10.5px;
+  body.console .step-foot {
+    padding-left: 13px;
+  }
+
+  body.console .tool-detail,
+  body.console .tool-result {
+    margin-left: 10px;
+  }
+
+  body.console .activity {
+    font-size: 11.5px;
   }
 }

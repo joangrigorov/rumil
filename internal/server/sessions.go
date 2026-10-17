@@ -56,6 +56,7 @@ type reviewSessionsPage struct {
 	Title    string
 	Section  string
 	Refresh  string
+	Console  bool
 	Sessions []store.ReviewSession
 	Count    int
 	Status   string
@@ -70,6 +71,7 @@ type reviewSessionPage struct {
 	Title   string
 	Section string
 	Refresh string
+	Console bool
 	Session store.ReviewSession
 	Live    bool
 }
@@ -107,6 +109,7 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 	page := reviewSessionsPage{
 		Title:    "Review sessions",
 		Section:  "sessions",
+		Console:  true,
 		Sessions: sessions,
 		Count:    len(sessions),
 		Status:   filter.Status,
@@ -137,6 +140,7 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 	s.writePage(w, r, sessionTemplates, "session.html", reviewSessionPage{
 		Title:   fmt.Sprintf("%s/%s#%d", session.OrgName, session.RepoName, session.PRNumber),
 		Section: "sessions",
+		Console: true,
 		Session: session,
 		Live:    session.Status == store.ReviewRunning,
 	})

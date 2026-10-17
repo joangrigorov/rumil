@@ -22,12 +22,19 @@
 
 {{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
 
-<ol class="timeline" id="timeline"
+<ol class="timeline console-log" id="timeline"
     data-session-id="{{.Session.ID}}"
     data-live="{{if .Live}}true{{else}}false{{end}}"
     data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
-  <li class="timeline-empty" id="timeline-empty">Loading the session…</li>
+  <li class="timeline-empty" id="timeline-empty"><span class="activity-glyph" aria-hidden="true">✻</span> Loading the session…</li>
 </ol>
+
+<div class="activity" id="activity" role="status" aria-live="polite"{{if not .Live}} hidden{{end}}>
+  <span class="activity-glyph" aria-hidden="true">✻</span>
+  <span class="activity-label" id="activity-label">Thinking…</span>
+  <span class="activity-time" id="activity-time" aria-hidden="true"></span>
+  <span class="cursor" aria-hidden="true">▌</span>
+</div>
 
 {{if .Session.Summary}}
 <section class="summary">

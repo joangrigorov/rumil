@@ -88,6 +88,7 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
+		`<body class="console">`,
 		"Review sessions",
 		"acme/payments#42",
 		"acme/ledger#7",
@@ -151,10 +152,14 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
+		`<body class="console">`,
 		"acme/payments#42",
 		"Fix the flap",
 		"The change is sound.",
 		"data-session-id=\"" + session.ID + "\"",
+		`class="timeline console-log"`,
+		`id="activity"`,
+		`aria-live="polite"`,
 		"abcdef1",
 		"https://github.com/acme/payments/pull/42",
 		"/static/sessions.js",

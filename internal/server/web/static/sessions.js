@@ -1,4 +1,4 @@
-/* Rumil observation deck: render one review session's SSE transcript.
+/* Rumil observation deck: render one review session as a live console.
  *
  * The server replays the stored events after the client's last seq and then
  * follows the live broker, so this file does the same work for a session that
@@ -19,6 +19,9 @@
   var statusBadge = document.getElementById("session-status");
   var clock = document.getElementById("session-clock");
   var toolCount = document.getElementById("session-tool-calls");
+  var activity = document.getElementById("activity");
+  var activityLabel = document.getElementById("activity-label");
+  var activityTime = document.getElementById("activity-time");
 
   var current = null;
   var stepNumber = 0;
@@ -27,9 +30,11 @@
   var ended = false;
   var following = live;
   var scrollQueued = false;
+  var activityText = "";
+  var activityStartedAt = 0;
 
-  var clockTimer = window.setInterval(tickClock, 1000);
-  tickClock();
+  var clockTimer = window.setInterval(tick, 1000);
+  tick();
 
   var source = new EventSource("/api/sessions/" + encodeURIComponent(sessionId) + "/events");
 
@@ -86,62 +91,68 @@
     switch (event.type) {
       case "turn_start":
         marker("turn", "Turn started");
+        setActivity("Thinking…");
         break;
 
       case "step_start":
         stepNumber = Number(payload.step) || stepNumber + 1;
         current = newStep(stepNumber);
+        setActivity("Thinking…");
         break;
 
       case "reasoning_start":
-        reasoningBlock(step()).details.open = true;
+        beginThinking(step());
+        setActivity("Thinking…");
         break;
 
       case "reasoning_delta":
-        appendText(reasoningBlock(step()).body, payload.delta);
+        appendText(thinkingBlock(step()).body, payload.delta);
+        setActivity("Thinking…");
         break;
 
       case "reasoning_end":
-        reasoningBlock(step()).details.classList.add("complete");
+        thinkingBlock(step()).complete();
+        setActivity("Thinking…");
         break;
 
       case "message_start":
-        messageBlock(step());
+        outputBlock(step());
+        setActivity("Reviewing…");
         break;
 
       case "message_delta":
-        appendText(messageBlock(step()).body, payload.delta);
+        appendText(outputBlock(step()).body, payload.delta);
+        setActivity("Reviewing…");
         break;
 
       case "message_end":
         setMessage(step(), payload.content);
+        setActivity("Reviewing…");
         break;
 
       case "tool_call_start":
-        setToolState(toolCard(step(), payload), "writing", "writing");
+        var started = toolCard(step(), payload);
+        setActivity(toolActivity(started));
         break;
 
       case "tool_args_delta":
         var writing = toolCard(step(), payload);
-        writing.parts.args.hidden = false;
-        writing.parts.args.open = true;
-        appendText(writing.parts.argsBody, payload.delta);
-        setToolState(writing, "writing", "writing");
+        appendText(writing.args, payload.delta);
+        setActivity(toolActivity(writing));
         break;
 
       case "tool_call_end":
-        var parsed = toolCard(step(), payload);
-        if (parsed.dataset.status === "writing") {
-          setToolState(parsed, "pending", "queued");
+        var parsedCall = toolCard(step(), payload);
+        if (parsedCall.details.dataset.status === "writing") {
+          setToolState(parsedCall, "queued", "queued");
         }
         break;
 
       case "tool_call":
         var called = toolCard(step(), payload);
-        if (payload.args !== undefined && payload.args !== null) {
-          setToolArgs(called, payload.args);
-        }
-        setToolState(called, "pending", "queued");
+        setToolArgs(called, payload.args);
+        setToolState(called, "queued", "queued");
+        setActivity(toolActivity(called));
         break;
 
       case "tool_start":
@@ -150,20 +161,24 @@
           setToolArgs(running, payload.args);
         }
         setToolState(running, "running", "running");
-        break;
-
-      case "tool_content":
-        appendText(messageBlock(step()).body, payload.content);
+        setActivity(toolActivity(running));
         break;
 
       case "tool_output":
-        var output = toolCard(step(), payload);
-        setToolOutput(output, payload.chunk, payload.is_stderr);
+        var streaming = toolCard(step(), payload);
+        setToolOutput(streaming, payload.chunk);
+        setActivity(toolActivity(streaming));
         break;
 
       case "tool_result":
-        var result = toolCard(step(), payload);
-        setToolResult(result, payload.result, payload.is_error);
+        var finished = toolCard(step(), payload);
+        setToolResult(finished, payload.result, payload.is_error);
+        setActivity("Thinking…");
+        break;
+
+      case "tool_content":
+        appendText(outputBlock(step()).body, payload.content);
+        setActivity("Reviewing…");
         break;
 
       case "step_usage":
@@ -172,6 +187,7 @@
 
       case "step_finish":
         finishStep(step(), payload);
+        setActivity("Thinking…");
         break;
 
       case "turn_end":
@@ -181,11 +197,11 @@
         break;
 
       case "session_metadata":
-        marker("info", "Reviewing " + quote(payload.title || "the pull request"));
+        marker("info", "Reviewing “" + (payload.title || "the pull request") + "”", metadataDetail(payload));
         break;
 
       case "guidelines_loaded":
-        marker("info", "Repository guidelines loaded", payload.path + " at " + shortSHA(payload.ref));
+        marker("info", "Repository guidelines loaded", guidelinesDetail(payload));
         break;
 
       case "guidelines_missing":
@@ -193,7 +209,7 @@
         break;
 
       case "memory_retrieved":
-        marker("info", "Recorded rules retrieved", count(payload.rules, "rule") + ", " + bytes(payload.bytes));
+        marker("info", "Recorded rules retrieved", count(payload.rules, "rule") + (payload.bytes ? " · " + bytes(payload.bytes) : ""));
         break;
 
       case "memory_failed":
@@ -202,6 +218,7 @@
 
       case "review_submitted":
         marker("review", "Review submitted", reviewDescription(payload));
+        setActivity("Thinking…");
         break;
 
       case "retry":
@@ -244,6 +261,7 @@
     ended = true;
     following = false;
     window.clearInterval(clockTimer);
+    clearActivity();
 
     if (payload.status) {
       if (statusBadge) {
@@ -266,11 +284,11 @@
       toolCalls = Number(payload.tool_calls) || toolCalls;
       updateToolCount();
     }
-    // The engine records session_error before it returns, and the page shows a
-    // notice for a stored failure. The terminal error is the fallback for a
-    // run that stopped before either.
     if (payload.error && !document.querySelector(".notice-bad") && !timeline.querySelector(".event-error")) {
       marker("error", "The review failed", payload.error);
+    }
+    if (payload.status !== "FAILED") {
+      marker("review", "Session complete", payload.status || "");
     }
     if (payload.summary) {
       summary(payload.summary);
@@ -290,188 +308,230 @@
     var item = document.createElement("li");
     item.className = "step";
 
-    var card = document.createElement("article");
-    card.className = "step-card";
-
-    var head = document.createElement("header");
+    var head = document.createElement("div");
     head.className = "step-head";
 
-    var index = document.createElement("span");
-    index.className = "step-index";
-    index.textContent = "Step " + number;
-    head.append(index);
+    var glyph = span("step-glyph", "▸");
+    var index = span("step-index", "Step " + number);
+    var reason = span("step-reason", "");
+    reason.hidden = true;
+    head.append(glyph, index, reason);
 
-    card.append(head);
-    item.append(card);
+    var body = document.createElement("div");
+    body.className = "step-body";
+
+    var foot = document.createElement("div");
+    foot.className = "step-foot";
+    foot.hidden = true;
+
+    item.append(head, body, foot);
     timeline.append(item);
 
     return {
+      number: number,
       item: item,
-      card: card,
       head: head,
-      reasoning: null,
-      message: null,
+      reason: reason,
+      body: body,
+      foot: foot,
+      thinking: null,
+      output: null,
       tools: new Map(),
+      usageText: "",
       finished: false
     };
   }
 
-  function reasoningBlock(target) {
-    if (target.reasoning) {
-      return target.reasoning;
+  function beginThinking(target) {
+    if (target.thinking && !target.thinking.completed) {
+      return target.thinking;
     }
-    var details = document.createElement("details");
-    details.className = "block reasoning";
-    details.open = true;
-
-    var summaryNode = document.createElement("summary");
-    summaryNode.textContent = "Reasoning";
-
-    var body = document.createElement("div");
-    body.className = "block-body";
-    body.setAttribute("dir", "auto");
-
-    details.append(summaryNode, body);
-    target.card.append(details);
-
-    target.reasoning = { details: details, body: body };
-    return target.reasoning;
+    target.thinking = null;
+    return thinkingBlock(target);
   }
 
-  function messageBlock(target) {
-    if (target.message) {
-      return target.message;
+  function thinkingBlock(target) {
+    if (target.thinking) {
+      return target.thinking;
     }
+
     var details = document.createElement("details");
-    details.className = "block message";
+    details.className = "thinking";
     details.open = true;
+    details.dataset.state = "streaming";
 
     var summaryNode = document.createElement("summary");
-    summaryNode.textContent = "Output";
+    var glyph = span("glyph", "✻");
+    var label = span("label", "Thinking…");
+    var meta = span("meta", "");
+    summaryNode.append(glyph, label, meta);
 
     var body = document.createElement("div");
-    body.className = "block-body";
+    body.className = "thinking-text";
     body.setAttribute("dir", "auto");
 
     details.append(summaryNode, body);
-    target.card.append(details);
+    target.body.append(details);
 
-    target.message = { details: details, body: body };
-    return target.message;
+    var block = {
+      details: details,
+      label: label,
+      meta: meta,
+      body: body,
+      startedAt: Date.now(),
+      completed: false,
+      complete: function () {
+        if (block.completed) {
+          return;
+        }
+        block.completed = true;
+        details.dataset.state = "complete";
+        label.textContent = "Thought for " + duration(Date.now() - block.startedAt);
+      }
+    };
+
+    target.thinking = block;
+    return block;
+  }
+
+  function outputBlock(target) {
+    if (target.output) {
+      return target.output;
+    }
+
+    var box = document.createElement("div");
+    box.className = "output";
+
+    var glyph = span("glyph", "●");
+    glyph.setAttribute("aria-hidden", "true");
+
+    var body = document.createElement("div");
+    body.className = "output-text";
+    body.setAttribute("dir", "auto");
+
+    box.append(glyph, body);
+    target.body.append(box);
+
+    target.output = { box: box, body: body };
+    return target.output;
   }
 
   function setMessage(target, content) {
-    var block = messageBlock(target);
+    var block = outputBlock(target);
     var streamed = block.body.textContent;
     block.body.replaceChildren();
     block.body.textContent = content || streamed;
-    block.details.classList.add("complete");
   }
 
   function toolCard(target, payload) {
     var id = payload.id || payload.name || "tool";
     var card = target.tools.get(id);
     if (card) {
-      if (payload.name && card.dataset.name === "") {
-        card.dataset.name = payload.name;
-        card.querySelector(".tool-name").textContent = payload.name;
+      if (payload.name && !card.name) {
+        card.name = payload.name;
+        card.details.dataset.toolName = payload.name;
+        card.label.textContent = humanTool(card.name, card.parsedArgs);
       }
       return card;
     }
 
-    card = document.createElement("div");
-    card.className = "tool";
-    card.dataset.status = "pending";
-    card.dataset.name = payload.name || "";
+    var details = document.createElement("details");
+    details.className = "tool";
+    details.dataset.status = "pending";
+    details.dataset.toolName = payload.name || "";
 
-    var head = document.createElement("div");
-    head.className = "tool-head";
+    var summaryNode = document.createElement("summary");
+    var glyph = span("glyph", "●");
+    var label = span("tool-label", humanTool(payload.name || "", null));
+    var state = span("tool-state", "queued");
+    var chev = span("chev", "›");
+    chev.setAttribute("aria-hidden", "true");
+    summaryNode.append(glyph, label, state, chev);
 
-    var name = document.createElement("code");
-    name.className = "tool-name";
-    name.textContent = payload.name || "tool";
+    var detail = document.createElement("div");
+    detail.className = "tool-detail";
 
-    var state = document.createElement("span");
-    state.className = "tool-state";
-    state.textContent = "queued";
+    var detailLabel = document.createElement("div");
+    detailLabel.className = "tool-detail-label";
+    detailLabel.textContent = "arguments";
 
-    head.append(name, state);
-
-    var args = document.createElement("details");
+    var args = document.createElement("pre");
     args.className = "tool-args";
-    var argsSummary = document.createElement("summary");
-    argsSummary.textContent = "Arguments";
-    var argsBody = document.createElement("pre");
-    args.append(argsSummary, argsBody);
+    args.setAttribute("dir", "auto");
 
-    var output = document.createElement("details");
-    output.className = "tool-output";
-    var outputSummary = document.createElement("summary");
-    outputSummary.textContent = "Output";
-    var outputBody = document.createElement("pre");
-    outputBody.setAttribute("dir", "auto");
-    output.append(outputSummary, outputBody);
-    output.hidden = true;
+    detail.append(detailLabel, args);
+    details.append(summaryNode, detail);
 
     var result = document.createElement("div");
     result.className = "tool-result";
     result.hidden = true;
-    var resultLabel = document.createElement("p");
-    resultLabel.className = "tool-result-label";
-    resultLabel.textContent = "Result";
-    var resultBody = document.createElement("pre");
-    resultBody.setAttribute("dir", "auto");
-    result.append(resultLabel, resultBody);
 
-    card.append(head, args, output, result);
-    target.card.append(card);
+    var resultGlyph = span("glyph", "⎿");
+    var resultText = span("result-text", "");
+    var raw = document.createElement("details");
+    raw.className = "result-raw";
+    raw.hidden = true;
+    var rawSummary = document.createElement("summary");
+    rawSummary.textContent = "raw";
+    var rawBody = document.createElement("pre");
+    rawBody.setAttribute("dir", "auto");
+    raw.append(rawSummary, rawBody);
+    result.append(resultGlyph, resultText, raw);
 
-    card.parts = { state: state, args: args, argsBody: argsBody, output: output, outputBody: outputBody, result: result, resultBody: resultBody };
+    target.body.append(details, result);
+
+    card = {
+      details: details,
+      label: label,
+      state: state,
+      args: args,
+      result: result,
+      resultGlyph: resultGlyph,
+      resultText: resultText,
+      raw: raw,
+      rawBody: rawBody,
+      name: payload.name || "",
+      parsedArgs: null,
+      output: ""
+    };
     target.tools.set(id, card);
     toolCalls += 1;
     updateToolCount();
     return card;
   }
 
-  function updateToolCount() {
-    if (toolCount) {
-      toolCount.textContent = count(toolCalls, "tool call");
-    }
-  }
-
-  function setToolArgs(card, args) {
-    card.parts.argsBody.textContent = text(args);
-    card.parts.args.hidden = false;
+  function setToolArgs(card, value) {
+    card.parsedArgs = parsed(value);
+    card.args.textContent = card.parsedArgs ? JSON.stringify(card.parsedArgs, null, 2) : text(value);
+    card.label.textContent = humanTool(card.name, card.parsedArgs);
   }
 
   function setToolState(card, status, label) {
-    card.dataset.status = status;
-    card.parts.state.textContent = label;
+    card.details.dataset.status = status;
+    card.state.textContent = label;
   }
 
-  function setToolOutput(card, chunk, isStderr) {
-    card.parts.output.hidden = false;
-    card.parts.output.open = true;
-    if (isStderr) {
-      card.parts.output.classList.add("stderr");
-    }
-    appendText(card.parts.outputBody, chunk);
+  function setToolOutput(card, chunk) {
+    card.output += chunk || "";
+    card.result.hidden = false;
+    card.resultGlyph.textContent = "⎿";
+    card.resultText.textContent = "receiving output · " + bytes(card.output.length);
   }
 
   function setToolResult(card, value, isError) {
-    card.parts.output.hidden = true;
-    card.parts.result.hidden = false;
-    card.parts.result.classList.toggle("is-error", Boolean(isError));
-    card.parts.resultBody.textContent = text(value) || "(no result)";
-    setToolState(card, isError ? "error" : "done", isError ? "failed" : "done");
+    card.result.hidden = false;
+    card.result.dataset.error = isError ? "true" : "false";
+    card.resultGlyph.textContent = isError ? "✖" : "⎿";
+    card.resultText.textContent = describeResult(card.name, value, isError);
+
+    var rawText = text(value);
+    card.raw.hidden = rawText === "";
+    card.rawBody.textContent = rawText;
+
+    setToolState(card, isError ? "failed" : "done", isError ? "failed" : "");
   }
 
   function setUsage(target, usage) {
-    if (!target.usage) {
-      target.usage = document.createElement("p");
-      target.usage.className = "step-usage";
-      target.card.append(target.usage);
-    }
     var parts = [];
     if (usage.input_tokens) {
       parts.push(formatNumber(usage.input_tokens) + " in");
@@ -485,7 +545,10 @@
     if (usage.cache_read) {
       parts.push(formatNumber(usage.cache_read) + " cached");
     }
-    target.usage.textContent = parts.join(" · ");
+    target.usageText = parts.join(" · ");
+    if (target.finished) {
+      renderFoot(target);
+    }
   }
 
   function finishStep(target, payload) {
@@ -494,56 +557,56 @@
       setUsage(target, payload.usage);
     }
     if (payload.finish_reason) {
-      var reason = document.createElement("span");
-      reason.className = "step-reason";
-      reason.textContent = payload.finish_reason;
-      target.head.append(reason);
+      target.reason.textContent = payload.finish_reason;
+      target.reason.hidden = false;
     }
-    if (target.reasoning) {
-      target.reasoning.details.classList.add("complete");
-    }
-    if (target.message) {
-      target.message.details.classList.add("complete");
+    renderFoot(target);
+    if (target.thinking) {
+      target.thinking.complete();
     }
   }
 
-  function marker(kind, text, detail) {
+  function renderFoot(target) {
+    var parts = ["✔ Step " + target.number];
+    if (target.usageText) {
+      parts.push(target.usageText);
+    }
+    target.foot.textContent = parts.join("  ·  ");
+    target.foot.hidden = false;
+  }
+
+  function marker(kind, textValue, detail) {
     // An event that happens during a step belongs inside that step, so the
     // conversation keeps its order instead of collecting every marker after
-    // the last card.
+    // the last step.
     var inStep = current && !current.finished;
     var item = document.createElement(inStep ? "div" : "li");
     item.className = "event event-" + kind;
 
-    var dot = document.createElement("span");
-    dot.className = "event-dot";
-    dot.setAttribute("aria-hidden", "true");
+    var glyph = span("event-glyph", glyphFor(kind));
+    glyph.setAttribute("aria-hidden", "true");
 
     var body = document.createElement("div");
     body.className = "event-body";
 
-    var line = document.createElement("p");
-    line.className = "event-text";
-    line.textContent = text;
+    var line = span("event-text", textValue);
     body.append(line);
 
     if (detail) {
-      var note = document.createElement("p");
-      note.className = "event-detail";
-      note.textContent = detail;
+      var note = span("event-detail", detail);
       note.setAttribute("dir", "auto");
       body.append(note);
     }
 
-    item.append(dot, body);
+    item.append(glyph, body);
     if (inStep) {
-      current.card.append(item);
+      current.body.append(item);
     } else {
       timeline.append(item);
     }
   }
 
-  function summary(text) {
+  function summary(value) {
     // A finished session already renders its summary on the server; a live
     // one learns it from the terminal event.
     if (document.querySelector(".summary")) {
@@ -556,11 +619,12 @@
     heading.textContent = "Review summary";
 
     var paragraph = document.createElement("p");
-    paragraph.textContent = text;
+    paragraph.textContent = value;
     paragraph.setAttribute("dir", "auto");
 
     section.append(heading, paragraph);
-    timeline.after(section);
+    var anchor = activity || timeline;
+    anchor.after(section);
   }
 
   function removePlaceholder() {
@@ -581,11 +645,42 @@
     });
   }
 
-  function tickClock() {
-    if (ended) {
+  function setActivity(label) {
+    if (ended || !activity) {
       return;
     }
-    setClock(Date.now() - startedAt);
+    activity.hidden = false;
+    if (label !== activityText) {
+      activityText = label;
+      activityStartedAt = Date.now();
+      if (activityLabel) {
+        activityLabel.textContent = label;
+      }
+    }
+    updateActivityTime();
+  }
+
+  function updateActivityTime() {
+    if (!activityTime || !activityStartedAt || ended) {
+      return;
+    }
+    var elapsed = Date.now() - activityStartedAt;
+    activityTime.textContent = elapsed >= 1000 ? "· " + duration(elapsed) : "";
+  }
+
+  function clearActivity() {
+    if (activity) {
+      activity.hidden = true;
+    }
+    activityText = "";
+    activityStartedAt = 0;
+  }
+
+  function tick() {
+    if (!ended) {
+      setClock(Date.now() - startedAt);
+    }
+    updateActivityTime();
   }
 
   function setClock(elapsed) {
@@ -606,11 +701,43 @@
     }
   }
 
+  function updateToolCount() {
+    if (toolCount) {
+      toolCount.textContent = count(toolCalls, "tool call");
+    }
+  }
+
   function appendText(parent, value) {
     if (value === undefined || value === null || value === "") {
       return;
     }
     parent.append(document.createTextNode(String(value)));
+  }
+
+  function span(className, value) {
+    var node = document.createElement("span");
+    node.className = className;
+    if (value !== undefined) {
+      node.textContent = value;
+    }
+    return node;
+  }
+
+  function parsed(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value === "object") {
+      return value;
+    }
+    if (typeof value !== "string") {
+      return null;
+    }
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      return null;
+    }
   }
 
   function text(value) {
@@ -625,6 +752,126 @@
     } catch (error) {
       return String(value);
     }
+  }
+
+  function humanTool(name, args) {
+    var a = args || {};
+    switch (name) {
+      case "get_pull_request_diff":
+        return "Reading the pull request diff";
+      case "get_pull_request_metadata":
+        return "Reading pull request metadata";
+      case "read_file":
+        return "Reading " + (a.path || a.file || "a file");
+      case "search_memory":
+        return "Searching recorded rules" + (a.query ? " for “" + shortText(a.query, 56) + "”" : "");
+      case "submit_pr_review":
+        return "Submitting the review" + (a.event ? " (" + a.event + ")" : "");
+      case "resolve_review_thread":
+        return "Resolving a review thread";
+      case "list_review_threads":
+        return "Reading review threads";
+      case "list_pull_request_comments":
+      case "get_pull_request_comments":
+        return "Reading pull request comments";
+      default:
+        return name ? "Running " + String(name).replace(/_/g, " ") : "Running a tool";
+    }
+  }
+
+  function toolActivity(card) {
+    var args = card.parsedArgs || {};
+    switch (card.name) {
+      case "get_pull_request_diff":
+      case "get_pull_request_metadata":
+        return "Reviewing the pull request…";
+      case "read_file":
+        return "Reviewing " + (args.path || args.file || "a file") + "…";
+      case "search_memory":
+        return "Reviewing recorded rules…";
+      case "submit_pr_review":
+        return "Submitting the review…";
+      case "resolve_review_thread":
+        return "Resolving a review thread…";
+      default:
+        return "Reviewing…";
+    }
+  }
+
+  function describeResult(name, value, isError) {
+    var raw = text(value).trim();
+    if (isError) {
+      return firstLine(raw) || "failed";
+    }
+
+    var object = parsed(value);
+    if (name === "submit_pr_review" && object && typeof object === "object" && !Array.isArray(object)) {
+      var parts = [];
+      if (object.event) {
+        parts.push(object.event);
+      }
+      if (Array.isArray(object.comments) && object.comments.length) {
+        parts.push(count(object.comments.length, "comment"));
+      }
+      if (parts.length) {
+        return parts.join(" · ");
+      }
+    }
+
+    if (name === "get_pull_request_diff" || name === "read_file" || name === "get_file_content") {
+      return raw ? count(raw.split("\n").length, "line") : "no content";
+    }
+    if (Array.isArray(object)) {
+      return count(object.length, "item");
+    }
+    if (object && typeof object === "object") {
+      var keys = Object.keys(object);
+      if (keys.length) {
+        return count(keys.length, "field");
+      }
+    }
+    if (!raw) {
+      return "done";
+    }
+    var line = firstLine(raw);
+    return line.length > 120 ? line.slice(0, 117) + "…" : line;
+  }
+
+  function firstLine(value) {
+    return String(value || "").split("\n")[0].trim();
+  }
+
+  function shortText(value, length) {
+    var textValue = String(value);
+    return textValue.length > length ? textValue.slice(0, length - 1) + "…" : textValue;
+  }
+
+  function metadataDetail(payload) {
+    var parts = [];
+    if (payload.head_sha) {
+      parts.push("head " + shortSHA(payload.head_sha));
+    }
+    if (payload.base_sha) {
+      parts.push("base " + shortSHA(payload.base_sha));
+    }
+    if (payload.changed_files) {
+      parts.push(count(payload.changed_files, "file"));
+    }
+    return parts.join(" · ");
+  }
+
+  function guidelinesDetail(payload) {
+    var parts = [];
+    if (payload.path) {
+      parts.push(payload.path);
+    }
+    if (payload.ref) {
+      parts.push("at " + shortSHA(payload.ref));
+    }
+    if (payload.bytes) {
+      parts.push(bytes(payload.bytes));
+    }
+    return parts.join(" · ");
   }
 
   function reviewDescription(payload) {
@@ -675,8 +922,19 @@
     return parts.join(" · ");
   }
 
-  function quote(value) {
-    return "“" + value + "”";
+  function glyphFor(kind) {
+    switch (kind) {
+      case "turn":
+        return "▸";
+      case "review":
+        return "✔";
+      case "warn":
+        return "!";
+      case "error":
+        return "✖";
+      default:
+        return "●";
+    }
   }
 
   function shortSHA(value) {
