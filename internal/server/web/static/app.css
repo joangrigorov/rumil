@@ -655,6 +655,7 @@ body.console {
   --line: #20262f;
   --line-strong: #303844;
   --accent: #58a6ff;
+  --accent-dim: #2b5278;
   --accent-ink: #04101f;
   --accent-soft: #0d2136;
   --danger: #f85149;
@@ -1028,70 +1029,91 @@ body.console .notice-bad {
   font-weight: 500;
 }
 
-/* ---- console log ------------------------------------------------------ */
+/* ---- fixed console layout --------------------------------------------- */
+
+body.console.console-fixed {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+body.console.console-fixed .topbar {
+  flex: none;
+}
+
+body.console.console-fixed .page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 14px;
+  padding-bottom: 12px;
+}
+
+body.console.console-fixed .foot {
+  display: none;
+}
+
+body.console.console-fixed .page-head,
+body.console.console-fixed .session-facts,
+body.console.console-fixed .notice-bad {
+  flex: none;
+}
+
+body.console.console-fixed .session-head {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+body.console.console-fixed .session-facts {
+  margin-bottom: 10px;
+}
+
+body.console.console-fixed .lede {
+  margin-top: 2px;
+}
+
+/* ---- console window --------------------------------------------------- */
+
+body.console .console-window {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0d1117;
+  overflow: hidden;
+}
+
+body.console .console-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 
 body.console .timeline {
   display: block;
   margin: 0;
   padding: 0;
-  border-top: 1px solid var(--line);
-  list-style: none;
 }
 
 body.console .timeline-empty {
-  padding: 16px 0;
-  border: 0;
-  border-radius: 0;
+  padding: 10px 0;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12.5px;
   text-align: left;
 }
 
-body.console .step {
-  padding: 10px 0 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-body.console .step-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 0 0 4px;
-  border: 0;
-  background: transparent;
-}
-
-body.console .step-glyph {
-  color: var(--faint);
-  font-size: 11px;
-}
-
-body.console .step-index {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-body.console .step-reason {
-  margin-left: auto;
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 10.5px;
-}
-
-body.console .step-body {
-  margin-left: 3px;
-  padding-left: 16px;
-  border-left: 1px solid var(--line-strong);
-}
-
-body.console .step-foot {
-  margin-top: 5px;
-  padding-left: 19px;
+body.console .usage-line {
+  padding: 1px 0 7px 18px;
   color: var(--faint);
   font-family: var(--mono);
   font-size: 10.5px;
@@ -1107,6 +1129,53 @@ body.console summary::marker {
 
 body.console summary::-webkit-details-marker {
   display: none;
+}
+
+/* ---- console scrollbars ----------------------------------------------- */
+
+/* Firefox styles scrollbars through the standard properties. Chromium and
+ * Safari ignore ::-webkit-scrollbar when those properties are set, so each
+ * engine gets one mechanism. */
+@supports not selector(::-webkit-scrollbar) {
+  body.console .console-scroll,
+  body.console .summary-slot {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-dim) transparent;
+  }
+}
+
+body.console .console-scroll::-webkit-scrollbar,
+body.console .summary-slot::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+body.console .console-scroll::-webkit-scrollbar-track,
+body.console .summary-slot::-webkit-scrollbar-track {
+  border-left: 1px solid #161c24;
+  background: #0a0e13;
+}
+
+body.console .console-scroll::-webkit-scrollbar-thumb,
+body.console .summary-slot::-webkit-scrollbar-thumb {
+  border: 2px solid #0a0e13;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--accent-dim) 0%,
+    #2a313b 50%,
+    var(--accent-dim) 100%
+  );
+}
+
+body.console .console-scroll::-webkit-scrollbar-thumb:hover,
+body.console .summary-slot::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+body.console .console-scroll::-webkit-scrollbar-corner,
+body.console .summary-slot::-webkit-scrollbar-corner {
+  background: #0a0e13;
 }
 
 /* ---- thinking --------------------------------------------------------- */
@@ -1380,16 +1449,13 @@ body.console .event-error .event-text {
 /* ---- activity line ---------------------------------------------------- */
 
 body.console .activity {
-  position: sticky;
-  bottom: 0;
-  z-index: 3;
+  flex: none;
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin-top: 0;
-  padding: 8px 0;
+  padding: 7px 14px;
   border-top: 1px solid var(--line);
-  background: var(--bg);
+  background: #0a0e13;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
@@ -1439,11 +1505,28 @@ body.console .cursor {
 
 /* ---- summary ---------------------------------------------------------- */
 
+body.console .summary-slot {
+  flex: none;
+  margin-top: 10px;
+  max-height: 24vh;
+  max-height: 24dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: #0d1117;
+}
+
+body.console .summary-slot:empty,
+body.console .summary-slot:not(:has(> .summary)) {
+  display: none;
+}
+
 body.console .summary {
-  margin-top: 14px;
-  padding: 10px 0 0;
+  margin: 0;
+  padding: 10px 14px;
   border: 0;
-  border-top: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -1530,6 +1613,10 @@ body.console .summary p {
     padding: 18px 12px 44px;
   }
 
+  body.console.console-fixed .page {
+    padding: 10px 10px 8px;
+  }
+
   body.console .session-row {
     padding: 9px 4px;
   }
@@ -1544,20 +1631,18 @@ body.console .summary p {
     gap: 3px 10px;
   }
 
-  body.console .step-body {
-    padding-left: 10px;
-  }
-
-  body.console .step-foot {
-    padding-left: 13px;
-  }
-
   body.console .tool-detail,
   body.console .tool-result {
     margin-left: 10px;
   }
 
   body.console .activity {
+    padding: 7px 12px;
     font-size: 11.5px;
+  }
+
+  body.console .summary-slot {
+    max-height: 22vh;
+    max-height: 22dvh;
   }
 }

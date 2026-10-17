@@ -257,6 +257,7 @@ type moderationPage struct {
 	Section string
 	Refresh string
 	Console bool
+	Fixed   bool
 	Rules   []store.Memory
 	Count   int
 	Status  string

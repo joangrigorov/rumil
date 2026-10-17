@@ -12,6 +12,7 @@
     return;
   }
 
+  var scroll = document.getElementById("console-scroll");
   var sessionId = timeline.dataset.sessionId;
   var live = timeline.dataset.live === "true";
   var startedAt = Date.parse(timeline.dataset.startedAt) || Date.now();
@@ -22,14 +23,16 @@
   var activity = document.getElementById("activity");
   var activityLabel = document.getElementById("activity-label");
   var activityTime = document.getElementById("activity-time");
+  var summarySlot = document.getElementById("summary-slot");
 
-  var current = null;
-  var stepNumber = 0;
+  var tools = new Map();
+  var activeThinking = null;
+  var activeOutput = null;
   var lastSeq = 0;
   var toolCalls = 0;
   var ended = false;
   var following = live;
-  var scrollQueued = false;
+  var followQueued = false;
   var activityText = "";
   var activityStartedAt = 0;
 
@@ -69,20 +72,12 @@
     render(event);
   };
 
-  window.addEventListener("scroll", function () {
-    var distance = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    following = distance < 120;
-  }, { passive: true });
-
-  timeline.addEventListener("toggle", function (event) {
-    if (!(event.target instanceof HTMLDetailsElement)) {
-      return;
-    }
-    // A reader who opened an old block is not asking to be pulled away from it.
-    if (!event.target.open) {
-      following = false;
-    }
-  }, true);
+  if (scroll) {
+    scroll.addEventListener("scroll", function () {
+      var distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+      following = distance < 80;
+    }, { passive: true });
+  }
 
   function render(event) {
     var payload = event.payload || {};
@@ -90,73 +85,70 @@
 
     switch (event.type) {
       case "turn_start":
-        marker("turn", "Turn started");
         setActivity("Thinking…");
         break;
 
       case "step_start":
-        stepNumber = Number(payload.step) || stepNumber + 1;
-        current = newStep(stepNumber);
         setActivity("Thinking…");
         break;
 
       case "reasoning_start":
-        beginThinking(step());
+        beginThinking();
         setActivity("Thinking…");
         break;
 
       case "reasoning_delta":
-        appendText(thinkingBlock(step()).body, payload.delta);
+        appendText(thinkingBlock().body, payload.delta);
         setActivity("Thinking…");
         break;
 
       case "reasoning_end":
-        thinkingBlock(step()).complete();
+        thinkingBlock().complete();
         setActivity("Thinking…");
         break;
 
       case "message_start":
-        outputBlock(step());
+        beginOutput();
         setActivity("Reviewing…");
         break;
 
       case "message_delta":
-        appendText(outputBlock(step()).body, payload.delta);
+        appendText(outputBlock().body, payload.delta);
         setActivity("Reviewing…");
         break;
 
       case "message_end":
-        setMessage(step(), payload.content);
+        setMessage(payload.content);
         setActivity("Reviewing…");
         break;
 
       case "tool_call_start":
-        var started = toolCard(step(), payload);
+        var started = toolCard(payload);
         setActivity(toolActivity(started));
         break;
 
       case "tool_args_delta":
-        var writing = toolCard(step(), payload);
+        var writing = toolCard(payload);
         appendText(writing.args, payload.delta);
         setActivity(toolActivity(writing));
         break;
 
       case "tool_call_end":
-        var parsedCall = toolCard(step(), payload);
+        var parsedCall = toolCard(payload);
         if (parsedCall.details.dataset.status === "writing") {
           setToolState(parsedCall, "queued", "queued");
         }
         break;
 
       case "tool_call":
-        var called = toolCard(step(), payload);
+        var called = toolCard(payload);
         setToolArgs(called, payload.args);
         setToolState(called, "queued", "queued");
         setActivity(toolActivity(called));
         break;
 
       case "tool_start":
-        var running = toolCard(step(), payload);
+        var running = toolCard(payload);
         if (payload.args) {
           setToolArgs(running, payload.args);
         }
@@ -165,28 +157,30 @@
         break;
 
       case "tool_output":
-        var streaming = toolCard(step(), payload);
+        var streaming = toolCard(payload);
         setToolOutput(streaming, payload.chunk);
         setActivity(toolActivity(streaming));
         break;
 
       case "tool_result":
-        var finished = toolCard(step(), payload);
+        var finished = toolCard(payload);
         setToolResult(finished, payload.result, payload.is_error);
         setActivity("Thinking…");
         break;
 
       case "tool_content":
-        appendText(outputBlock(step()).body, payload.content);
+        appendText(outputBlock().body, payload.content);
         setActivity("Reviewing…");
         break;
 
       case "step_usage":
-        setUsage(step(), payload);
+        // The step_finish event carries the same usage with its finish reason.
         break;
 
       case "step_finish":
-        finishStep(step(), payload);
+        usageLine(payload.usage);
+        activeThinking = null;
+        activeOutput = null;
         setActivity("Thinking…");
         break;
 
@@ -259,7 +253,6 @@
 
   function finish(payload) {
     ended = true;
-    following = false;
     window.clearInterval(clockTimer);
     clearActivity();
 
@@ -297,62 +290,14 @@
     follow();
   }
 
-  function step() {
-    if (!current || current.finished) {
-      current = newStep(++stepNumber);
-    }
-    return current;
+  function beginThinking() {
+    activeThinking = null;
+    return thinkingBlock();
   }
 
-  function newStep(number) {
-    var item = document.createElement("li");
-    item.className = "step";
-
-    var head = document.createElement("div");
-    head.className = "step-head";
-
-    var glyph = span("step-glyph", "▸");
-    var index = span("step-index", "Step " + number);
-    var reason = span("step-reason", "");
-    reason.hidden = true;
-    head.append(glyph, index, reason);
-
-    var body = document.createElement("div");
-    body.className = "step-body";
-
-    var foot = document.createElement("div");
-    foot.className = "step-foot";
-    foot.hidden = true;
-
-    item.append(head, body, foot);
-    timeline.append(item);
-
-    return {
-      number: number,
-      item: item,
-      head: head,
-      reason: reason,
-      body: body,
-      foot: foot,
-      thinking: null,
-      output: null,
-      tools: new Map(),
-      usageText: "",
-      finished: false
-    };
-  }
-
-  function beginThinking(target) {
-    if (target.thinking && !target.thinking.completed) {
-      return target.thinking;
-    }
-    target.thinking = null;
-    return thinkingBlock(target);
-  }
-
-  function thinkingBlock(target) {
-    if (target.thinking) {
-      return target.thinking;
+  function thinkingBlock() {
+    if (activeThinking) {
+      return activeThinking;
     }
 
     var details = document.createElement("details");
@@ -371,12 +316,11 @@
     body.setAttribute("dir", "auto");
 
     details.append(summaryNode, body);
-    target.body.append(details);
+    timeline.append(details);
 
     var block = {
       details: details,
       label: label,
-      meta: meta,
       body: body,
       startedAt: Date.now(),
       completed: false,
@@ -390,13 +334,18 @@
       }
     };
 
-    target.thinking = block;
+    activeThinking = block;
     return block;
   }
 
-  function outputBlock(target) {
-    if (target.output) {
-      return target.output;
+  function beginOutput() {
+    activeOutput = null;
+    return outputBlock();
+  }
+
+  function outputBlock() {
+    if (activeOutput) {
+      return activeOutput;
     }
 
     var box = document.createElement("div");
@@ -410,22 +359,22 @@
     body.setAttribute("dir", "auto");
 
     box.append(glyph, body);
-    target.body.append(box);
+    timeline.append(box);
 
-    target.output = { box: box, body: body };
-    return target.output;
+    activeOutput = { box: box, body: body };
+    return activeOutput;
   }
 
-  function setMessage(target, content) {
-    var block = outputBlock(target);
+  function setMessage(content) {
+    var block = outputBlock();
     var streamed = block.body.textContent;
     block.body.replaceChildren();
     block.body.textContent = content || streamed;
   }
 
-  function toolCard(target, payload) {
+  function toolCard(payload) {
     var id = payload.id || payload.name || "tool";
-    var card = target.tools.get(id);
+    var card = tools.get(id);
     if (card) {
       if (payload.name && !card.name) {
         card.name = payload.name;
@@ -478,7 +427,7 @@
     raw.append(rawSummary, rawBody);
     result.append(resultGlyph, resultText, raw);
 
-    target.body.append(details, result);
+    timeline.append(details, result);
 
     card = {
       details: details,
@@ -494,7 +443,7 @@
       parsedArgs: null,
       output: ""
     };
-    target.tools.set(id, card);
+    tools.set(id, card);
     toolCalls += 1;
     updateToolCount();
     return card;
@@ -531,7 +480,21 @@
     setToolState(card, isError ? "failed" : "done", isError ? "failed" : "");
   }
 
-  function setUsage(target, usage) {
+  function usageLine(usage) {
+    if (!usage) {
+      return;
+    }
+    var parts = usageParts(usage);
+    if (!parts.length) {
+      return;
+    }
+    var line = document.createElement("div");
+    line.className = "usage-line";
+    line.textContent = "· " + parts.join(" · ");
+    timeline.append(line);
+  }
+
+  function usageParts(usage) {
     var parts = [];
     if (usage.input_tokens) {
       parts.push(formatNumber(usage.input_tokens) + " in");
@@ -545,42 +508,11 @@
     if (usage.cache_read) {
       parts.push(formatNumber(usage.cache_read) + " cached");
     }
-    target.usageText = parts.join(" · ");
-    if (target.finished) {
-      renderFoot(target);
-    }
-  }
-
-  function finishStep(target, payload) {
-    target.finished = true;
-    if (payload.usage) {
-      setUsage(target, payload.usage);
-    }
-    if (payload.finish_reason) {
-      target.reason.textContent = payload.finish_reason;
-      target.reason.hidden = false;
-    }
-    renderFoot(target);
-    if (target.thinking) {
-      target.thinking.complete();
-    }
-  }
-
-  function renderFoot(target) {
-    var parts = ["✔ Step " + target.number];
-    if (target.usageText) {
-      parts.push(target.usageText);
-    }
-    target.foot.textContent = parts.join("  ·  ");
-    target.foot.hidden = false;
+    return parts;
   }
 
   function marker(kind, textValue, detail) {
-    // An event that happens during a step belongs inside that step, so the
-    // conversation keeps its order instead of collecting every marker after
-    // the last step.
-    var inStep = current && !current.finished;
-    var item = document.createElement(inStep ? "div" : "li");
+    var item = document.createElement("div");
     item.className = "event event-" + kind;
 
     var glyph = span("event-glyph", glyphFor(kind));
@@ -599,17 +531,13 @@
     }
 
     item.append(glyph, body);
-    if (inStep) {
-      current.body.append(item);
-    } else {
-      timeline.append(item);
-    }
+    timeline.append(item);
   }
 
   function summary(value) {
     // A finished session already renders its summary on the server; a live
     // one learns it from the terminal event.
-    if (document.querySelector(".summary")) {
+    if (!summarySlot || summarySlot.querySelector(".summary")) {
       return;
     }
     var section = document.createElement("section");
@@ -623,8 +551,7 @@
     paragraph.setAttribute("dir", "auto");
 
     section.append(heading, paragraph);
-    var anchor = activity || timeline;
-    anchor.after(section);
+    summarySlot.append(section);
   }
 
   function removePlaceholder() {
@@ -635,13 +562,13 @@
   }
 
   function follow() {
-    if (!following || scrollQueued) {
+    if (!following || !scroll || followQueued) {
       return;
     }
-    scrollQueued = true;
+    followQueued = true;
     window.requestAnimationFrame(function () {
-      scrollQueued = false;
-      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+      followQueued = false;
+      scroll.scrollTop = scroll.scrollHeight;
     });
   }
 

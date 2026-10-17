@@ -57,6 +57,7 @@ type reviewSessionsPage struct {
 	Section  string
 	Refresh  string
 	Console  bool
+	Fixed    bool
 	Sessions []store.ReviewSession
 	Count    int
 	Status   string
@@ -72,6 +73,7 @@ type reviewSessionPage struct {
 	Section string
 	Refresh string
 	Console bool
+	Fixed   bool
 	Session store.ReviewSession
 	Live    bool
 }
@@ -141,6 +143,7 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		Title:   fmt.Sprintf("%s/%s#%d", session.OrgName, session.RepoName, session.PRNumber),
 		Section: "sessions",
 		Console: true,
+		Fixed:   true,
 		Session: session,
 		Live:    session.Status == store.ReviewRunning,
 	})

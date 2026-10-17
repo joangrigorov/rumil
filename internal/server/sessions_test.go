@@ -152,7 +152,7 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
-		`<body class="console">`,
+		`<body class="console console-fixed">`,
 		"acme/payments#42",
 		"Fix the flap",
 		"The change is sound.",

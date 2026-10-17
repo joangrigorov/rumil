@@ -22,27 +22,29 @@
 
 {{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
 
-<ol class="timeline console-log" id="timeline"
-    data-session-id="{{.Session.ID}}"
-    data-live="{{if .Live}}true{{else}}false{{end}}"
-    data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
-  <li class="timeline-empty" id="timeline-empty"><span class="activity-glyph" aria-hidden="true">✻</span> Loading the session…</li>
-</ol>
+<section class="console-window" aria-label="Session transcript">
+  <div class="console-scroll" id="console-scroll">
+    <div class="timeline console-log" id="timeline" role="log"
+        data-session-id="{{.Session.ID}}"
+        data-live="{{if .Live}}true{{else}}false{{end}}"
+        data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
+      <div class="timeline-empty" id="timeline-empty"><span class="activity-glyph" aria-hidden="true">✻</span> Loading the session…</div>
+    </div>
+    <noscript><p class="notice">The timeline needs JavaScript. The raw events are at <code>/api/sessions/{{.Session.ID}}/events.json</code>.</p></noscript>
+  </div>
 
-<div class="activity" id="activity" role="status" aria-live="polite"{{if not .Live}} hidden{{end}}>
-  <span class="activity-glyph" aria-hidden="true">✻</span>
-  <span class="activity-label" id="activity-label">Thinking…</span>
-  <span class="activity-time" id="activity-time" aria-hidden="true"></span>
-  <span class="cursor" aria-hidden="true">▌</span>
-</div>
+  <div class="activity" id="activity" role="status" aria-live="polite"{{if not .Live}} hidden{{end}}>
+    <span class="activity-glyph" aria-hidden="true">✻</span>
+    <span class="activity-label" id="activity-label">Thinking…</span>
+    <span class="activity-time" id="activity-time" aria-hidden="true"></span>
+    <span class="cursor" aria-hidden="true">▌</span>
+  </div>
+</section>
 
-{{if .Session.Summary}}
-<section class="summary">
+<div class="summary-slot" id="summary-slot">{{if .Session.Summary}}<section class="summary">
   <h2>Review summary</h2>
   <p>{{.Session.Summary}}</p>
-</section>
-{{end}}
+</section>{{end}}</div>
 
-<noscript><p class="notice">The timeline needs JavaScript. The raw events are at <code>/api/sessions/{{.Session.ID}}/events.json</code>.</p></noscript>
 <script src="/static/sessions.js" defer></script>
 {{end}}

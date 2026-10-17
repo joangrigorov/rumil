@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 </head>
-<body{{if .Console}} class="console"{{end}}>
+<body{{if or .Console .Fixed}} class="{{if .Console}}console{{end}}{{if .Fixed}} console-fixed{{end}}"{{end}}>
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="topbar-inner">
