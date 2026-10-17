@@ -11,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/server/web"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -84,10 +86,27 @@ func Handler(webhook *Webhook, db *store.DB, moderation *ModerationUI) http.Hand
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/github", webhook)
 	mux.HandleFunc("GET /healthz", health(db, webhook.logger))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	if moderation != nil {
 		moderation.Routes(mux)
 	}
 	return mux
+}
+
+// staticHandler serves the embedded stylesheet and script tree. The assets are
+// part of the binary, so a package install has nothing to copy and a missing
+// file is a build error rather than a 404 at runtime.
+func staticHandler() http.Handler {
+	static, err := fs.Sub(web.FS, "static")
+	if err != nil {
+		panic(fmt.Sprintf("the embedded static tree: %v", err))
+	}
+	files := http.FileServerFS(static)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		files.ServeHTTP(w, r)
+	})
 }
 
 // health reports whether the database answers. A failed ping is logged rather
