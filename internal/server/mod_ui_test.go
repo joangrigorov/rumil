@@ -502,6 +502,11 @@ func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
 		t.Errorf("Content-Security-Policy = %q, want the operator policy", got)
 	}
 
+	// The controls are a filter, and the page says so.
+	if !strings.Contains(body, `aria-label="Filter rules"`) || !strings.Contains(body, `class="filters-title">Filter</span>`) {
+		t.Errorf("the filter form is not labelled as a filter:\n%s", body)
+	}
+
 	// The organization rule says what it applies to and where it came from; the
 	// repository rule names the repository it applies to.
 	if !strings.Contains(body, `<span class="pill scope-org">ORG</span>`) {

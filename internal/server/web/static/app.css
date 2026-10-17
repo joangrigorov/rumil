@@ -288,15 +288,38 @@ h1 {
 /* ---- filters ---------------------------------------------------------- */
 
 .filters {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
   margin: 0 0 22px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.filters-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.filters-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.filters-sub {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.filters-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
 }
 
 .filters-actions {
@@ -642,7 +665,7 @@ textarea:focus {
     gap: 10px;
   }
 
-  .filters {
+  .filters-fields {
     align-items: stretch;
     flex-direction: column;
   }
