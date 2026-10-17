@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.14](https://github.com/joangrigorov/rumil/compare/v0.0.13...v0.0.14) (2026-10-17)
+
+
+### Features
+
+* add the review session observation deck ([#40](https://github.com/joangrigorov/rumil/issues/40)) ([3f708fc](https://github.com/joangrigorov/rumil/commit/3f708fc4f6dddcb60135633e42442e6097280032))
+* give the moderation page a real design ([#38](https://github.com/joangrigorov/rumil/issues/38)) ([8ee6dc0](https://github.com/joangrigorov/rumil/commit/8ee6dc01aa86d108f06877f5c51f1a442d6d525e))
+
 ## [0.0.13](https://github.com/joangrigorov/rumil/compare/v0.0.12...v0.0.13) (2026-10-16)
 
 
