@@ -23,15 +23,15 @@
   var activity = document.getElementById("activity");
   var activityLabel = document.getElementById("activity-label");
   var activityTime = document.getElementById("activity-time");
-  var summarySlot = document.getElementById("summary-slot");
 
   var tools = new Map();
   var activeThinking = null;
   var activeOutput = null;
+  var lastOutput = null;
   var lastSeq = 0;
   var toolCalls = 0;
   var ended = false;
-  var following = live;
+  var following = true;
   var followQueued = false;
   var activityText = "";
   var activityStartedAt = 0;
@@ -283,9 +283,6 @@
     if (payload.status !== "FAILED") {
       marker("review", "Session complete", payload.status || "");
     }
-    if (payload.summary) {
-      summary(payload.summary);
-    }
     source.close();
     follow();
   }
@@ -306,7 +303,7 @@
     details.dataset.state = "streaming";
 
     var summaryNode = document.createElement("summary");
-    var glyph = span("glyph", "✻");
+    var glyph = span("glyph", "✦");
     var label = span("label", "Thinking…");
     var meta = span("meta", "");
     summaryNode.append(glyph, label, meta);
@@ -362,11 +359,18 @@
     timeline.append(box);
 
     activeOutput = { box: box, body: body };
+    lastOutput = activeOutput;
     return activeOutput;
   }
 
   function setMessage(content) {
-    var block = outputBlock();
+    // message_end can arrive after step_finish, which clears the streaming
+    // cursor. Fall back to the last output block so the final text replaces
+    // what was streamed instead of appearing twice.
+    var block = activeOutput || lastOutput;
+    if (!block) {
+      block = outputBlock();
+    }
     var streamed = block.body.textContent;
     block.body.replaceChildren();
     block.body.textContent = content || streamed;
@@ -532,26 +536,6 @@
 
     item.append(glyph, body);
     timeline.append(item);
-  }
-
-  function summary(value) {
-    // A finished session already renders its summary on the server; a live
-    // one learns it from the terminal event.
-    if (!summarySlot || summarySlot.querySelector(".summary")) {
-      return;
-    }
-    var section = document.createElement("section");
-    section.className = "summary";
-
-    var heading = document.createElement("h2");
-    heading.textContent = "Review summary";
-
-    var paragraph = document.createElement("p");
-    paragraph.textContent = value;
-    paragraph.setAttribute("dir", "auto");
-
-    section.append(heading, paragraph);
-    summarySlot.append(section);
   }
 
   function removePlaceholder() {

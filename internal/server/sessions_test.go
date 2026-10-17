@@ -155,7 +155,6 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		`<body class="console console-fixed">`,
 		"acme/payments#42",
 		"Fix the flap",
-		"The change is sound.",
 		"data-session-id=\"" + session.ID + "\"",
 		`class="timeline console-log"`,
 		`id="activity"`,
@@ -163,6 +162,8 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		"abcdef1",
 		"https://github.com/acme/payments/pull/42",
 		"/static/sessions.js",
+		"/static/theme.js",
+		`data-theme-choice="system"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)

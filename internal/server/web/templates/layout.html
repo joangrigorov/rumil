@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · Rumil</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 </head>
@@ -20,6 +21,11 @@
       <a href="/ui/moderation" {{if eq .Section "rules"}}aria-current="page"{{end}}>Rules</a>
       <a href="/ui/sessions" {{if eq .Section "sessions"}}aria-current="page"{{end}}>Sessions</a>
     </nav>
+    <div class="theme-switch" role="group" aria-label="Color theme">
+      <button type="button" class="theme-choice" data-theme-choice="system" aria-pressed="true" title="Follow the system theme">Auto</button>
+      <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="false" title="Dark theme">Dark</button>
+      <button type="button" class="theme-choice" data-theme-choice="light" aria-pressed="false" title="Light theme">Light</button>
+    </div>
     <span class="env">local admin</span>
   </div>
 </header>
