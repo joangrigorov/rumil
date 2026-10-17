@@ -1,0 +1,65 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow">Observability</p>
+    <h1>Review sessions</h1>
+    <p class="lede">Every review a worker has run, newest first. Open one to read the model's reasoning, the tools it called, and how the review ended.</p>
+  </div>
+  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}session{{else}}sessions{{end}}{{if .Live}} <span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}</p>
+</header>
+
+<form class="filters" method="get" action="/ui/sessions" aria-label="Filter sessions">
+  <div class="filters-head">
+    <span class="filters-title">Filter</span>
+    <span class="filters-sub">Narrow by status or repository.</span>
+  </div>
+  <div class="filters-fields">
+    <label class="field">
+      <span class="field-label">Status</span>
+      <select name="status">
+        <option value="">Any status</option>
+        <option value="RUNNING" {{if eq .Status "RUNNING"}}selected{{end}}>Running</option>
+        <option value="SUCCEEDED" {{if eq .Status "SUCCEEDED"}}selected{{end}}>Succeeded</option>
+        <option value="FAILED" {{if eq .Status "FAILED"}}selected{{end}}>Failed</option>
+      </select>
+    </label>
+    <label class="field field-grow">
+      <span class="field-label">Repository</span>
+      <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="filters-actions">
+      <button class="btn btn-primary" type="submit">Apply</button>
+      <a class="btn btn-quiet" href="/ui/sessions">Clear</a>
+    </div>
+  </div>
+</form>
+
+{{if .Sessions}}
+<ol class="sessions">
+  {{range .Sessions}}
+  <li>
+    <a class="session-row" href="/ui/sessions/{{.ID}}">
+      <div class="session-row-top">
+        <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+        <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+        <span class="session-when">{{date .StartedAt}}</span>
+      </div>
+      <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
+      <div class="session-meta">
+        {{if .Model}}<code>{{.Model}}</code>{{end}}
+        <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+        <span>{{duration .StartedAt .FinishedAt}}</span>
+        {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}
+      </div>
+    </a>
+  </li>
+  {{end}}
+</ol>
+{{else}}
+<div class="empty">
+  <p class="empty-title">No sessions match.</p>
+  <p>{{if .Status}}Try another status, or clear the filters.{{else}}A session is recorded when a worker starts a review. Ask Rumil to review a pull request and it lands here.{{end}}</p>
+  <a class="btn btn-quiet" href="/ui/sessions">Clear filters</a>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,41 @@
+{{define "content"}}
+<header class="page-head session-head">
+  <div class="page-head-text">
+    <p class="eyebrow"><a href="/ui/sessions">Sessions</a> / <code>{{short .Session.ID}}</code></p>
+    <h1>{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</h1>
+    <p class="lede">{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}</p>
+  </div>
+  <div class="session-state">
+    <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
+    {{if .Live}}<span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}
+    <span class="session-clock" id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span>
+  </div>
+</header>
+
+<div class="session-facts">
+  {{if .Session.Model}}<span>model <code>{{.Session.Model}}</code></span>{{end}}
+  <span id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</span>
+  <span>started {{date .Session.StartedAt}}</span>
+  {{if .Session.HeadSHA}}<span>head <code>{{sha .Session.HeadSHA}}</code></span>{{end}}
+  <a href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">open on GitHub</a>
+</div>
+
+{{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
+
+<ol class="timeline" id="timeline"
+    data-session-id="{{.Session.ID}}"
+    data-live="{{if .Live}}true{{else}}false{{end}}"
+    data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
+  <li class="timeline-empty" id="timeline-empty">Loading the session…</li>
+</ol>
+
+{{if .Session.Summary}}
+<section class="summary">
+  <h2>Review summary</h2>
+  <p>{{.Session.Summary}}</p>
+</section>
+{{end}}
+
+<noscript><p class="notice">The timeline needs JavaScript. The raw events are at <code>/api/sessions/{{.Session.ID}}/events.json</code>.</p></noscript>
+<script src="/static/sessions.js" defer></script>
+{{end}}

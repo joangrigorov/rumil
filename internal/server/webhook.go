@@ -80,15 +80,20 @@ func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, 
 }
 
 // Handler builds the routes of `rumil serve`. Method patterns make the mux
-// answer 405 for anything else. moderation may be nil, and its routes are then
-// not mounted at all.
-func Handler(webhook *Webhook, db *store.DB, moderation *ModerationUI) http.Handler {
+// answer 405 for anything else. moderation and the observation deck may be
+// nil, and their routes are then not mounted at all.
+func Handler(webhook *Webhook, db *store.DB, moderation *ModerationUI, sessions ...*SessionsUI) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /webhooks/github", webhook)
 	mux.HandleFunc("GET /healthz", health(db, webhook.logger))
 	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	if moderation != nil {
 		moderation.Routes(mux)
+	}
+	for _, deck := range sessions {
+		if deck != nil {
+			deck.Routes(mux)
+		}
 	}
 	return mux
 }
@@ -380,7 +385,7 @@ func (i issue) isPullRequest() bool {
 	return trimmed != "" && trimmed != "null"
 }
 
-func writeJSON(w http.ResponseWriter, status int, body map[string]string) {
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	encoded, err := json.Marshal(body)

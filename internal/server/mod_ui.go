@@ -255,6 +255,7 @@ func moderatorOf(r *http.Request) string {
 type moderationPage struct {
 	Title   string
 	Section string
+	Refresh string
 	Rules   []store.Memory
 	Count   int
 	Status  string
@@ -267,16 +268,43 @@ type moderationPage struct {
 // disabled — which matters on a surface that can promote unvetted text into a
 // review prompt, where the less machinery between the operator and the decision
 // the better.
-var moderationTemplates = parseTemplates("moderation.html", template.FuncMap{
-	"short": func(id string) string {
-		if i := strings.IndexByte(id, '-'); i > 0 {
-			return id[:i]
-		}
-		return id
-	},
-	"date":  func(t time.Time) string { return t.UTC().Format("2 Jan 2006, 15:04 UTC") },
-	"lower": strings.ToLower,
-})
+var moderationTemplates = parseTemplates("moderation.html", pageFuncs())
+
+// pageFuncs are the helpers every operator page shares.
+func pageFuncs() template.FuncMap {
+	return template.FuncMap{
+		"short": func(id string) string {
+			if i := strings.IndexByte(id, '-'); i > 0 {
+				return id[:i]
+			}
+			return id
+		},
+		"date":     func(t time.Time) string { return t.UTC().Format("2 Jan 2006, 15:04 UTC") },
+		"lower":    strings.ToLower,
+		"duration": durationText,
+		"sha":      shortSHA,
+	}
+}
+
+// durationText is how long a session has run, or ran.
+func durationText(start time.Time, end *time.Time) string {
+	if end == nil {
+		return "running"
+	}
+	elapsed := end.Sub(start)
+	if elapsed < time.Second {
+		return "<1s"
+	}
+	return elapsed.Round(time.Second).String()
+}
+
+// shortSHA is the seven-character form GitHub shows for a commit.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
 
 // parseTemplates builds one page set from the embedded layout and the named
 // page. Each page gets its own set because every page defines "content".

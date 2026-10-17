@@ -140,7 +140,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 		return nil, fmt.Errorf("building the synthesis tools: %w", err)
 	}
 
-	session, err := kit.New(ctx, e.sessionOptions(provider, RememberPrompt(req, prior, fileContext), sessionTools, distillTurns))
+	session, err := kit.New(ctx, e.sessionOptions(provider, RememberPrompt(req, prior, fileContext), sessionTools, distillTurns, false))
 	if err != nil {
 		return nil, fmt.Errorf("starting the synthesis session: %w", err)
 	}
