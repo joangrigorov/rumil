@@ -29,7 +29,7 @@ func testDB(t *testing.T) *DB {
 	// Tests in this package share the schema, so each starts from an empty
 	// queue and an empty memory table. A test that resized the embedding
 	// column puts the fixture width back, because the width outlives the rows.
-	if _, err := db.pool.Exec(ctx, `TRUNCATE webhook_jobs, memories`); err != nil {
+	if _, err := db.pool.Exec(ctx, `TRUNCATE review_events, review_sessions, webhook_jobs, memories`); err != nil {
 		t.Fatalf("truncating the test tables: %v", err)
 	}
 	if err := db.EnsureEmbeddingWidth(ctx, testutil.EmbeddingDimensions); err != nil {

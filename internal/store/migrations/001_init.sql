@@ -20,6 +20,7 @@ CREATE TYPE job_status AS ENUM ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED');
 -- only at the approval gate, by a maintainer, and puts one rule above RUMIL.md
 -- for the case it names.
 CREATE TYPE memory_authority AS ENUM ('CONTEXT', 'DIRECTIVE');
+CREATE TYPE review_status AS ENUM ('RUNNING', 'SUCCEEDED', 'FAILED');
 
 CREATE TABLE webhook_jobs (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,7 +73,51 @@ ALTER TABLE memories
     ADD CONSTRAINT memories_directive_is_a_repository_rule
         CHECK (authority <> 'DIRECTIVE' OR scope = 'REPO');
 
+-- A review session is one run of the reviewer, recorded for the observation
+-- deck. The job is optional: a session can outlive the job row it came from,
+-- and a one-off `rumil review` run has no job at all.
+CREATE TABLE review_sessions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id          UUID REFERENCES webhook_jobs(id) ON DELETE SET NULL,
+    installation_id BIGINT NOT NULL,
+    org_name        TEXT NOT NULL,
+    repo_name       TEXT NOT NULL,
+    pr_number       INT NOT NULL,
+    pr_title        TEXT,
+    head_sha        TEXT,
+    base_sha        TEXT,
+    model           TEXT,
+    status          review_status NOT NULL DEFAULT 'RUNNING',
+    summary         TEXT,
+    review_event    TEXT,
+    tool_calls      INT NOT NULL DEFAULT 0,
+    error           TEXT,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at     TIMESTAMPTZ
+);
+
+CREATE INDEX idx_sessions_recent ON review_sessions (started_at DESC);
+CREATE INDEX idx_sessions_repo ON review_sessions (org_name, repo_name, started_at DESC);
+
+-- One row per event the session emitted, in the order it emitted them. The seq
+-- is the session's own counter: it is what SSE resumes from and what makes a
+-- redelivered event idempotent.
+CREATE TABLE review_events (
+    id          BIGSERIAL PRIMARY KEY,
+    session_id  UUID NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+    seq         INT NOT NULL,
+    at          TIMESTAMPTZ NOT NULL,
+    type        TEXT NOT NULL,
+    payload     JSONB NOT NULL,
+    UNIQUE (session_id, seq)
+);
+
+CREATE INDEX idx_events_session ON review_events (session_id, seq);
+
 -- +goose Down
+DROP TABLE IF EXISTS review_events;
+DROP TABLE IF EXISTS review_sessions;
+DROP TYPE IF EXISTS review_status;
 DROP TABLE IF EXISTS memories;
 DROP TABLE IF EXISTS webhook_jobs;
 DROP TYPE IF EXISTS job_status;

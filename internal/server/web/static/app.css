@@ -1,57 +1,84 @@
 /* Rumil operator surfaces. One stylesheet, system fonts, no external assets. */
 
 :root {
-  color-scheme: light dark;
-  --bg: #f5f6f8;
-  --surface: #ffffff;
-  --surface-muted: #fafbfc;
-  --ink: #16181d;
-  --muted: #616877;
-  --faint: #8b93a1;
-  --line: #e3e6ec;
-  --line-strong: #cfd4dd;
-  --accent: #4f46e5;
-  --accent-ink: #ffffff;
-  --accent-soft: #eef0ff;
-  --danger: #b42318;
-  --danger-soft: #fef3f2;
-  --ok: #067647;
-  --ok-soft: #ecfdf3;
-  --warn: #b54708;
-  --warn-soft: #fffaeb;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  color-scheme: light;
+  --bg: #f3e7d0;
+  --surface: #fbf3e2;
+  --surface-muted: #f2e3c6;
+  --ink: #33271e;
+  --muted: #6f5a45;
+  --faint: #998367;
+  --line: #e1ceaa;
+  --line-strong: #cbb284;
+  --accent: #b45309;
+  --accent-dim: #c8945a;
+  --accent-soft: #f2ddba;
+  --danger: #a03424;
+  --danger-soft: #f7ded2;
+  --ok: #536b2e;
+  --ok-soft: #e9edd4;
+  --warn: #96600e;
+  --warn-soft: #f7e6bf;
+  --shadow: 0 1px 2px rgb(72 49 22 / 9%);
+  --well: #fdf6e3;
+  --well-deep: #f0e1c4;
+  --code-bg: #f6ead2;
+  --scroll-thumb: #c9b184;
+  --selection-bg: #e7bf83;
+  --selection-ink: #2c2118;
+  --brand-bg: #b45309;
+  --brand-ink: #fff8ec;
+  --btn-bg: #b45309;
+  --btn-bg-hover: #92400e;
+  --btn-ink: #fff8ec;
+  --radius: 10px;
+  --radius-sm: 6px;
   --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0e12;
-    --surface: #14171d;
-    --surface-muted: #181b22;
-    --ink: #e8eaef;
-    --muted: #9aa2b1;
-    --faint: #737b89;
-    --line: #262b34;
-    --line-strong: #343b47;
-    --accent: #8f8aff;
-    --accent-ink: #10121a;
-    --accent-soft: #1d1f3a;
-    --danger: #ff8f86;
-    --danger-soft: #2a1514;
-    --ok: #5cd6a4;
-    --ok-soft: #10241b;
-    --warn: #f0b46a;
-    --warn-soft: #271d0f;
-    --shadow: 0 1px 2px rgb(0 0 0 / 40%);
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --surface: #0f1217;
+  --surface-muted: #141920;
+  --ink: #d7dde5;
+  --muted: #8b949e;
+  --faint: #5b6572;
+  --line: #20262f;
+  --line-strong: #303844;
+  --accent: #58a6ff;
+  --accent-dim: #2b5278;
+  --accent-soft: #0d2136;
+  --danger: #f85149;
+  --danger-soft: #2a1415;
+  --ok: #3fb950;
+  --ok-soft: #0e2416;
+  --warn: #d29922;
+  --warn-soft: #2a2110;
+  --shadow: none;
+  --well: #0d1117;
+  --well-deep: #0a0e13;
+  --code-bg: #07090c;
+  --scroll-thumb: #2a313b;
+  --selection-bg: #1f6feb;
+  --selection-ink: #ffffff;
+  --brand-bg: #1f6feb;
+  --brand-ink: #ffffff;
+  --btn-bg: #1f6feb;
+  --btn-bg-hover: #388bfd;
+  --btn-ink: #ffffff;
+  --radius: 6px;
+  --radius-sm: 4px;
 }
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 html {
@@ -76,6 +103,11 @@ a {
 
 a:hover {
   text-decoration-thickness: 2px;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
 }
 
 code {
@@ -136,8 +168,8 @@ code {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-size: 14px;
   font-weight: 750;
 }
@@ -173,6 +205,43 @@ code {
   font-size: 12px;
   letter-spacing: 0.02em;
   white-space: nowrap;
+}
+
+.theme-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.theme-toggle::before {
+  content: "◐";
+  font-family: var(--mono);
+  font-size: 16px;
+  font-variant-emoji: text;
+  line-height: 1;
+}
+
+html[data-theme-mode="dark"] .theme-toggle::before {
+  content: "☾";
+}
+
+html[data-theme-mode="light"] .theme-toggle::before {
+  content: "☼";
+}
+
+.theme-toggle:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+  color: var(--accent);
 }
 
 .page {
@@ -416,12 +485,12 @@ textarea:focus {
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--btn-bg);
+  color: var(--btn-ink);
 }
 
 .btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 86%, #000);
+  background: var(--btn-bg-hover);
 }
 
 .btn-quiet {
@@ -638,6 +707,911 @@ textarea:focus {
   font-size: 13.5px;
 }
 
+/* ---- observation deck console ----------------------------------------- */
+
+body.console {
+  --radius: 6px;
+  --radius-sm: 4px;
+  font-size: 13.5px;
+}
+
+body.console .topbar {
+  background: var(--well);
+  border-bottom-color: var(--line);
+}
+
+body.console .topbar-inner {
+  max-width: 1180px;
+  height: 50px;
+}
+
+body.console .brand {
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+body.console .brand-mark {
+  border-radius: 4px;
+}
+
+body.console .nav a {
+  font-size: 12.5px;
+}
+
+body.console .nav a:hover {
+  background: var(--surface-muted);
+}
+
+body.console .nav a[aria-current="page"] {
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+
+body.console .env {
+  font-size: 11px;
+}
+
+body.console .page {
+  max-width: 1180px;
+  padding: 24px 20px 56px;
+}
+
+body.console .foot {
+  border-top-color: var(--line);
+  font-size: 11.5px;
+}
+
+body.console .foot p {
+  max-width: 1180px;
+}
+
+body.console .page-head {
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+body.console .eyebrow {
+  margin-bottom: 2px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+body.console .eyebrow a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+body.console .eyebrow a:hover {
+  color: var(--ink);
+}
+
+body.console h1 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+body.console .lede {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+body.console .count {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .count strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+body.console .pill {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+body.console .status-running {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn);
+}
+
+body.console .status-succeeded {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  color: var(--ok);
+}
+
+body.console .status-failed {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  color: var(--danger);
+}
+
+body.console .muted {
+  color: var(--faint);
+}
+
+/* ---- console list ----------------------------------------------------- */
+
+body.console .filters {
+  margin-bottom: 14px;
+  padding: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.console .filters-head {
+  margin-bottom: 8px;
+}
+
+body.console .filters-title {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+body.console .filters-sub {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+body.console .filters-fields {
+  gap: 8px;
+}
+
+body.console .field-label {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+body.console input[type="text"],
+body.console select {
+  height: 30px;
+  border-color: var(--line-strong);
+  border-radius: 3px;
+  background: var(--well);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .btn {
+  height: 30px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .btn-quiet {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
+body.console .btn-quiet:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+body.console .sessions {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+body.console .session-row {
+  display: block;
+  padding: 10px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  text-decoration: none;
+}
+
+body.console .session-row:hover {
+  background: var(--well);
+}
+
+body.console .session-row-top {
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+body.console .session-repo {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .session-when {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .session-title {
+  margin: 0 0 3px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+body.console .session-meta {
+  gap: 3px 10px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .session-meta code {
+  color: var(--muted);
+}
+
+body.console .review-event {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+body.console .live-badge {
+  margin-left: 0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+body.console .empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+}
+
+body.console .empty p {
+  margin-left: 0;
+}
+
+/* ---- console rules ---------------------------------------------------- */
+
+body.console .rules {
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+body.console .rule {
+  padding: 12px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.console .rule-top {
+  margin-bottom: 8px;
+}
+
+body.console .rule-text {
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+body.console .rule-id,
+body.console .rule-when,
+body.console .rule-meta {
+  font-family: var(--mono);
+}
+
+body.console .rule-id,
+body.console .rule-when {
+  font-size: 11px;
+}
+
+body.console .rule-meta {
+  font-size: 11.5px;
+}
+
+body.console .rule-foot {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+body.console .rule-controls {
+  gap: 10px;
+}
+
+body.console .rationale {
+  font-size: 12.5px;
+}
+
+body.console textarea {
+  border-radius: 3px;
+  background: var(--well);
+}
+
+body.console .how {
+  margin-bottom: 14px;
+  border-radius: 4px;
+  background: var(--well);
+  box-shadow: none;
+}
+
+body.console .how summary {
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+body.console .how-body {
+  padding: 4px 12px 12px;
+  font-size: 12.5px;
+}
+
+body.console .edit summary {
+  font-size: 12px;
+}
+
+body.console .how summary::before,
+body.console .edit summary::before {
+  content: "▸ ";
+  color: var(--faint);
+}
+
+body.console .how[open] summary::before,
+body.console .edit[open] summary::before {
+  content: "▾ ";
+}
+
+/* ---- console session header ------------------------------------------- */
+
+body.console .session-head {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+  font-family: var(--mono);
+}
+
+body.console .session-state {
+  gap: 8px;
+  padding-top: 2px;
+}
+
+body.console .session-clock {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .session-facts {
+  gap: 2px 14px;
+  margin: 0 0 16px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+body.console .session-facts code {
+  color: var(--muted);
+}
+
+body.console .session-facts a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+body.console .session-facts a:hover {
+  text-decoration: underline;
+}
+
+body.console .notice-bad {
+  margin-bottom: 14px;
+  padding: 8px 10px;
+  border: 0;
+  border-left: 2px solid var(--danger);
+  border-radius: 0;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ---- fixed console layout --------------------------------------------- */
+
+body.console.console-fixed {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+body.console.console-fixed .topbar {
+  flex: none;
+}
+
+body.console.console-fixed .page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 14px;
+  padding-bottom: 12px;
+}
+
+body.console.console-fixed .foot {
+  display: none;
+}
+
+body.console.console-fixed .page-head,
+body.console.console-fixed .session-facts,
+body.console.console-fixed .notice-bad {
+  flex: none;
+}
+
+body.console.console-fixed .session-head {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+body.console.console-fixed .session-facts {
+  margin-bottom: 10px;
+}
+
+body.console.console-fixed .lede {
+  margin-top: 2px;
+}
+
+/* ---- console window --------------------------------------------------- */
+
+body.console .console-window {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--well);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+body.console .console-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body.console .timeline {
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+body.console .timeline-empty {
+  padding: 10px 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+body.console .usage-line {
+  padding: 1px 0 7px 18px;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+body.console summary {
+  list-style: none;
+}
+
+body.console summary::marker {
+  content: "";
+}
+
+body.console summary::-webkit-details-marker {
+  display: none;
+}
+
+/* ---- console scrollbars ----------------------------------------------- */
+
+/* Firefox styles scrollbars through the standard properties. Chromium and
+ * Safari ignore ::-webkit-scrollbar when those properties are set, so each
+ * engine gets one mechanism. */
+@supports not selector(::-webkit-scrollbar) {
+  body.console .console-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-dim) transparent;
+  }
+}
+
+body.console .console-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+body.console .console-scroll::-webkit-scrollbar-track {
+  border-left: 1px solid var(--line);
+  background: var(--well-deep);
+}
+
+body.console .console-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid var(--well-deep);
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--accent-dim) 0%,
+    var(--scroll-thumb) 50%,
+    var(--accent-dim) 100%
+  );
+}
+
+body.console .console-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+body.console .console-scroll::-webkit-scrollbar-corner {
+  background: var(--well-deep);
+}
+
+/* ---- thinking --------------------------------------------------------- */
+
+body.console .thinking {
+  margin: 2px 0 5px;
+}
+
+body.console .thinking > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+body.console .thinking .glyph {
+  color: var(--accent);
+}
+
+body.console .thinking[data-state="streaming"] .glyph {
+  animation: console-pulse 1.4s ease-in-out infinite;
+}
+
+body.console .thinking .meta {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+body.console .thinking-text {
+  margin: 3px 0 6px 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+body.console .thinking[data-state="complete"] > summary {
+  color: var(--faint);
+}
+
+body.console .thinking[data-state="complete"] .glyph {
+  color: var(--faint);
+}
+
+/* ---- output ----------------------------------------------------------- */
+
+body.console .output {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 3px 0 6px;
+}
+
+body.console .output .glyph {
+  flex: none;
+  color: var(--accent);
+  font-size: 10px;
+}
+
+body.console .output-text {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---- tool calls ------------------------------------------------------- */
+
+body.console .tool {
+  margin: 2px 0;
+}
+
+body.console .tool > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+body.console .tool .glyph {
+  color: var(--ok);
+}
+
+body.console .tool[data-status="writing"] .glyph,
+body.console .tool[data-status="running"] .glyph {
+  color: var(--warn);
+  animation: console-pulse 1.2s ease-in-out infinite;
+}
+
+body.console .tool[data-status="failed"] .glyph {
+  color: var(--danger);
+}
+
+body.console .tool-label {
+  color: var(--ink);
+}
+
+body.console .tool-state {
+  margin-left: auto;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body.console .tool[data-status="writing"] .tool-state,
+body.console .tool[data-status="running"] .tool-state {
+  color: var(--warn);
+}
+
+body.console .tool[data-status="failed"] .tool-state {
+  color: var(--danger);
+}
+
+body.console .chev {
+  color: var(--faint);
+  font-size: 13px;
+  transition: transform 120ms ease;
+}
+
+body.console details.tool[open] > summary .chev {
+  transform: rotate(90deg);
+}
+
+body.console .tool-detail {
+  margin: 3px 0 4px 18px;
+}
+
+body.console .tool-detail-label {
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body.console .tool-args,
+body.console .result-raw pre {
+  max-height: 240px;
+  margin: 3px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+body.console .tool-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 0 0 5px 18px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+body.console .tool-result .glyph {
+  color: var(--faint);
+}
+
+body.console .tool-result[data-error="true"] .glyph,
+body.console .tool-result[data-error="true"] .result-text {
+  color: var(--danger);
+}
+
+body.console .result-raw {
+  margin-left: auto;
+}
+
+body.console .result-raw[open] {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+
+body.console .result-raw > summary {
+  padding: 2px 0 2px 6px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+body.console .result-raw > summary::before {
+  content: "▸ ";
+}
+
+body.console .result-raw[open] > summary::before {
+  content: "▾ ";
+}
+
+/* ---- console markers -------------------------------------------------- */
+
+body.console .event {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+body.console .event-glyph {
+  flex: none;
+  width: 1ch;
+  color: var(--faint);
+  font-size: 11px;
+  text-align: center;
+}
+
+body.console .event-info .event-glyph {
+  color: var(--accent);
+}
+
+body.console .event-review .event-glyph {
+  color: var(--ok);
+}
+
+body.console .event-warn .event-glyph {
+  color: var(--warn);
+}
+
+body.console .event-error .event-glyph {
+  color: var(--danger);
+}
+
+body.console .event-body {
+  min-width: 0;
+}
+
+body.console .event-text {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+body.console .event-detail {
+  display: block;
+  margin-top: 1px;
+  color: var(--faint);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+body.console .event-error .event-text {
+  color: var(--danger);
+}
+
+/* ---- activity line ---------------------------------------------------- */
+
+body.console .activity {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--well-deep);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body.console .activity-glyph {
+  color: var(--accent);
+  animation: console-pulse 1.4s ease-in-out infinite;
+}
+
+body.console .activity-label {
+  color: var(--ink);
+}
+
+body.console .activity-time {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+body.console .cursor {
+  color: var(--accent);
+  animation: console-blink 1.1s steps(1) infinite;
+}
+
+@keyframes console-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes console-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
 /* ---- motion and small screens ---------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
@@ -653,9 +1627,7 @@ textarea:focus {
   .topbar-inner {
     padding: 0 14px;
     gap: 14px;
-  }
-
-  .page {
+  }  .page {
     padding: 22px 14px 56px;
   }
 
@@ -694,5 +1666,37 @@ textarea:focus {
 
   .env {
     display: none;
+  }
+
+  body.console .page {
+    padding: 18px 12px 44px;
+  }
+
+  body.console.console-fixed .page {
+    padding: 10px 10px 8px;
+  }
+
+  body.console .session-row {
+    padding: 9px 4px;
+  }
+
+  body.console .session-state,
+  body.console .session-when {
+    width: auto;
+    margin-left: 0;
+  }
+
+  body.console .session-facts {
+    gap: 3px 10px;
+  }
+
+  body.console .tool-detail,
+  body.console .tool-result {
+    margin-left: 10px;
+  }
+
+  body.console .activity {
+    padding: 7px 12px;
+    font-size: 11.5px;
   }
 }

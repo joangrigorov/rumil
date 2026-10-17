@@ -67,6 +67,11 @@ func newServeCmd(configPath *string) *cobra.Command {
 			} else if moved > 0 {
 				logger.Warn("requeued jobs interrupted by a previous run", "jobs", moved)
 			}
+			if interrupted, resetErr := db.InterruptRunningReviewSessions(ctx); resetErr != nil {
+				return resetErr
+			} else if interrupted > 0 {
+				logger.Warn("marked review sessions interrupted by a previous run", "sessions", interrupted)
+			}
 
 			engine, err := reviewer.NewEngine(cfg, logger, githubAPIBaseURL, db)
 			if err != nil {
@@ -83,6 +88,12 @@ func newServeCmd(configPath *string) *cobra.Command {
 			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
 			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
 
+			// The observation deck shares the moderation credential. Its
+			// recorder is attached to the pool before the workers start, so a
+			// review that begins immediately is still recorded.
+			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminToken, logger)
+			pool.SetSessionRecorder(sessionsUI.Recorder())
+
 			// The moderation surface is mounted with whatever the operator
 			// configured: no token means every request to it is refused, and no
 			// embedding provider means an edit is refused while approving the
@@ -96,7 +107,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 			httpServer := &http.Server{
 				Addr:              address,
-				Handler:           server.Handler(webhook, db, moderationUI),
+				Handler:           server.Handler(webhook, db, moderationUI, sessionsUI),
 				ReadHeaderTimeout: readHeaderTimeout,
 			}
 

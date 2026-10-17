@@ -29,9 +29,17 @@ type Pool struct {
 	workers  int
 	interval time.Duration
 	timeout  time.Duration
+	recorder *SessionRecorder
 	logger   *slog.Logger
 
 	wg sync.WaitGroup
+}
+
+// SetSessionRecorder attaches the observation deck's worker half. It is set
+// once before Start; without one a review runs exactly as it did before, and
+// nothing is stored.
+func (p *Pool) SetSessionRecorder(recorder *SessionRecorder) {
+	p.recorder = recorder
 }
 
 // NewPool builds a pool of concurrency workers. botHandle is the configured
@@ -191,11 +199,31 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 	reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
 	defer cancel()
 
+	// The session is the trace of this run. A database that cannot take one
+	// does not stop the review: observation is best effort.
+	var recorded *sessionObserver
+	var observer reviewer.Observer
+	if p.recorder != nil {
+		session, err := p.recorder.Start(reviewCtx, job, p.engine.ModelName())
+		if err != nil {
+			logger.Warn("recording the review session failed", "error", err)
+		} else {
+			recorded = session
+			observer = session
+		}
+	}
+
 	result, err := p.engine.Review(reviewCtx, reviewer.Request{
-		Owner:  job.OrgName,
-		Repo:   job.RepoName,
-		Number: job.PRNumber,
+		Owner:    job.OrgName,
+		Repo:     job.RepoName,
+		Number:   job.PRNumber,
+		Observer: observer,
 	})
+	if recorded != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		recorded.Finish(finishCtx, sessionOutcome(result, err))
+		finishCancel()
+	}
 	if err != nil {
 		if classifyFailure(err) == jobRetry {
 			logger.Warn("review interrupted, the job returns to the queue on the next start", "error", err)
@@ -216,6 +244,22 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 		"tool_calls", result.ToolCalls,
 	)
 	p.finish(ctx, logger, job, true, nil)
+}
+
+// sessionOutcome is what the deck records for a finished review. A review the
+// engine interrupted is FAILED with its cause, so a session row cannot stay
+// RUNNING after the worker has stopped working on it.
+func sessionOutcome(result *reviewer.Result, err error) store.ReviewOutcome {
+	if err != nil {
+		return store.ReviewOutcome{Status: store.ReviewFailed, Error: err.Error()}
+	}
+	outcome := store.ReviewOutcome{Status: store.ReviewSucceeded}
+	if result != nil {
+		outcome.Summary = result.Summary
+		outcome.ReviewEvent = result.Event
+		outcome.ToolCalls = result.ToolCalls
+	}
+	return outcome
 }
 
 // remember distills the command a comment carried into a rule and answers the

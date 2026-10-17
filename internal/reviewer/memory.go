@@ -89,10 +89,10 @@ func newMemory(cfg *config.Config, db *store.DB, logger *slog.Logger) (*memory, 
 // No file path narrows the search: the query describes the whole pull request,
 // so a rule that carries a glob stays a candidate and the agent can narrow with
 // search_memory once it knows which file it is reading.
-func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetadata, hasGuidelines bool) (string, error) {
+func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetadata, hasGuidelines bool) (string, []store.MemoryMatch, error) {
 	embedding, err := m.embedder.Embed(ctx, retrieveQuery(meta))
 	if err != nil {
-		return "", fmt.Errorf("embedding the review query: %w", err)
+		return "", nil, fmt.Errorf("embedding the review query: %w", err)
 	}
 
 	matches, err := m.store.SearchMemories(ctx, store.MemoryQuery{
@@ -104,13 +104,13 @@ func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetada
 		Limit:          maxMemoryRules,
 	})
 	if err != nil {
-		return "", fmt.Errorf("searching recorded rules: %w", err)
+		return "", nil, fmt.Errorf("searching recorded rules: %w", err)
 	}
 
 	block := renderMemories(matches, hasGuidelines)
 	m.logger.Info("pre-retrieved recorded rules",
 		"rules", len(matches), "bytes", len(block), "ids", memoryIDs(matches))
-	return block, nil
+	return block, matches, nil
 }
 
 // memoryIDs is the short id of every rule the selection carries, so which rules

@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · Rumil</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/app.css">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 </head>
-<body>
+<body class="console{{if .Fixed}} console-fixed{{end}}">
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="topbar-inner">
@@ -17,7 +19,11 @@
     </a>
     <nav class="nav" aria-label="Sections">
       <a href="/ui/moderation" {{if eq .Section "rules"}}aria-current="page"{{end}}>Rules</a>
+      <a href="/ui/sessions" {{if eq .Section "sessions"}}aria-current="page"{{end}}>Sessions</a>
     </nav>
+    <button type="button" class="theme-toggle" id="theme-toggle"
+        aria-label="Color theme: Auto. Activate to switch to Dark."
+        title="Theme: Auto (click for Dark)">◐</button>
     <span class="env">local admin</span>
   </div>
 </header>

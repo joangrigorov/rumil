@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	kit "github.com/mark3labs/kit/pkg/kit"
 
@@ -27,6 +28,10 @@ type Request struct {
 	Owner  string
 	Repo   string
 	Number int
+	// Observer, when set, receives the session's progress for the observation
+	// deck. It travels with the request rather than the engine because workers
+	// share one engine and run sessions concurrently.
+	Observer Observer
 }
 
 // Result reports what the review produced.
@@ -125,9 +130,19 @@ func (e *Engine) CheckApp(ctx context.Context) ([]string, error) {
 	return warnings, nil
 }
 
+// ModelName is the chat model a review runs on, for the session record.
+func (e *Engine) ModelName() string {
+	provider, err := e.cfg.Models.ChatProvider()
+	if err != nil {
+		return ""
+	}
+	return provider.ModelName
+}
+
 // Review runs the review. The installation is verified before the session is
 // created, so a missing GitHub App installation fails fast and cheap.
 func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
+	observer := req.Observer
 	if err := e.auth.Verify(ctx); err != nil {
 		return nil, err
 	}
@@ -149,6 +164,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the pull request metadata: %w", err)
 	}
+	if observer != nil {
+		observer.Observe(ctx, sessionMetadataEvent(meta.Title, meta.HeadSHA, meta.BaseSHA, len(meta.ChangedFiles)))
+	}
 	guidelinesRef := meta.BaseSHA
 	if e.cfg.Review.GuidelinesRef == config.GuidelinesRefHead {
 		guidelinesRef = meta.HeadSHA
@@ -163,6 +181,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			"ref", guidelinesRef,
 			"bytes", len(guidelines),
 		)
+	}
+	if observer != nil {
+		eventType := "guidelines_missing"
+		if guidelinesPath != "" {
+			eventType = "guidelines_loaded"
+		}
+		observer.Observe(ctx, Event{Type: eventType, At: time.Now(), Payload: map[string]any{
+			"path": guidelinesPath, "ref": guidelinesRef, "bytes": len(guidelines),
+		}})
 	}
 
 	var (
@@ -180,12 +207,21 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger, priorReviews)
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
-		defer mu.Unlock()
 		result.ReviewSubmitted = true
 		result.Event = outcome.Event
 		result.Fallback = outcome.Fallback
 		result.MovedToSummary = len(outcome.MovedToSummary)
 		result.SkippedDuplicates = len(outcome.SkippedDuplicates)
+		mu.Unlock()
+
+		if observer != nil {
+			observer.Observe(ctx, Event{Type: "review_submitted", At: time.Now(), Payload: map[string]any{
+				"event":              outcome.Event,
+				"fallback":           outcome.Fallback,
+				"moved_to_summary":   len(outcome.MovedToSummary),
+				"skipped_duplicates": len(outcome.SkippedDuplicates),
+			}})
+		}
 	}
 
 	specs := githubTools.Specs()
@@ -199,11 +235,21 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		// session can still search, and a session that can search is told what
 		// a recorded rule is.
 		specs = append(specs, e.memory.tools(req)...)
-		block, retrieveErr := e.memory.retrieve(ctx, req, meta, guidelines != "")
+		block, matches, retrieveErr := e.memory.retrieve(ctx, req, meta, guidelines != "")
 		if retrieveErr != nil {
 			e.logger.Warn("pre-retrieval of recorded rules failed, the review runs without them", "error", retrieveErr)
+			if observer != nil {
+				observer.Observe(ctx, Event{Type: "memory_failed", At: time.Now(), Payload: map[string]any{
+					"error": retrieveErr.Error(),
+				}})
+			}
 		} else {
 			memoryBlock = block
+			if observer != nil {
+				observer.Observe(ctx, Event{Type: "memory_retrieved", At: time.Now(), Payload: map[string]any{
+					"rules": len(matches), "bytes": len(block), "ids": memoryIDs(matches),
+				}})
+			}
 		}
 	}
 
@@ -229,7 +275,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		MemoryOn:       memoryOn,
 		PriorHistory:   priorHistory,
 		ResolveThreads: resolveThreads,
-	}), sessionTools, e.cfg.App.MaxAgentTurns))
+	}), sessionTools, e.cfg.App.MaxAgentTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -238,6 +284,14 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			e.logger.Warn("closing the review session failed", "error", closeErr)
 		}
 	}()
+	if observer != nil {
+		// The subscription goes before Prompt, which is what emits the
+		// lifecycle: subscribing after it would only see a finished session.
+		unsubscribe := session.Subscribe(func(event kit.Event) {
+			e.observeKitEvent(ctx, observer, event)
+		})
+		defer unsubscribe()
+	}
 
 	text, promptErr := session.Prompt(ctx, ReviewUserPrompt(req.Owner, req.Repo, req.Number))
 
@@ -246,6 +300,11 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	mu.Unlock()
 
 	if promptErr != nil {
+		if observer != nil {
+			observer.Observe(ctx, Event{Type: "session_error", At: time.Now(), Payload: map[string]any{
+				"error": promptErr.Error(),
+			}})
+		}
 		return &result, fmt.Errorf("running the review session for %s/%s#%d: %w", req.Owner, req.Repo, req.Number, promptErr)
 	}
 
@@ -266,12 +325,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 // sessionOptions builds the kit session configuration: isolated from host
 // state, no core tools (no shell, no file writes), and only the tool set the
 // caller passes. maxSteps bounds the tool loop.
-func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool, maxSteps int) *kit.Options {
+func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool, maxSteps int, streaming bool) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)
 	kit.WithModel(modelString(provider))(options)
 	kit.WithSystemPrompt(systemPrompt)(options)
-	kit.WithStreaming(false)(options)
+	// Streaming is what turns reasoning and text into events as they happen.
+	// It is off without an observer, which keeps the one-off CLI path and the
+	// existing tests on the non-streaming wire they were written against.
+	kit.WithStreaming(streaming)(options)
 	kit.WithProviderURL(provider.BaseURL)(options)
 	kit.WithProviderAPIKey(provider.APIKey)(options)
 	kit.WithProviderWire(providerWireOpenAICompat)(options)
