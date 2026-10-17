@@ -1,15 +1,18 @@
 /* Rumil color theme: system by default, with an explicit dark or light choice.
  *
  * The script runs in the head so the resolved theme is on <html> before the
- * first paint. The stored value is the user's choice; data-theme is always the
- * resolved dark or light value.
+ * first paint. One button cycles Auto -> Dark -> Light; the stored value is the
+ * user's choice and data-theme is always the resolved dark or light value.
  */
 (function () {
   "use strict";
 
   var KEY = "rumil.theme";
+  var MODES = ["system", "dark", "light"];
+  var LABELS = { system: "Auto", dark: "Dark", light: "Light" };
   var root = document.documentElement;
   var media = window.matchMedia("(prefers-color-scheme: dark)");
+  var toggle = null;
 
   function stored() {
     try {
@@ -27,14 +30,24 @@
     return media.matches ? "dark" : "light";
   }
 
+  function next(mode) {
+    return MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+  }
+
   function apply(mode) {
     root.setAttribute("data-theme", resolved(mode));
     root.setAttribute("data-theme-mode", mode);
 
-    var choices = document.querySelectorAll("[data-theme-choice]");
-    for (var i = 0; i < choices.length; i++) {
-      choices[i].setAttribute("aria-pressed", String(choices[i].getAttribute("data-theme-choice") === mode));
+    if (!toggle) {
+      toggle = document.getElementById("theme-toggle");
     }
+    if (!toggle) {
+      return;
+    }
+
+    var nextMode = next(mode);
+    toggle.setAttribute("aria-label", "Color theme: " + LABELS[mode] + ". Activate to switch to " + LABELS[nextMode] + ".");
+    toggle.title = "Theme: " + LABELS[mode] + " (click for " + LABELS[nextMode] + ")";
   }
 
   apply(stored());
@@ -58,19 +71,20 @@
   });
 
   document.addEventListener("DOMContentLoaded", function () {
+    toggle = document.getElementById("theme-toggle");
     apply(stored());
 
-    var choices = document.querySelectorAll("[data-theme-choice]");
-    for (var i = 0; i < choices.length; i++) {
-      choices[i].addEventListener("click", function () {
-        var mode = this.getAttribute("data-theme-choice");
-        try {
-          window.localStorage.setItem(KEY, mode);
-        } catch (error) {
-          // A browser that blocks storage still gets the theme for this page.
-        }
-        apply(mode);
-      });
+    if (!toggle) {
+      return;
     }
+    toggle.addEventListener("click", function () {
+      var mode = next(stored());
+      try {
+        window.localStorage.setItem(KEY, mode);
+      } catch (error) {
+        // A browser that blocks storage still gets the theme for this page.
+      }
+      apply(mode);
+    });
   });
 })();

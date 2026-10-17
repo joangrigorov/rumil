@@ -163,7 +163,7 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		"https://github.com/acme/payments/pull/42",
 		"/static/sessions.js",
 		"/static/theme.js",
-		`data-theme-choice="system"`,
+		`id="theme-toggle"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)
