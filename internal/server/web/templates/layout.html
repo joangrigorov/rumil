@@ -1,0 +1,31 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Rumil</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/ui/moderation">
+      <span class="brand-mark" aria-hidden="true">R</span>
+      <span class="brand-name">Rumil</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="/ui/moderation" {{if eq .Section "rules"}}aria-current="page"{{end}}>Rules</a>
+    </nav>
+    <span class="env">local admin</span>
+  </div>
+</header>
+<main id="main" class="page">
+{{template "content" .}}
+</main>
+<footer class="foot">
+  <p>An approved rule is recorded context. The repository's <code>RUMIL.md</code> outranks it unless a maintainer promotes the rule to a directive.</p>
+</footer>
+</body>
+</html>{{end}}

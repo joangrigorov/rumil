@@ -490,16 +490,36 @@ func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
 	}
 	body := page.Body.String()
 
+	// The page decides what a review retrieves, so it is not framed, not
+	// cached, and carries no inline code the policy would have to trust.
+	if got := page.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := page.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := page.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'none'") || !strings.Contains(got, "default-src 'self'") {
+		t.Errorf("Content-Security-Policy = %q, want the operator policy", got)
+	}
+
+	// The controls are a filter, and the page says so.
+	if !strings.Contains(body, `aria-label="Filter rules"`) || !strings.Contains(body, `class="filters-title">Filter</span>`) {
+		t.Errorf("the filter form is not labelled as a filter:\n%s", body)
+	}
+
 	// The organization rule says what it applies to and where it came from; the
 	// repository rule names the repository it applies to.
-	if !strings.Contains(body, `<span class="scope org">ORG</span> acme`) {
+	if !strings.Contains(body, `<span class="pill scope-org">ORG</span>`) {
 		t.Errorf("the organization rule is not badged as one:\n%s", body)
 	}
 	if !strings.Contains(body, "proposed in payments") {
 		t.Errorf("the organization rule does not show the repository it was proposed in:\n%s", body)
 	}
-	if !strings.Contains(body, `<span class="scope repo">REPO</span> acme/payments`) {
+	if !strings.Contains(body, `<span class="pill scope-repo">REPO</span>`) {
 		t.Errorf("the repository rule is not badged as one:\n%s", body)
+	}
+	if !strings.Contains(body, "acme/payments") {
+		t.Errorf("the repository rule does not name the repository it applies to:\n%s", body)
 	}
 
 	// Only the organization rule's form offers a scope: a repository rule has
@@ -716,12 +736,12 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	}
 	// The badge in the page's own legend is not a rule carrying the authority,
 	// so both of these look for the one a row renders.
-	if strings.Contains(body, "DIRECTIVE</span> above the guidelines") {
+	if strings.Contains(body, `data-authority="DIRECTIVE"`) {
 		t.Errorf("a rule that was never promoted is badged as a directive:\n%s", body)
 	}
 	// The organization rule's promotion option says what it needs, because the
 	// refusal is about the pair rather than about the authority alone.
-	if !strings.Contains(body, "DIRECTIVE — outranks the guidelines; needs REPO scope") {
+	if !strings.Contains(body, "DIRECTIVE — above the guidelines; needs REPO scope") {
 		t.Errorf("the organization rule's promotion option does not say what it needs:\n%s", body)
 	}
 
@@ -767,7 +787,7 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	}
 
 	body = moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html").Body.String()
-	if !strings.Contains(body, "DIRECTIVE</span> above the guidelines") {
+	if !strings.Contains(body, `data-authority="DIRECTIVE"`) {
 		t.Errorf("the promoted rule is not badged:\n%s", body)
 	}
 	if !strings.Contains(body, `<option value="DIRECTIVE" selected>`) {

@@ -124,7 +124,7 @@ func TestRefuseFollowsTheCallersShape(t *testing.T) {
 
 	jsonRequest := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
 	jsonRecorder := httptest.NewRecorder()
-	ui.refuse(jsonRecorder, jsonRequest, http.StatusConflict, "the rule changed")
+	ui.auth.refuse(jsonRecorder, jsonRequest, http.StatusConflict, "the rule changed")
 	if jsonRecorder.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", jsonRecorder.Code)
 	}
@@ -138,7 +138,7 @@ func TestRefuseFollowsTheCallersShape(t *testing.T) {
 	pageRequest := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
 	pageRequest.Header.Set("Accept", "text/html,application/xhtml+xml")
 	pageRecorder := httptest.NewRecorder()
-	ui.refuse(pageRecorder, pageRequest, http.StatusConflict, "the rule changed")
+	ui.auth.refuse(pageRecorder, pageRequest, http.StatusConflict, "the rule changed")
 	if got := pageRecorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
 		t.Errorf("Content-Type = %q, want text for a browser", got)
 	}
@@ -197,9 +197,27 @@ func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
 			if tc.header != "" {
 				request.Header.Set("Authorization", tc.header)
 			}
-			if got := ui.authorized(request); got != tc.want {
+			if got := ui.auth.authorized(request); got != tc.want {
 				t.Errorf("authorized(%q) = %v, want %v", tc.header, got, tc.want)
 			}
 		})
+	}
+}
+
+// The stylesheet is embedded, so the page has its design in a package install
+// with no working directory and no asset copy.
+func TestStaticStylesheetIsEmbedded(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/app.css", nil)
+	recorder := httptest.NewRecorder()
+	staticHandler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /static/app.css = %d, want 200", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/css") {
+		t.Errorf("Content-Type = %q, want a CSS type", contentType)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "--accent") {
+		t.Errorf("the stylesheet carries no design tokens:\n%s", body)
 	}
 }

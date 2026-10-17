@@ -1,0 +1,128 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow">Memory</p>
+    <h1>Recorded rules</h1>
+    <p class="lede">Only an approved rule reaches a review. Editing one re-embeds it, so it is found by the words you approve, and a rule that is not yet approved does nothing at all.</p>
+  </div>
+  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}rule{{else}}rules{{end}}</p>
+</header>
+
+<details class="how">
+  <summary>How scope and authority work</summary>
+  <div class="how-body">
+    <p>A <span class="pill scope-repo">REPO</span> rule applies to the repository it was recorded in. An <span class="pill scope-org">ORG</span> rule applies to every repository in the organization that has nothing more specific to say; a repository rule outranks it when both match. An organization rule can be narrowed to the repository it was proposed in, and a repository rule is not widened from here.</p>
+    <p>A rule is recorded context, and the repository's own <code>RUMIL.md</code> outranks it. Promoting one to <span class="pill authority-directive">DIRECTIVE</span> puts it above that file for the case it names, and the reviewer says so in its summary when the two conflict. A directive applies to one repository, so an organization-wide rule is recorded for a repository first.</p>
+  </div>
+</details>
+
+{{if .Decided}}<p class="notice" role="status">{{.Decided}}</p>{{end}}
+
+<form class="filters" method="get" action="/ui/moderation" aria-label="Filter rules">
+  <div class="filters-head">
+    <span class="filters-title">Filter</span>
+    <span class="filters-sub">Narrow the queue by status or repository.</span>
+  </div>
+  <div class="filters-fields">
+    <label class="field">
+      <span class="field-label">Status</span>
+      <select name="status">
+        <option value="">Any status</option>
+        <option value="PENDING" {{if eq .Status "PENDING"}}selected{{end}}>Pending</option>
+        <option value="APPROVED" {{if eq .Status "APPROVED"}}selected{{end}}>Approved</option>
+        <option value="REJECTED" {{if eq .Status "REJECTED"}}selected{{end}}>Rejected</option>
+      </select>
+    </label>
+    <label class="field field-grow">
+      <span class="field-label">Repository</span>
+      <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="filters-actions">
+      <button class="btn btn-primary" type="submit">Apply</button>
+      <a class="btn btn-quiet" href="/ui/moderation">Clear</a>
+    </div>
+  </div>
+</form>
+
+{{if .Rules}}
+<ol class="rules">
+  {{range .Rules}}
+  <li class="rule" data-status="{{.Status}}" data-authority="{{.Authority}}">
+    <div class="rule-top">
+      <div class="rule-tags">
+        <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+        <span class="pill scope-{{lower .Scope}}">{{.Scope}}</span>
+        {{if eq .Authority "DIRECTIVE"}}<span class="pill authority-directive">DIRECTIVE</span>{{end}}
+        <code class="rule-id">{{short .ID}}</code>
+      </div>
+      <span class="rule-when">{{date .CreatedAt}}</span>
+    </div>
+
+    <form id="approve-{{short .ID}}" class="rule-form" method="post" action="/api/moderation/{{.ID}}/approve">
+      <input type="hidden" name="status_filter" value="{{$.Status}}">
+      <p class="rule-text">{{.RuleText}}</p>
+      <details class="edit">
+        <summary>Edit wording</summary>
+        <label class="field">
+          <span class="field-label">Rule wording</span>
+          <textarea name="rule_text" rows="4">{{.RuleText}}</textarea>
+        </label>
+      </details>
+      {{if .Rationale}}<p class="rationale"><span class="field-label">Why</span> {{.Rationale}}</p>{{end}}
+      <div class="rule-controls">
+        <label class="field">
+          <span class="field-label">Path glob</span>
+          <input type="text" name="path_glob" value="{{.PathGlob}}" placeholder="internal/payments/**" spellcheck="false">
+        </label>
+        {{if eq .Scope "ORG"}}
+        <label class="field">
+          <span class="field-label">Scope</span>
+          <select name="scope">
+            <option value="ORG" selected>ORG — every repository in {{.OrgName}}</option>
+            <option value="REPO">REPO — this repository, {{.RepoName}}</option>
+          </select>
+        </label>
+        {{end}}
+        <label class="field">
+          <span class="field-label">Authority</span>
+          <select name="authority">
+            {{if eq .Authority "DIRECTIVE"}}
+            <option value="DIRECTIVE" selected>DIRECTIVE — above the guidelines</option>
+            <option value="CONTEXT">CONTEXT — the guidelines outrank it</option>
+            {{else}}
+            <option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>
+            <option value="DIRECTIVE">DIRECTIVE — above the guidelines{{if eq .Scope "ORG"}}; needs REPO scope{{end}}</option>
+            {{end}}
+          </select>
+        </label>
+      </div>
+    </form>
+
+    <div class="rule-foot">
+      <p class="rule-meta">
+        {{if eq .Scope "ORG"}}<span>{{.OrgName}}</span><span class="dot" aria-hidden="true">·</span><span>proposed in {{.RepoName}}</span>{{else}}<span>{{.OrgName}}/{{.RepoName}}</span>{{end}}
+        <span class="dot" aria-hidden="true">·</span>
+        <span>asked by {{.RequestedBy}}</span>
+        {{if .SourcePR}}<span class="dot" aria-hidden="true">·</span><span>PR #{{.SourcePR}}</span>{{end}}
+        {{if .SourceComment}}<span class="dot" aria-hidden="true">·</span><a href="{{.SourceComment}}" target="_blank" rel="noreferrer noopener">source comment</a>{{end}}
+        {{if .ReviewedBy}}<span class="dot" aria-hidden="true">·</span><span>decided by {{.ReviewedBy}}</span>{{end}}
+      </p>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit" form="approve-{{short .ID}}">Approve</button>
+        <form method="post" action="/api/moderation/{{.ID}}/reject">
+          <input type="hidden" name="status_filter" value="{{$.Status}}">
+          <button class="btn btn-danger" type="submit">Reject</button>
+        </form>
+      </div>
+    </div>
+  </li>
+  {{end}}
+</ol>
+{{else}}
+<div class="empty">
+  <p class="empty-title">No rules match.</p>
+  <p>{{if .Status}}Try another status, or clear the filters.{{else}}When a comment asks Rumil to remember something, the proposal lands here for a decision.{{end}}</p>
+  <a class="btn btn-quiet" href="/ui/moderation">Clear filters</a>
+</div>
+{{end}}
+{{end}}
