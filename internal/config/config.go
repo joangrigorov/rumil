@@ -61,6 +61,26 @@ const (
 	GuidelinesRefHead = "head"
 )
 
+// ThinkingLevel values accepted by models.providers[].thinking_level. They
+// mirror kit's levels; "off" leaves the provider's default in place, while
+// "none" asks explicitly for no reasoning.
+const (
+	ThinkingOff     = "off"
+	ThinkingNone    = "none"
+	ThinkingMinimal = "minimal"
+	ThinkingLow     = "low"
+	ThinkingMedium  = "medium"
+	ThinkingHigh    = "high"
+	// ThinkingMax is the highest effort some providers expose, including
+	// DeepSeek V4 Flash. It maps to reasoning_effort "max".
+	ThinkingMax = "max"
+)
+
+// ThinkingLevels is the ordered list of accepted reasoning levels.
+var ThinkingLevels = []string{
+	ThinkingOff, ThinkingNone, ThinkingMinimal, ThinkingLow, ThinkingMedium, ThinkingHigh, ThinkingMax,
+}
+
 // Errors returned by Validate, wrapped with field context.
 var (
 	ErrMissingProviders = errors.New("models.providers must contain at least one provider")
@@ -166,6 +186,9 @@ type Provider struct {
 	Temperature *float64 `yaml:"temperature"`
 	MaxTokens   int      `yaml:"max_tokens"`
 	Dimensions  int      `yaml:"dimensions"`
+	// ThinkingLevel is the reasoning effort sent to a chat model. Empty leaves
+	// the provider default in place.
+	ThinkingLevel string `yaml:"thinking_level"`
 }
 
 // IsEmbedding reports whether the provider produces embeddings.
@@ -382,6 +405,19 @@ func (g GitHub) validate() error {
 	return nil
 }
 
+// validThinkingLevel reports whether level is empty or one of ThinkingLevels.
+func validThinkingLevel(level string) bool {
+	if level == "" {
+		return true
+	}
+	for _, accepted := range ThinkingLevels {
+		if level == accepted {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Models) validate() error {
 	if len(m.Providers) == 0 {
 		return ErrMissingProviders
@@ -414,6 +450,10 @@ func (m Models) validate() error {
 		if p.Dimensions < 0 || p.Dimensions > MaxEmbeddingDimensions {
 			return fmt.Errorf("models.providers[%d].dimensions %d is outside 1-%d, the range pgvector indexes, and 0 to mark a provider as the chat model",
 				i, p.Dimensions, MaxEmbeddingDimensions)
+		}
+		if !validThinkingLevel(p.ThinkingLevel) {
+			return fmt.Errorf("models.providers[%d].thinking_level must be one of %s, got %q",
+				i, strings.Join(ThinkingLevels, ", "), p.ThinkingLevel)
 		}
 	}
 
