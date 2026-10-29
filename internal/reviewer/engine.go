@@ -473,7 +473,7 @@ func (e *Engine) openSnapshot(ctx context.Context, client *ghapp.Client, head st
 		e.snapshotFailed(ctx, observer, err)
 		return nil
 	}
-	defer archive.Close()
+	defer func() { _ = archive.Close() }()
 
 	snap, err := snapshot.Create(snapCtx, archive, snapshot.Options{
 		MaxBytes: e.cfg.Snapshot.MaxBytesOrDefault(),

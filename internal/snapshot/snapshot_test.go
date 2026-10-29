@@ -225,7 +225,7 @@ func TestCreateRefusesEscapingEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	defer snap.Close()
+	defer func() { _ = snap.Close() }()
 
 	files := snap.All()
 	if len(files) != 1 || files[0].Path != "ok.txt" {

@@ -623,7 +623,7 @@ func TestArchiveDownloadsTheTarball(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	raw, err := io.ReadAll(body)
 	if err != nil {

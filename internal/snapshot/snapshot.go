@@ -123,7 +123,7 @@ func (s *Snapshot) extract(ctx context.Context, archive io.Reader, maxBytes int6
 	if err != nil {
 		return fmt.Errorf("reading the repository archive: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	var written int64
@@ -148,7 +148,7 @@ func (s *Snapshot) extract(ctx context.Context, archive io.Reader, maxBytes int6
 			if err := s.mkdirAll(name); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if len(s.files) >= maxFiles {
 				return fmt.Errorf("the repository tree has more than %d files", maxFiles)
 			}
@@ -375,7 +375,7 @@ func (s *Snapshot) Read(name string, start, end int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", name, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -474,7 +474,7 @@ func (s *Snapshot) searchFile(re *regexp.Regexp, name string, limit int) ([]Matc
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
