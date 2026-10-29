@@ -25,6 +25,15 @@ review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
   resolve_threads: true           # the reviewer resolves its own review threads once it verifies the finding is gone
 
+# Older context is summarized when a session reaches the trigger. The trigger
+# is deliberately high: 256K leaves room for a large pull request before any
+# detail is condensed.
+compaction:
+  enabled: true
+  trigger_tokens: 262144          # no compaction before this many estimated tokens
+  reserve_tokens: 16384           # output budget kept below the trigger
+  keep_recent_tokens: 20000       # most recent context kept verbatim
+
 memory:                           # Used from v0.0.6
   repo_scope_boost: 0.05          # added to a repository rule's similarity when ranking, so a project exception outranks a general organization rule; 0 ranks by similarity alone
 

@@ -77,6 +77,8 @@ type harnessOpts struct {
 	// memory is a memory block to splice into the configuration, for example
 	// `memory:\n  repo_scope_boost: 0\n`.
 	memory string
+	// compaction is a compaction block to splice into the configuration.
+	compaction string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -115,6 +117,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 		defaultChat += "  default_embedding: \"embed\"\n"
 	}
 	top += opts.memory
+	top += opts.compaction
 
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
 		llm.URL()+"/v1", llm.URL()+"/v1", llm.URL()+"/v1")
@@ -499,6 +502,43 @@ func TestT001_06_NotInstalledFailsFast(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), "review") {
 		t.Logf("logs: %s", h.logs.String())
+	}
+}
+
+// Compaction has to fire on Rumil's configured trigger rather than on kit's
+// model lookup: the OpenAI-compatible models Rumil supports are usually absent
+// from the catalog, and an unknown model never auto-compacts.
+func TestCompactionSummarizesAtTheConfiguredTrigger(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueTurn(testutil.ScriptedTurn{
+		ToolCalls:    []testutil.ToolCall{{Name: "get_file_contents", Args: map[string]any{"file_path": "main.go"}}},
+		PromptTokens: 5000,
+	})
+	llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "main.go"})
+	llm.QueueText("No further changes requested.")
+
+	h := newHarness(t, gh, llm, harnessOpts{
+		// The trigger is small because the fake's tool results are small; the
+		// mechanism is the same one a 256K production trigger uses.
+		compaction: "compaction:\n  trigger_tokens: 60\n  reserve_tokens: 10\n  keep_recent_tokens: 10\n",
+	})
+
+	if _, err := h.review(t); err != nil {
+		t.Fatalf("Review returned error: %v", err)
+	}
+	if !strings.Contains(h.logs.String(), "compacted the session context") {
+		t.Errorf("logs do not report compaction:\n%s", h.logs.String())
+	}
+
+	summaries := 0
+	for _, request := range llm.Requests() {
+		if strings.Contains(request.SystemPrompt, "context summarization assistant") {
+			summaries++
+		}
+	}
+	if summaries < 1 {
+		t.Error("the session never asked for a summary")
 	}
 }
 

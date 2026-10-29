@@ -22,6 +22,10 @@ type ToolCall struct {
 type ScriptedTurn struct {
 	ToolCalls []ToolCall
 	Text      string
+	// PromptTokens overrides the usage this reply reports for its input. A
+	// test sets it to move the session's estimated context past a compaction
+	// trigger; zero keeps the default.
+	PromptTokens int
 }
 
 // Request is a captured model request.
@@ -85,6 +89,14 @@ func (f *FakeLLM) QueueText(text string) *FakeLLM {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.turns = append(f.turns, ScriptedTurn{Text: text})
+	return f
+}
+
+// QueueTurn appends a fully specified reply, including the usage it reports.
+func (f *FakeLLM) QueueTurn(turn ScriptedTurn) *FakeLLM {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.turns = append(f.turns, turn)
 	return f
 }
 
@@ -237,7 +249,14 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
-	turn := f.nextTurnLocked()
+	var turn ScriptedTurn
+	if isSummarizationRequest(req.SystemPrompt) {
+		// Compaction asks the same endpoint for a summary. Answer it directly
+		// so a test's script stays about the review itself.
+		turn = ScriptedTurn{Text: "## Goal\n- summarized the review context"}
+	} else {
+		turn = f.nextTurnLocked()
+	}
 	f.mu.Unlock()
 
 	if req.Stream {
@@ -246,6 +265,12 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(completion(turn))
+}
+
+// isSummarizationRequest reports whether a request is kit's compaction
+// summary prompt rather than a step of the review.
+func isSummarizationRequest(systemPrompt string) bool {
+	return strings.Contains(systemPrompt, "You are a context summarization assistant.")
 }
 
 func (f *FakeLLM) nextTurnLocked() ScriptedTurn {
@@ -303,6 +328,11 @@ func systemPromptFrom(body map[string]any) string {
 }
 
 func completion(turn ScriptedTurn) map[string]any {
+	promptTokens := turn.PromptTokens
+	if promptTokens == 0 {
+		promptTokens = 10
+	}
+
 	message := map[string]any{"role": "assistant"}
 	finish := "stop"
 
@@ -336,7 +366,7 @@ func completion(turn ScriptedTurn) map[string]any {
 			"message":       message,
 			"finish_reason": finish,
 		}},
-		"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+		"usage": map[string]int{"prompt_tokens": promptTokens, "completion_tokens": 5, "total_tokens": promptTokens + 5},
 	}
 }
 
