@@ -85,7 +85,8 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
-			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger)
+			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger,
+				server.WithJobTimeout(cfg.Worker.Timeout()))
 			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
 
 			// The observation deck shares the moderation credential. Its

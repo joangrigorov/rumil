@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // twoChatOneEmbedding lists the embedding provider first on purpose: the
@@ -86,6 +87,9 @@ models:
 	}
 	if cfg.Worker.Concurrency != DefaultWorkerConcurrency {
 		t.Errorf("worker.concurrency = %d, want %d", cfg.Worker.Concurrency, DefaultWorkerConcurrency)
+	}
+	if got := cfg.Worker.Timeout(); got != DefaultWorkerTimeout {
+		t.Errorf("worker.job_timeout = %s, want %s", got, DefaultWorkerTimeout)
 	}
 	if cfg.Server.Listen != DefaultListen {
 		t.Errorf("server.listen = %q, want %q", cfg.Server.Listen, DefaultListen)
@@ -240,6 +244,59 @@ models:
 
 	if _, err := Parse([]byte(strings.Replace(string(doc), "concurrency: 0", "concurrency: -1", 1)), "test.yaml"); err == nil {
 		t.Error("Parse accepted worker.concurrency -1, want a validation error")
+	}
+}
+
+// worker.job_timeout takes a Go duration string. Omitted keeps the default,
+// and a malformed or non-positive value is refused at startup.
+func TestWorkerJobTimeout(t *testing.T) {
+	doc := func(worker string) []byte {
+		return []byte(worker + `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "omitted keeps the default", value: "", want: DefaultWorkerTimeout},
+		{name: "an explicit duration is used", value: "45m", want: 45 * time.Minute},
+		{name: "hours are accepted", value: "2h", want: 2 * time.Hour},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := ""
+			if tc.value != "" {
+				worker = fmt.Sprintf("worker:\n  job_timeout: %q\n", tc.value)
+			}
+			cfg := mustParse(t, string(doc(worker)))
+			if got := cfg.Worker.Timeout(); got != tc.want {
+				t.Errorf("Worker.Timeout() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"soon", "0s", "-5m", "15"} {
+		t.Run("rejects "+value, func(t *testing.T) {
+			_, err := Parse(doc(fmt.Sprintf("worker:\n  job_timeout: %q\n", value)), "test.yaml")
+			if err == nil {
+				t.Fatalf("Parse accepted worker.job_timeout %q", value)
+			}
+			if !strings.Contains(err.Error(), "worker.job_timeout") {
+				t.Errorf("error = %v, want it to name worker.job_timeout", err)
+			}
+		})
 	}
 }
 

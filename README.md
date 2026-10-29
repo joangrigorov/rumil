@@ -240,6 +240,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `compaction.keep_recent_tokens` | `20000` | The most recent context kept verbatim; older messages are replaced by a summary |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
 | `worker.concurrency` | `4` | Reviews processed in parallel |
+| `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
