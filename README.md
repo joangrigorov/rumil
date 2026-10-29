@@ -17,7 +17,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 | `rumil init` | Write a configuration file, one question at a time. |
 | `rumil review` | Review one pull request and exit. No server, no queue. |
 | `rumil serve` | Run the webhook server and the queue that reviews on request. |
-| `rumil sessions` | Continue a failed review session that stopped at its turn limit. |
+| `rumil sessions` | Continue a failed review session so it does not start from the beginning. |
 | `rumil mod` | List the recorded rules, and approve or reject them. |
 
 ## Contents
@@ -246,6 +246,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium`, `high` or `max`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `max` is for providers that expose it, such as DeepSeek V4 Flash |
+| `models.providers[].max_tokens` | unset | The most tokens one model response may generate, reasoning included. Unset leaves the provider's default, which can be far below the context window: DeepSeek's chat endpoint generates at most 8192 unless asked for more, so `thinking_level: max` can spend the whole budget on reasoning and never reach the tool call. Set it above the reasoning a step needs |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
 | `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. Unset means both refuse every request |
@@ -335,17 +336,17 @@ The comment is the trigger, and the only one. A GitHub App cannot be requested a
 
 Rumil answers a command with a `+1` reaction on the comment as soon as it has taken it, so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
 
-### Continuing a review that hit the turn limit
+### Continuing a failed review
 
-A session that reaches `app.max_agent_turns` without calling `submit_pr_review` is recorded as failed. Its transcript is kept, so an admin can give it another attempt without paying to read the pull request from the first byte:
+A session that ends without calling `submit_pr_review` — because it used its turn budget, hit a provider error, or had a response cut off at the model's output limit — is recorded as failed. Its transcript is kept, so an admin can give it another attempt without paying to read the pull request from the first byte:
 
 ```bash
 rumil sessions continue <session-id> --turns 25 --requested-by alice
 ```
 
-`--turns` is the new attempt's own step budget. Without it the attempt uses `app.max_agent_turns`, and a configured `0` still means unlimited. The command queues a job and prints the session it will continue; `rumil serve` runs it. The new attempt starts with the earlier attempt's tool results, partial summary and the same commit, and is recorded as a separate session that points at its parent, with who asked and when. A session that already submitted a review is refused, and so is one that failed for another cause or whose pull request has moved since the earlier attempt.
+`--turns` is the new attempt's own step budget. Without it the attempt uses `app.max_agent_turns`, and a configured `0` still means unlimited. The command queues a job and prints the session it will continue; `rumil serve` runs it. The new attempt starts with the earlier attempt's tool results, partial summary and the same commit, and is recorded as a separate session that points at its parent, with who asked and when. A session that already submitted a review is refused, and so is one whose pull request has moved since the earlier attempt.
 
-The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears only for a failed session whose cause is the turn limit, and uses the configured budget. It shares `moderation.admin_token` with the moderation surface, so the page records the credential as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
+The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears for any failed session that has not been continued yet, and uses the configured budget. It shares `moderation.admin_token` with the moderation surface, so the page records the credential as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
 
 ## Repository guidelines
 
@@ -429,7 +430,7 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 
 **A review never appears.** Rumil reviews only when the App is requested as a reviewer, so check that the pull request actually asks for it. Then look at the App's **Advanced → Recent Deliveries**: a delivery that is not a review request, comes from another installation, or carries a bad signature is answered `200` or `401` and logged with the reason it was ignored. `docker compose logs -f rumil` shows those lines.
 
-**"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model. If the cause was the turn limit, continue the session from `/ui/sessions` or with `rumil sessions continue <session-id>`: the new attempt reuses its tool results and gets its own budget.
+**"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, a turn was cut off at the model's output limit, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model. A message that ends with "(model output limit reached)" means the provider's response budget ran out before the tool call: set `models.providers[].max_tokens` on the chat provider, because reasoning counts against that budget and `thinking_level: max` can use all of it. Continue the session from `/ui/sessions` or with `rumil sessions continue <session-id>`: the new attempt reuses its tool results and gets its own budget. When a turn alone is cut off, Rumil asks the model once more for the tool call before failing.
 
 **A reasoning model answers suspiciously fast.** Set `models.providers[].thinking_level` on the chat provider, for example `thinking_level: "high"` or `thinking_level: "max"` where the provider exposes it. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place, and a provider that does not accept the field may reject the request.
 

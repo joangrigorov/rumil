@@ -32,6 +32,15 @@ const providerWireOpenAICompat = "openai-compat"
 // silently dropped.
 const reasoningProvider = "rumil-openai-compat"
 
+// stopReasonLength is the finish reason of a response cut off at the model's
+// output token cap, which fantasy spells "length".
+const stopReasonLength = "length"
+
+// outputLimitNudge is the message a truncated session gets next. The cut-off
+// turn kept no usable text, so the model has to be told what is missing and
+// that the analysis it already did is enough for the tool call.
+const outputLimitNudge = "Your last response hit the model output token limit before you called submit_pr_review, so no review was submitted. Do not repeat the analysis. Call submit_pr_review now with the findings you already have, and keep the call short."
+
 // Request identifies the pull request to review.
 type Request struct {
 	Owner  string
@@ -66,6 +75,10 @@ type Result struct {
 	// TurnLimitReached is true when the session used its whole turn budget
 	// without submitting a review.
 	TurnLimitReached bool
+	// OutputLimitReached is true when a turn was cut off at the model's output
+	// token cap without submitting a review, so the session asked again for
+	// the tool call with a fresh budget.
+	OutputLimitReached bool
 	// Summary is the closing text from the session.
 	Summary string
 }
@@ -354,19 +367,48 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	if req.Continuation != nil {
 		userPrompt = ContinuationUserPrompt(req.Owner, req.Repo, req.Number)
 	}
-	text, promptErr := session.Prompt(ctx, userPrompt)
-
-	mu.Lock()
-	result.Summary = text
-	mu.Unlock()
-
-	if promptErr != nil {
-		if observer != nil {
-			observer.Observe(ctx, Event{Type: "session_error", At: time.Now(), Payload: map[string]any{
-				"error": promptErr.Error(),
-			}})
+	recordTurn := func(turn *kit.TurnResult) {
+		if turn == nil {
+			return
 		}
-		return &result, fmt.Errorf("running the review session for %s/%s#%d: %w", req.Owner, req.Repo, req.Number, promptErr)
+		mu.Lock()
+		result.Summary = turn.Response
+		mu.Unlock()
+	}
+	runPrompt := func(prompt string) (*kit.TurnResult, error) {
+		turn, err := session.PromptResult(ctx, prompt)
+		recordTurn(turn)
+		if err != nil {
+			if observer != nil {
+				observer.Observe(ctx, Event{Type: "session_error", At: time.Now(), Payload: map[string]any{
+					"error": err.Error(),
+				}})
+			}
+			return turn, fmt.Errorf("running the review session for %s/%s#%d: %w", req.Owner, req.Repo, req.Number, err)
+		}
+		return turn, nil
+	}
+	turn, promptErr := runPrompt(userPrompt)
+	if promptErr != nil {
+		return &result, promptErr
+	}
+
+	// A turn that ends on the output cap was cut off mid-answer: the model
+	// never reached the tool call. The conversation keeps no usable text from
+	// that turn, so a second one says what to do with a fresh output budget.
+	// A spent step budget has no room for it, and the turn-limit error below
+	// names that cause instead.
+	truncated := turn != nil && turn.StopReason == stopReasonLength
+	result.OutputLimitReached = truncated
+	hasBudget := maxTurns == 0 || result.Steps < maxTurns
+	if !result.ReviewSubmitted && truncated && hasBudget {
+		e.logger.Warn("the model reached its output limit without submitting a review; asking for the tool call",
+			"steps", result.Steps,
+			"tool_calls", result.ToolCalls,
+		)
+		if _, promptErr = runPrompt(outputLimitNudge); promptErr != nil {
+			return &result, promptErr
+		}
 	}
 
 	if !result.ReviewSubmitted {
@@ -380,13 +422,17 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			"tool_calls", result.ToolCalls,
 			"max_agent_turns", maxTurns,
 			"turn_limit_reached", result.TurnLimitReached,
+			"output_limit_reached", result.OutputLimitReached,
 		)
-		limit := ""
-		if result.TurnLimitReached {
-			limit = fmt.Sprintf(" (turn limit %d reached)", maxTurns)
+		cause := ""
+		switch {
+		case result.TurnLimitReached:
+			cause = fmt.Sprintf(" (turn limit %d reached)", maxTurns)
+		case result.OutputLimitReached:
+			cause = " (model output limit reached)"
 		}
 		return &result, fmt.Errorf("%w for %s/%s#%d after %d steps and %d tool calls%s",
-			ErrNoReviewSubmitted, req.Owner, req.Repo, req.Number, result.Steps, result.ToolCalls, limit)
+			ErrNoReviewSubmitted, req.Owner, req.Repo, req.Number, result.Steps, result.ToolCalls, cause)
 	}
 	return &result, nil
 }

@@ -371,7 +371,6 @@ func TestReviewSessionContinuable(t *testing.T) {
 		{
 			name:    "a failure with another cause",
 			session: ReviewSession{Status: ReviewFailed, Error: "the GitHub App is not installed"},
-			want:    ErrReviewNotTurnLimited,
 		},
 	}
 

@@ -81,8 +81,8 @@ type reviewSessionPage struct {
 	// they exist, so the page can link them.
 	Parent       *store.ReviewSession
 	Continuation *store.ReviewSession
-	// CanContinue is set only when the session stopped at its turn limit and
-	// has not been continued yet.
+	// CanContinue is set when the session failed without submitting a review
+	// and has not been continued yet.
 	CanContinue bool
 	// ContinuationQueued and ContinuationFailed report a continuation request
 	// that has not produced a session yet.
@@ -231,9 +231,6 @@ func (s *SessionsUI) continueSession(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, store.ErrReviewNotFailed):
 		s.auth.refuse(w, r, http.StatusConflict, "only a failed session can be continued")
-		return
-	case errors.Is(err, store.ErrReviewNotTurnLimited):
-		s.auth.refuse(w, r, http.StatusConflict, "this session did not stop at the turn limit")
 		return
 	case err != nil:
 		s.logger.Error("queueing a continuation failed", "session_id", session.ID, "error", err)
