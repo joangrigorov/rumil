@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -47,6 +49,22 @@ func TestClassifyFailure(t *testing.T) {
 				t.Errorf("classifyFailure(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// The pool keeps the configured job budget, and a non-positive option leaves
+// the default in place.
+func TestWithJobTimeout(t *testing.T) {
+	if got := NewPool(nil, nil, "@rumil", 1, nil).timeout; got != config.DefaultWorkerTimeout {
+		t.Errorf("default timeout = %s, want %s", got, config.DefaultWorkerTimeout)
+	}
+
+	if got := NewPool(nil, nil, "@rumil", 1, nil, WithJobTimeout(time.Hour)).timeout; got != time.Hour {
+		t.Errorf("configured timeout = %s, want %s", got, time.Hour)
+	}
+
+	if got := NewPool(nil, nil, "@rumil", 1, nil, WithJobTimeout(0)).timeout; got != config.DefaultWorkerTimeout {
+		t.Errorf("zero option timeout = %s, want the default %s", got, config.DefaultWorkerTimeout)
 	}
 }
 

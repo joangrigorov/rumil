@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -40,6 +41,9 @@ const (
 	// DefaultWorkerConcurrency is the number of reviews `rumil serve` runs in
 	// parallel.
 	DefaultWorkerConcurrency = 4
+	// DefaultWorkerTimeout bounds one review or command job. A hung model call
+	// would otherwise hold a worker for the life of the process.
+	DefaultWorkerTimeout = 15 * time.Minute
 	// DefaultListen is the HTTP address of `rumil serve`.
 	DefaultListen = ":8080"
 
@@ -128,6 +132,21 @@ func (c Compaction) CompactionEnabled() bool {
 // Worker tunes the review job pool of `rumil serve`.
 type Worker struct {
 	Concurrency int `yaml:"concurrency"`
+	// JobTimeout bounds one review or command job, as a Go duration string
+	// such as "15m" or "1h". Empty uses DefaultWorkerTimeout.
+	JobTimeout string `yaml:"job_timeout"`
+}
+
+// Timeout is the wall-clock budget for one job.
+func (w Worker) Timeout() time.Duration {
+	if w.JobTimeout == "" {
+		return DefaultWorkerTimeout
+	}
+	timeout, err := time.ParseDuration(w.JobTimeout)
+	if err != nil {
+		return DefaultWorkerTimeout
+	}
+	return timeout
 }
 
 // Server holds the HTTP surface settings of `rumil serve`.
@@ -352,6 +371,16 @@ func (c *Config) Validate() error {
 
 	if c.Worker.Concurrency < 1 {
 		return fmt.Errorf("worker.concurrency must be at least 1, got %d", c.Worker.Concurrency)
+	}
+	if c.Worker.JobTimeout != "" {
+		timeout, err := time.ParseDuration(c.Worker.JobTimeout)
+		if err != nil {
+			return fmt.Errorf("worker.job_timeout must be a duration such as \"15m\" or \"1h\", got %q: %w",
+				c.Worker.JobTimeout, err)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf("worker.job_timeout must be positive, got %q", c.Worker.JobTimeout)
+		}
 	}
 
 	if c.Compaction.CompactionEnabled() {

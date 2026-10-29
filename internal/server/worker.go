@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
@@ -16,10 +17,6 @@ import (
 
 // pollInterval is how long an idle worker waits before looking for work.
 const pollInterval = 250 * time.Millisecond
-
-// jobTimeout bounds one job. A hung model call would otherwise hold a worker
-// for the life of the process.
-const jobTimeout = 15 * time.Minute
 
 // Pool drains the webhook job queue with a fixed number of workers.
 type Pool struct {
@@ -42,24 +39,41 @@ func (p *Pool) SetSessionRecorder(recorder *SessionRecorder) {
 	p.recorder = recorder
 }
 
+// PoolOption tunes a worker pool at construction.
+type PoolOption func(*Pool)
+
+// WithJobTimeout bounds one review or command job. A non-positive value keeps
+// the default.
+func WithJobTimeout(timeout time.Duration) PoolOption {
+	return func(p *Pool) {
+		if timeout > 0 {
+			p.timeout = timeout
+		}
+	}
+}
+
 // NewPool builds a pool of concurrency workers. botHandle is the configured
 // handle, which is what tells a command apart from a mention.
-func NewPool(jobs *store.DB, engine *reviewer.Engine, botHandle string, concurrency int, logger *slog.Logger) *Pool {
+func NewPool(jobs *store.DB, engine *reviewer.Engine, botHandle string, concurrency int, logger *slog.Logger, opts ...PoolOption) *Pool {
 	if concurrency < 1 {
 		concurrency = 1
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Pool{
+	pool := &Pool{
 		jobs:     jobs,
 		engine:   engine,
 		botLogin: ghapp.NormalizeLogin(botHandle),
 		workers:  concurrency,
 		interval: pollInterval,
-		timeout:  jobTimeout,
+		timeout:  config.DefaultWorkerTimeout,
 		logger:   logger,
 	}
+	for _, opt := range opts {
+		opt(pool)
+	}
+	return pool
 }
 
 // Start launches the workers. Cancelling ctx stops them claiming new jobs;

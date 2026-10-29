@@ -40,6 +40,7 @@ memory:                           # Used from v0.0.6
 # `rumil serve` drains this queue.
 worker:
   concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms
+  job_timeout: "15m"              # wall-clock budget per review or command; raise it for long unlimited runs
 
 server:
   listen: ":8080"                 # HTTP address for the webhook endpoint, overridden by --listen
