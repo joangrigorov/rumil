@@ -34,8 +34,8 @@ func newSessionsContinueCmd(configPath *string) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "continue <session-id>",
-		Short: "Give a session that hit the turn limit another attempt",
-		Long: "Queue a second attempt at a review session that stopped at app.max_agent_turns.\n" +
+		Short: "Give a failed review session another attempt",
+		Long: "Queue a second attempt at a review session that failed without submitting a review.\n" +
 			"The new attempt reuses the session's stored tool results and partial summary, gets its own\n" +
 			"turn budget, and is recorded as a session of its own. A session that already submitted a\n" +
 			"review is refused. `rumil serve` runs the queued attempt.",
@@ -75,8 +75,6 @@ func newSessionsContinueCmd(configPath *string) *cobra.Command {
 				return fmt.Errorf("session %s already submitted a review (%s), so it cannot be continued", session.ID, session.ReviewEvent)
 			case errors.Is(err, store.ErrReviewNotFailed):
 				return fmt.Errorf("session %s is %s; only a failed session can be continued", session.ID, session.Status)
-			case errors.Is(err, store.ErrReviewNotTurnLimited):
-				return fmt.Errorf("session %s failed for another cause, so a continuation would not help: %s", session.ID, session.Error)
 			case err != nil:
 				return err
 			}

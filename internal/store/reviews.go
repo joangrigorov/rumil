@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,9 +42,6 @@ var (
 	ErrReviewAlreadySubmitted = errors.New("the review session already submitted a review")
 	// ErrReviewNotFailed reports a session that is still running.
 	ErrReviewNotFailed = errors.New("only a failed review session can be continued")
-	// ErrReviewNotTurnLimited reports a failure with another cause. Reusing the
-	// context would not address what stopped it.
-	ErrReviewNotTurnLimited = errors.New("the review session did not stop at the turn limit")
 )
 
 // ReviewSession is one run of the reviewer.
@@ -100,25 +96,21 @@ type ReviewOutcome struct {
 	ReviewEvent string
 	ToolCalls   int
 	Error       string
-	// TurnLimitReached says the failure was the step budget, which is what
-	// makes the session continuable.
+	// TurnLimitReached says the failure was the step budget rather than a
+	// provider or tool error.
 	TurnLimitReached bool
 }
 
-// Continuable reports whether the session stopped at its turn limit and can be
-// given another attempt. A session that already submitted a review is refused
-// whatever its status: a continuation would submit a second review over it.
+// Continuable reports whether the session failed without submitting a review
+// and can be given another attempt. A session that already submitted a review
+// is refused whatever its status: a continuation would submit a second review
+// over it.
 func (s ReviewSession) Continuable() error {
 	if s.Status == ReviewSucceeded || s.ReviewEvent != "" {
 		return ErrReviewAlreadySubmitted
 	}
 	if s.Status != ReviewFailed {
 		return ErrReviewNotFailed
-	}
-	// A session recorded before the marker existed carries the cause in its
-	// error text, which is how its row still says why it stopped.
-	if !s.TurnLimitReached && !strings.Contains(s.Error, "turn limit") {
-		return ErrReviewNotTurnLimited
 	}
 	return nil
 }

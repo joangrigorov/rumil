@@ -380,7 +380,7 @@ func newTurnLimitedSession(t *testing.T, h *harness, headSHA string) store.Revie
 	return stored
 }
 
-func TestObservationDeckOffersContinuationOnlyAtTheTurnLimit(t *testing.T) {
+func TestObservationDeckOffersContinuationToAnyFailedSession(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -396,33 +396,33 @@ func TestObservationDeckOffersContinuationOnlyAtTheTurnLimit(t *testing.T) {
 		ReviewEvent: "COMMENT",
 	})
 
-	offered := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+turnLimited.ID, adminToken, nil, "text/html")
-	if offered.Code != http.StatusOK {
-		t.Fatalf("detail status = %d, want 200 (body: %s)", offered.Code, offered.Body.String())
-	}
-	for _, want := range []string{
-		"Continue review",
-		`action="/ui/sessions/` + turnLimited.ID + `/continue"`,
-		"Another attempt with the configured turn budget",
-	} {
-		if !strings.Contains(offered.Body.String(), want) {
-			t.Errorf("the turn-limited session does not offer a continuation (%q):\n%s", want, offered.Body.String())
-		}
-	}
-
 	for name, session := range map[string]store.ReviewSession{
-		"another failure": otherFailure,
-		"succeeded":       succeeded,
+		"turn limited": turnLimited,
+		"other cause":  otherFailure,
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+session.ID, adminToken, nil, "text/html")
-			if response.Code != http.StatusOK {
-				t.Fatalf("detail status = %d, want 200", response.Code)
+			offered := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+session.ID, adminToken, nil, "text/html")
+			if offered.Code != http.StatusOK {
+				t.Fatalf("detail status = %d, want 200 (body: %s)", offered.Code, offered.Body.String())
 			}
-			if strings.Contains(response.Body.String(), "Continue review") {
-				t.Errorf("a session that is not turn-limited offers a continuation:\n%s", response.Body.String())
+			for _, want := range []string{
+				"Continue review",
+				`action="/ui/sessions/` + session.ID + `/continue"`,
+				"Another attempt with the configured turn budget",
+			} {
+				if !strings.Contains(offered.Body.String(), want) {
+					t.Errorf("the failed session does not offer a continuation (%q):\n%s", want, offered.Body.String())
+				}
 			}
 		})
+	}
+
+	response := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+succeeded.ID, adminToken, nil, "text/html")
+	if response.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want 200", response.Code)
+	}
+	if strings.Contains(response.Body.String(), "Continue review") {
+		t.Errorf("a session that submitted a review offers a continuation:\n%s", response.Body.String())
 	}
 }
 
@@ -491,7 +491,7 @@ func TestObservationDeckQueuesAContinuation(t *testing.T) {
 	}
 }
 
-func TestObservationDeckRefusesContinuationAtAnotherCause(t *testing.T) {
+func TestObservationDeckContinuesAFailureWithAnotherCause(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -502,8 +502,12 @@ func TestObservationDeckRefusesContinuationAtAnotherCause(t *testing.T) {
 	})
 
 	response := moderatedRequest(t, handler, http.MethodPost, "/ui/sessions/"+session.ID+"/continue", adminToken, nil, "text/html")
-	if response.Code != http.StatusConflict {
-		t.Errorf("continuation of another failure = %d, want 409", response.Code)
+	if response.Code != http.StatusSeeOther {
+		t.Errorf("continuation of another failure = %d, want 303 (body: %s)", response.Code, response.Body.String())
+	}
+	job, err := h.db.JobByDelivery(context.Background(), continuation.DeliveryID(session.ID))
+	if err != nil || job == nil {
+		t.Fatalf("reading the queued job returned (%v, %v), want a job", job, err)
 	}
 }
 

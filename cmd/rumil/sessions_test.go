@@ -144,10 +144,6 @@ func TestSessionsContinueRefusesWhatCannotContinue(t *testing.T) {
 		ReviewEvent: "COMMENT",
 	})
 	running := seedSession(t, db, store.ReviewOutcome{Status: store.ReviewRunning})
-	otherCause := seedSession(t, db, store.ReviewOutcome{
-		Status: store.ReviewFailed,
-		Error:  "the GitHub App is not installed",
-	})
 
 	cases := []struct {
 		name string
@@ -157,7 +153,6 @@ func TestSessionsContinueRefusesWhatCannotContinue(t *testing.T) {
 		{name: "already queued", id: turnLimited.ID, want: "already has a continuation"},
 		{name: "a submitted review", id: succeeded.ID, want: "already submitted a review"},
 		{name: "still running", id: running.ID, want: "only a failed session"},
-		{name: "another cause", id: otherCause.ID, want: "another cause"},
 		{name: "no such session", id: "00000000-0000-0000-0000-000000000000", want: "no review session"},
 	}
 
@@ -171,5 +166,26 @@ func TestSessionsContinueRefusesWhatCannotContinue(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A failure that is not the turn limit, such as a provider error, keeps the
+// transcript that is worth reusing, so it can be continued too.
+func TestSessionsContinueAcceptsAFailureWithAnotherCause(t *testing.T) {
+	dsn := testutil.TestDatabaseURL(t, "rumil_cli_sessions_test")
+	configPath := writeConfigWithDatabase(t, dsn)
+	db := openSessionsStore(t, dsn)
+
+	parent := seedSession(t, db, store.ReviewOutcome{
+		Status: store.ReviewFailed,
+		Error:  "the GitHub App is not installed",
+	})
+
+	out, err := runRoot(t, "sessions", "continue", parent.ID, "--config", configPath)
+	if err != nil {
+		t.Fatalf("sessions continue returned error: %v (output: %s)", err, out)
+	}
+	if !strings.Contains(out, parent.ID) {
+		t.Errorf("output = %q, want it to name %s", out, parent.ID)
 	}
 }

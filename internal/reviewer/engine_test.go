@@ -634,6 +634,64 @@ func TestT001_07_TurnLimitIsAnError(t *testing.T) {
 	}
 }
 
+// A step cut off at the model's output cap produced no review: the reasoning
+// used the whole budget before the tool call. The session asks once more
+// instead of failing with the generic no-review error.
+func TestOutputLimitAsksAgainForTheReview(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueTurn(testutil.ScriptedTurn{FinishReason: "length"})
+	llm.QueueToolCall("submit_pr_review", map[string]any{"event": "COMMENT", "summary_body": "Looks fine."})
+	llm.QueueText("No further changes requested.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v", err)
+	}
+	if !res.ReviewSubmitted {
+		t.Error("ReviewSubmitted = false, want the nudge to reach submit_pr_review")
+	}
+	if !res.OutputLimitReached {
+		t.Error("OutputLimitReached = false, want the truncated step recorded")
+	}
+	if got := llm.Count(); got != 3 {
+		t.Fatalf("model requests = %d, want the review, the nudge and the closing text", got)
+	}
+	if got := llm.Requests()[1].UserPrompt; !strings.Contains(got, "output token limit") {
+		t.Errorf("the second request did not carry the output-limit reminder: %q", got)
+	}
+	if !strings.Contains(h.logs.String(), "reached its output limit") {
+		t.Errorf("logs do not name the output limit:\n%s", h.logs.String())
+	}
+}
+
+// When the reminder is cut off too, the failure says what stopped it instead
+// of reading like a review the model chose not to submit.
+func TestOutputLimitTwiceNamesTheCause(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueTurn(testutil.ScriptedTurn{FinishReason: "length"})
+	llm.QueueTurn(testutil.ScriptedTurn{FinishReason: "length"})
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	res, err := h.review(t)
+	if !errors.Is(err, ErrNoReviewSubmitted) {
+		t.Fatalf("Review error = %v, want it to wrap ErrNoReviewSubmitted", err)
+	}
+	if res == nil || !res.OutputLimitReached {
+		t.Fatalf("OutputLimitReached = %v, want the truncated step recorded", res)
+	}
+	if !strings.Contains(err.Error(), "model output limit reached") {
+		t.Errorf("error = %v, want it to name the output limit", err)
+	}
+	if got := llm.Count(); got != 2 {
+		t.Errorf("model requests = %d, want the review step and one nudge", got)
+	}
+}
+
 // max_agent_turns: 0 removes the cap, so a session that needs more steps than
 // the old default keeps going.
 func TestUnlimitedAgentTurnsRunsPastTheDefaultCap(t *testing.T) {

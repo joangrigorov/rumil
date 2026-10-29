@@ -44,7 +44,6 @@ func TestNewRequestRefusesASessionThatCannotContinue(t *testing.T) {
 			session: store.ReviewSession{
 				Status: store.ReviewFailed, Error: "the GitHub App is not installed",
 			},
-			want: store.ErrReviewNotTurnLimited,
 		},
 	}
 

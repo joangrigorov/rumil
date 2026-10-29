@@ -22,6 +22,10 @@ type ToolCall struct {
 type ScriptedTurn struct {
 	ToolCalls []ToolCall
 	Text      string
+	// FinishReason overrides the reason the reply reports. Empty means "stop"
+	// for text and "tool_calls" for a call, which is what a normal step
+	// reports. A test sets "length" to model a reply cut off at the output cap.
+	FinishReason string
 	// PromptTokens overrides the usage this reply reports for its input. A
 	// test sets it to move the session's estimated context past a compaction
 	// trigger; zero keeps the default.
@@ -367,6 +371,9 @@ func completion(turn ScriptedTurn) map[string]any {
 	} else {
 		message["content"] = turn.Text
 	}
+	if turn.FinishReason != "" {
+		finish = turn.FinishReason
+	}
 
 	return map[string]any{
 		"id":      "chatcmpl-test",
@@ -380,6 +387,15 @@ func completion(turn ScriptedTurn) map[string]any {
 		}},
 		"usage": map[string]int{"prompt_tokens": promptTokens, "completion_tokens": 5, "total_tokens": promptTokens + 5},
 	}
+}
+
+// finishOf is the reason a scripted turn reports, which is its own override
+// when it has one and the normal reason for its shape otherwise.
+func finishOf(turn ScriptedTurn, fallback string) string {
+	if turn.FinishReason != "" {
+		return turn.FinishReason
+	}
+	return fallback
 }
 
 func writeStream(w http.ResponseWriter, turn ScriptedTurn) {
@@ -418,10 +434,10 @@ func writeStream(w http.ResponseWriter, turn ScriptedTurn) {
 				},
 			}}}, nil))
 		}
-		send(chunk(map[string]any{}, "tool_calls"))
+		send(chunk(map[string]any{}, finishOf(turn, "tool_calls")))
 	} else {
 		send(chunk(map[string]any{"content": turn.Text}, nil))
-		send(chunk(map[string]any{}, "stop"))
+		send(chunk(map[string]any{}, finishOf(turn, "stop")))
 	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher != nil {
