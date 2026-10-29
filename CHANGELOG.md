@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.16](https://github.com/joangrigorov/rumil/compare/v0.0.15...v0.0.16) (2026-10-29)
+
+
+### Bug Fixes
+
+* **reviewer:** recover from a response cut off at the output limit ([#54](https://github.com/joangrigorov/rumil/issues/54)) ([4f52c88](https://github.com/joangrigorov/rumil/commit/4f52c8893a131ad685cfc8a40436d4a115cdf80e))
+
 ## [0.0.15](https://github.com/joangrigorov/rumil/compare/v0.0.14...v0.0.15) (2026-10-29)
 
 
