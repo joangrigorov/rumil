@@ -489,6 +489,8 @@ func reasoningEffort(level string) *openai.ReasoningEffort {
 		effort = openai.ReasoningEffortMedium
 	case config.ThinkingHigh:
 		effort = openai.ReasoningEffortHigh
+	case config.ThinkingMax:
+		effort = openai.ReasoningEffortMax
 	default:
 		return nil
 	}

@@ -578,11 +578,13 @@ func TestThinkingLevelReachesTheChatCompletionsRequest(t *testing.T) {
 		return body
 	}
 
-	t.Run("high is sent as effort", func(t *testing.T) {
-		if got := requestBody(t, config.ThinkingHigh)["reasoning_effort"]; got != config.ThinkingHigh {
-			t.Errorf("reasoning_effort = %v, want %q", got, config.ThinkingHigh)
-		}
-	})
+	for _, level := range []string{config.ThinkingHigh, config.ThinkingMax} {
+		t.Run(level+" is sent as effort", func(t *testing.T) {
+			if got := requestBody(t, level)["reasoning_effort"]; got != level {
+				t.Errorf("reasoning_effort = %v, want %q", got, level)
+			}
+		})
+	}
 
 	t.Run("unset leaves the field out", func(t *testing.T) {
 		if got, ok := requestBody(t, "")["reasoning_effort"]; ok {

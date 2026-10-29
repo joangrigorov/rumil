@@ -71,11 +71,14 @@ const (
 	ThinkingLow     = "low"
 	ThinkingMedium  = "medium"
 	ThinkingHigh    = "high"
+	// ThinkingMax is the highest effort some providers expose, including
+	// DeepSeek V4 Flash. It maps to reasoning_effort "max".
+	ThinkingMax = "max"
 )
 
 // ThinkingLevels is the ordered list of accepted reasoning levels.
 var ThinkingLevels = []string{
-	ThinkingOff, ThinkingNone, ThinkingMinimal, ThinkingLow, ThinkingMedium, ThinkingHigh,
+	ThinkingOff, ThinkingNone, ThinkingMinimal, ThinkingLow, ThinkingMedium, ThinkingHigh, ThinkingMax,
 }
 
 // Errors returned by Validate, wrapped with field context.
