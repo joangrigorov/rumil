@@ -257,7 +257,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 rumil review --repo acme/payments --pr 42
 ```
 
-It needs the App credentials and a chat provider, and it submits the review as the App. It reads the file the [search](#where-the-file-is-found) finds, so the `rumil.yaml` you copied in the step above is enough, and `--config` names another one. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so.
+It needs the App credentials and a chat provider, and it submits the review as the App. It reads the file the [search](#where-the-file-is-found) finds, so the `rumil.yaml` you copied in the step above is enough, and `--config` names another one. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so. A run that ends without submitting a review exits non-zero; the server records the same outcome as a failed job.
 
 ## Run the webhook server
 
