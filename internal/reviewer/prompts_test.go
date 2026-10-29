@@ -202,3 +202,24 @@ func TestSystemPromptAppendsTheBlocks(t *testing.T) {
 		t.Errorf("the recorded rules are not the last block:\n%s", prompt)
 	}
 }
+
+// A session with a working tree is told to locate paths instead of guessing
+// them; a session without one is not told about tools it does not have.
+func TestSystemPromptLocatesPathsWhenItHasTheTree(t *testing.T) {
+	withTree := SystemPrompt(SessionContext{ResolveThreads: true, LocalFiles: true})
+	for _, want := range []string{"Never guess a file path", "list_repository_tree", "list_directory", "search_code"} {
+		if !strings.Contains(withTree, want) {
+			t.Errorf("the prompt does not carry %q:\n%s", want, withTree)
+		}
+	}
+	if numbers := ruleNumbers(t, withTree); len(numbers) != 9 {
+		t.Errorf("the prompt lists %d rules, want nine with the locate rule", len(numbers))
+	}
+
+	withoutTree := SystemPrompt(SessionContext{ResolveThreads: true})
+	for _, unwanted := range []string{"Never guess a file path", "list_repository_tree", "search_code"} {
+		if strings.Contains(withoutTree, unwanted) {
+			t.Errorf("a session without a working tree is told about %q:\n%s", unwanted, withoutTree)
+		}
+	}
+}

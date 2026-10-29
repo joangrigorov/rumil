@@ -38,7 +38,9 @@ func newGithubTools(t *testing.T, gh *testutil.FakeGitHub, botHandle string) *mc
 	if err != nil {
 		t.Fatalf("reading the fake review list: %v", err)
 	}
-	return mcpservers.NewGithubTools(rumil, 4096, botHandle, memoryLogger(), reviews)
+	return mcpservers.NewGithubTools(rumil, mcpservers.GithubToolsOptions{
+		MaxDiffBytes: 4096, BotHandle: botHandle, Logger: memoryLogger(), PriorReviews: reviews,
+	})
 }
 
 type conversationResult struct {

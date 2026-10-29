@@ -106,6 +106,59 @@ models:
 	if cfg.Compaction.KeepRecentTokens != DefaultCompactionKeepRecentTokens {
 		t.Errorf("compaction.keep_recent_tokens = %d, want %d", cfg.Compaction.KeepRecentTokens, DefaultCompactionKeepRecentTokens)
 	}
+	if !cfg.Snapshot.SnapshotEnabled() {
+		t.Error("snapshot is off by default, want it on")
+	}
+	if got := cfg.Snapshot.MaxBytesOrDefault(); got != DefaultSnapshotMaxBytes {
+		t.Errorf("snapshot.max_bytes = %d, want %d", got, DefaultSnapshotMaxBytes)
+	}
+	if got := cfg.Snapshot.TimeoutOrDefault(); got != DefaultSnapshotTimeout {
+		t.Errorf("snapshot.timeout = %s, want %s", got, DefaultSnapshotTimeout)
+	}
+}
+
+// The snapshot is on unless an operator turns it off, and an invalid duration
+// is refused rather than silently replaced by the default.
+func TestSnapshotSettings(t *testing.T) {
+	doc := func(block string) []byte {
+		return []byte(block + `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("snapshot:\n  enabled: false\n")))
+		if cfg.Snapshot.SnapshotEnabled() {
+			t.Error("snapshot.enabled = false did not turn the snapshot off")
+		}
+	})
+
+	t.Run("custom limits", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("snapshot:\n  enabled: true\n  max_bytes: 1048576\n  timeout: \"90s\"\n")))
+		if got := cfg.Snapshot.MaxBytesOrDefault(); got != 1<<20 {
+			t.Errorf("snapshot.max_bytes = %d, want %d", got, 1<<20)
+		}
+		if got := cfg.Snapshot.TimeoutOrDefault(); got != 90*time.Second {
+			t.Errorf("snapshot.timeout = %s, want 90s", got)
+		}
+	})
+
+	t.Run("invalid duration", func(t *testing.T) {
+		if _, err := Parse(doc("snapshot:\n  timeout: \"soon\"\n"), "test.yaml"); err == nil ||
+			!strings.Contains(err.Error(), "snapshot.timeout") {
+			t.Errorf("Parse = %v, want it to name snapshot.timeout", err)
+		}
+	})
 }
 
 // An omitted cap keeps the default; an explicit zero removes it. The pointer

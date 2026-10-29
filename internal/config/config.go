@@ -57,6 +57,13 @@ const (
 	// DefaultCompactionKeepRecentTokens is the most recent context that is
 	// never summarized.
 	DefaultCompactionKeepRecentTokens = 20_000
+
+	// DefaultSnapshotMaxBytes caps the working tree a session materializes. A
+	// repository above it falls back to the GitHub API tools.
+	DefaultSnapshotMaxBytes int64 = 512 << 20
+	// DefaultSnapshotTimeout bounds the archive download and extraction, so a
+	// slow origin cannot eat the job's own timeout.
+	DefaultSnapshotTimeout = 2 * time.Minute
 )
 
 // GuidelinesRef values accepted by review.guidelines_ref.
@@ -98,6 +105,7 @@ type Config struct {
 	GitHub     GitHub     `yaml:"github"`
 	Review     Review     `yaml:"review"`
 	Compaction Compaction `yaml:"compaction"`
+	Snapshot   Snapshot   `yaml:"snapshot"`
 	Memory     Memory     `yaml:"memory"`
 	Worker     Worker     `yaml:"worker"`
 	Server     Server     `yaml:"server"`
@@ -127,6 +135,54 @@ type Compaction struct {
 // unless the operator set compaction.enabled to false.
 func (c Compaction) CompactionEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
+}
+
+// Snapshot controls the per-session working tree the reviewer reads from. The
+// tree is downloaded from the reviewed commit, extracted to a temporary
+// directory, and removed when the session ends. It is what makes listing,
+// searching and reading files local and fast instead of an API call per guess.
+type Snapshot struct {
+	// Enabled is a pointer so that omitting the block turns the snapshot on,
+	// while an explicit false turns it off and leaves the GitHub API tools
+	// alone.
+	Enabled *bool `yaml:"enabled"`
+	// MaxBytes caps the extracted working tree. A larger repository falls back
+	// to the GitHub API tools rather than filling the disk.
+	MaxBytes int64 `yaml:"max_bytes"`
+	// Timeout bounds the download and extraction, as a Go duration such as
+	// "2m". Empty uses DefaultSnapshotTimeout.
+	Timeout string `yaml:"timeout"`
+	// Dir is the parent directory for the per-session working trees. Empty
+	// uses the operating system's temporary directory.
+	Dir string `yaml:"dir"`
+}
+
+// SnapshotEnabled reports whether sessions materialize a working tree. It is on
+// unless the operator set snapshot.enabled to false.
+func (s Snapshot) SnapshotEnabled() bool {
+	return s.Enabled == nil || *s.Enabled
+}
+
+// MaxBytesOrDefault is the working-tree cap, defaulted when the operator left
+// it out.
+func (s Snapshot) MaxBytesOrDefault() int64 {
+	if s.MaxBytes <= 0 {
+		return DefaultSnapshotMaxBytes
+	}
+	return s.MaxBytes
+}
+
+// TimeoutOrDefault is the download and extraction budget, defaulted when the
+// operator left it out.
+func (s Snapshot) TimeoutOrDefault() time.Duration {
+	if s.Timeout == "" {
+		return DefaultSnapshotTimeout
+	}
+	timeout, err := time.ParseDuration(s.Timeout)
+	if err != nil {
+		return DefaultSnapshotTimeout
+	}
+	return timeout
 }
 
 // Worker tunes the review job pool of `rumil serve`.
@@ -402,6 +458,22 @@ func (c *Config) Validate() error {
 		if c.Compaction.ReserveTokens >= c.Compaction.TriggerTokens {
 			return fmt.Errorf("compaction.reserve_tokens must be less than compaction.trigger_tokens (%d), got %d",
 				c.Compaction.TriggerTokens, c.Compaction.ReserveTokens)
+		}
+	}
+
+	if c.Snapshot.SnapshotEnabled() {
+		if c.Snapshot.MaxBytes < 0 {
+			return fmt.Errorf("snapshot.max_bytes must be positive or zero for the default, got %d", c.Snapshot.MaxBytes)
+		}
+		if c.Snapshot.Timeout != "" {
+			timeout, err := time.ParseDuration(c.Snapshot.Timeout)
+			if err != nil {
+				return fmt.Errorf("snapshot.timeout must be a duration such as \"2m\" or \"90s\", got %q: %w",
+					c.Snapshot.Timeout, err)
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("snapshot.timeout must be positive, got %q", c.Snapshot.Timeout)
+			}
 		}
 	}
 
