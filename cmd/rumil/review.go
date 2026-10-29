@@ -78,18 +78,10 @@ func newReviewCmd(configPath *string) *cobra.Command {
 			}
 
 			if !result.ReviewSubmitted {
-				// The session stopped without submitting anything: kit halts at
-				// app.max_agent_turns and returns the partial text, so this is a
-				// clean stop rather than a crash. The warning carries the detail.
-				logger.Warn("review session finished without submitting a review",
-					"tool_calls", result.ToolCalls,
-					"max_agent_turns", cfg.App.MaxTurns(),
-					"turn_limit_reached", result.TurnLimitReached,
-				)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-					"no review submitted for %s/%s#%d (tool calls: %d, max_agent_turns: %d)\n",
-					owner, name, pr, result.ToolCalls, cfg.App.MaxTurns())
-				return nil
+				// The engine turns this into ErrNoReviewSubmitted, so reaching
+				// here means the two paths disagree. Fail rather than print a
+				// success line for a review that was never submitted.
+				return fmt.Errorf("%w for %s/%s#%d", reviewer.ErrNoReviewSubmitted, owner, name, pr)
 			}
 
 			logger.Info("review submitted",

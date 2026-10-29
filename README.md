@@ -414,7 +414,7 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 
 **A review never appears.** Rumil reviews only when the App is requested as a reviewer, so check that the pull request actually asks for it. Then look at the App's **Advanced → Recent Deliveries**: a delivery that is not a review request, comes from another installation, or carries a bad signature is answered `200` or `401` and logged with the reason it was ignored. `docker compose logs -f rumil` shows those lines.
 
-**"review session ended without submitting a review".** The session reached `app.max_agent_turns` before it submitted anything, or the chat endpoint does not support tool calling. Raise the limit, or point `models.default_chat` at a larger model.
+**"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model.
 
 **Every webhook delivery is rejected.** `github.webhook_secret` must match the App's webhook secret exactly, and the endpoint GitHub reaches is `POST /webhooks/github` on whatever host you configured.
 

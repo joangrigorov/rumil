@@ -119,9 +119,9 @@ func TestT001_06_ReviewCommandExitsNonZeroWhenNotInstalled(t *testing.T) {
 	}
 }
 
-// T-001-07 (CLI half): a session that never submits exits zero with a warning,
-// so a stuck model cannot fail the container.
-func TestT001_07_ReviewCommandExitsZeroAtTurnLimit(t *testing.T) {
+// T-001-07 (CLI half): a session that never submits exits non-zero. A run
+// that said nothing about the pull request is a failure.
+func TestT001_07_ReviewCommandExitsNonZeroAtTurnLimit(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	for i := 0; i < 20; i++ {
@@ -132,11 +132,11 @@ func TestT001_07_ReviewCommandExitsZeroAtTurnLimit(t *testing.T) {
 	t.Cleanup(func() { githubAPIBaseURL = "" })
 
 	out, err := runReviewCmd(t, writeConfig(t, llm.URL()))
-	if err != nil {
-		t.Fatalf("review command returned error: %v", err)
+	if !errors.Is(err, reviewer.ErrNoReviewSubmitted) {
+		t.Fatalf("review command error = %v, want ErrNoReviewSubmitted (output: %s)", err, out)
 	}
-	if !strings.Contains(out, "no review submitted for acme/payments#42") {
-		t.Errorf("output = %q, want the clean-stop message", out)
+	if len(gh.SubmittedReviews()) != 0 {
+		t.Errorf("submitted %d reviews, want none", len(gh.SubmittedReviews()))
 	}
 }
 
