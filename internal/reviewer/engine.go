@@ -275,7 +275,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		MemoryOn:       memoryOn,
 		PriorHistory:   priorHistory,
 		ResolveThreads: resolveThreads,
-	}), sessionTools, e.cfg.App.MaxAgentTurns, observer != nil))
+	}), sessionTools, e.cfg.App.MaxTurns(), observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -314,10 +314,11 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		// kit stops the tool loop at Options.MaxSteps and returns whatever text
 		// the model produced, so the engine detects the exhausted budget here
 		// and reports it instead of failing the container.
-		result.TurnLimitReached = result.ToolCalls >= e.cfg.App.MaxAgentTurns
+		maxTurns := e.cfg.App.MaxTurns()
+		result.TurnLimitReached = maxTurns > 0 && result.ToolCalls >= maxTurns
 		e.logger.Warn("review session ended without submitting a review",
 			"tool_calls", result.ToolCalls,
-			"max_agent_turns", e.cfg.App.MaxAgentTurns,
+			"max_agent_turns", maxTurns,
 			"turn_limit_reached", result.TurnLimitReached,
 		)
 	}

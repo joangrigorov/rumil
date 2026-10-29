@@ -72,8 +72,8 @@ models:
 	if cfg.App.BotHandle != DefaultBotHandle {
 		t.Errorf("bot_handle = %q, want %q", cfg.App.BotHandle, DefaultBotHandle)
 	}
-	if cfg.App.MaxAgentTurns != DefaultMaxAgentTurns {
-		t.Errorf("max_agent_turns = %d, want %d", cfg.App.MaxAgentTurns, DefaultMaxAgentTurns)
+	if got := cfg.App.MaxTurns(); got != DefaultMaxAgentTurns {
+		t.Errorf("max_agent_turns = %d, want %d", got, DefaultMaxAgentTurns)
 	}
 	if cfg.App.MaxDiffBytes != DefaultMaxDiffBytes {
 		t.Errorf("max_diff_bytes = %d, want %d", cfg.App.MaxDiffBytes, DefaultMaxDiffBytes)
@@ -101,6 +101,47 @@ models:
 	}
 	if cfg.Compaction.KeepRecentTokens != DefaultCompactionKeepRecentTokens {
 		t.Errorf("compaction.keep_recent_tokens = %d, want %d", cfg.Compaction.KeepRecentTokens, DefaultCompactionKeepRecentTokens)
+	}
+}
+
+// An omitted cap keeps the default; an explicit zero removes it. The pointer
+// is what tells those two apart.
+func TestMaxAgentTurns(t *testing.T) {
+	doc := func(value string) []byte {
+		return []byte(value + `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		app       string
+		wantTurns int
+		wantLimit bool
+	}{
+		{name: "omitted keeps the default", app: "", wantTurns: DefaultMaxAgentTurns, wantLimit: false},
+		{name: "explicit zero is unlimited", app: "app:\n  max_agent_turns: 0\n", wantTurns: 0, wantLimit: true},
+		{name: "a positive value is the cap", app: "app:\n  max_agent_turns: 7\n", wantTurns: 7, wantLimit: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := mustParse(t, string(doc(tc.app)))
+			if got := cfg.App.MaxTurns(); got != tc.wantTurns {
+				t.Errorf("MaxTurns() = %d, want %d", got, tc.wantTurns)
+			}
+			if got := cfg.App.TurnsUnlimited(); got != tc.wantLimit {
+				t.Errorf("TurnsUnlimited() = %v, want %v", got, tc.wantLimit)
+			}
+		})
 	}
 }
 
@@ -909,7 +950,7 @@ models:
 			wantSub: "compaction.reserve_tokens must be less than",
 		},
 		{
-			name: "zero max agent turns",
+			name: "a negative max agent turns",
 			doc: `
 app:
   max_agent_turns: -1

@@ -61,8 +61,10 @@ type harness struct {
 }
 
 type harnessOpts struct {
-	maxTurns    int
-	defaultChat string
+	maxTurns int
+	// unlimitedTurns writes max_agent_turns: 0, which removes the cap.
+	unlimitedTurns bool
+	defaultChat    string
 	// guidelinesRef sets review.guidelines_ref. Empty means the block is
 	// omitted and the loader default applies.
 	guidelinesRef string
@@ -84,7 +86,7 @@ type harnessOpts struct {
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
 	t.Helper()
 
-	if opts.maxTurns == 0 {
+	if opts.maxTurns == 0 && !opts.unlimitedTurns {
 		opts.maxTurns = 10
 	}
 
@@ -574,6 +576,33 @@ func TestT001_07_TurnLimitHaltsCleanly(t *testing.T) {
 	}
 	if !strings.Contains(h.logs.String(), "ended without submitting a review") {
 		t.Errorf("logs do not warn about the exhausted turn budget:\n%s", h.logs.String())
+	}
+}
+
+// max_agent_turns: 0 removes the cap, so a session that needs more steps than
+// the old default keeps going.
+func TestUnlimitedAgentTurnsRunsPastTheDefaultCap(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	for i := 0; i < config.DefaultMaxAgentTurns+5; i++ {
+		llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "main.go"})
+	}
+	llm.QueueText("No further changes requested.")
+
+	h := newHarness(t, gh, llm, harnessOpts{unlimitedTurns: true})
+
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v", err)
+	}
+	if res.TurnLimitReached {
+		t.Error("TurnLimitReached = true, want false with no cap")
+	}
+	if res.ToolCalls != config.DefaultMaxAgentTurns+5 {
+		t.Errorf("ToolCalls = %d, want all %d calls", res.ToolCalls, config.DefaultMaxAgentTurns+5)
+	}
+	if got := llm.Count(); got != config.DefaultMaxAgentTurns+6 {
+		t.Errorf("model requests = %d, want %d", got, config.DefaultMaxAgentTurns+6)
 	}
 }
 

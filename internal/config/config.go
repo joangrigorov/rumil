@@ -117,11 +117,25 @@ type Server struct {
 
 // App holds process-wide behavior switches.
 type App struct {
-	BotHandle     string `yaml:"bot_handle"`
-	MaxAgentTurns int    `yaml:"max_agent_turns"`
+	BotHandle string `yaml:"bot_handle"`
+	// MaxAgentTurns is a pointer so that omitted keeps the default while an
+	// explicit 0 means no limit.
+	MaxAgentTurns *int   `yaml:"max_agent_turns"`
 	MaxDiffBytes  int    `yaml:"max_diff_bytes"`
 	LogLevel      string `yaml:"log_level"`
 }
+
+// MaxTurns is the number of agent steps one session may take. Zero means the
+// session runs until the model stops or the job timeout arrives.
+func (a App) MaxTurns() int {
+	if a.MaxAgentTurns == nil {
+		return DefaultMaxAgentTurns
+	}
+	return *a.MaxAgentTurns
+}
+
+// TurnsUnlimited reports whether the operator removed the agent-turn cap.
+func (a App) TurnsUnlimited() bool { return a.MaxTurns() == 0 }
 
 // GitHub holds the operator's own GitHub App credentials. There is no
 // centralized Rumil App: app_id, installation_id, and a private key are all
@@ -266,9 +280,6 @@ func (c *Config) applyDefaults() {
 	if c.App.BotHandle == "" {
 		c.App.BotHandle = DefaultBotHandle
 	}
-	if c.App.MaxAgentTurns == 0 {
-		c.App.MaxAgentTurns = DefaultMaxAgentTurns
-	}
 	if c.App.MaxDiffBytes == 0 {
 		c.App.MaxDiffBytes = DefaultMaxDiffBytes
 	}
@@ -298,8 +309,8 @@ func (c *Config) applyDefaults() {
 // Validate enforces the schema rules that v0.0.1 depends on: app limits, GitHub
 // App credential presence, and the model selection rules.
 func (c *Config) Validate() error {
-	if c.App.MaxAgentTurns < 1 {
-		return fmt.Errorf("app.max_agent_turns must be at least 1, got %d", c.App.MaxAgentTurns)
+	if c.App.MaxTurns() < 0 {
+		return fmt.Errorf("app.max_agent_turns must be 0 for unlimited or at least 1, got %d", c.App.MaxTurns())
 	}
 	if c.App.MaxDiffBytes < 1 {
 		return fmt.Errorf("app.max_diff_bytes must be at least 1, got %d", c.App.MaxDiffBytes)

@@ -83,12 +83,12 @@ func newReviewCmd(configPath *string) *cobra.Command {
 				// clean stop rather than a crash. The warning carries the detail.
 				logger.Warn("review session finished without submitting a review",
 					"tool_calls", result.ToolCalls,
-					"max_agent_turns", cfg.App.MaxAgentTurns,
+					"max_agent_turns", cfg.App.MaxTurns(),
 					"turn_limit_reached", result.TurnLimitReached,
 				)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"no review submitted for %s/%s#%d (tool calls: %d, max_agent_turns: %d)\n",
-					owner, name, pr, result.ToolCalls, cfg.App.MaxAgentTurns)
+					owner, name, pr, result.ToolCalls, cfg.App.MaxTurns())
 				return nil
 			}
 
