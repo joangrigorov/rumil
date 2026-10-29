@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.0.15](https://github.com/joangrigorov/rumil/compare/v0.0.14...v0.0.15) (2026-10-29)
+
+
+### Features
+
+* **compaction:** add configurable context compaction ([#46](https://github.com/joangrigorov/rumil/issues/46)) ([d4b9063](https://github.com/joangrigorov/rumil/commit/d4b9063c10c58efd0e09fc83ca7e9645e367076c))
+* **config:** allow unlimited agent turns ([#47](https://github.com/joangrigorov/rumil/issues/47)) ([555fe77](https://github.com/joangrigorov/rumil/commit/555fe772b39f4447931eabf10040f0dfeba57670))
+* **models:** add a reasoning level per provider ([#50](https://github.com/joangrigorov/rumil/issues/50)) ([27668d6](https://github.com/joangrigorov/rumil/commit/27668d61b26b326628c080651dd82b89b110aaaa))
+* **reviewer:** continue a review after the turn limit ([#53](https://github.com/joangrigorov/rumil/issues/53)) ([aae1839](https://github.com/joangrigorov/rumil/commit/aae1839a3b1a8cfec3ac007c1b359c5c63e6ab80))
+* **worker:** make the job timeout configurable ([#51](https://github.com/joangrigorov/rumil/issues/51)) ([4126cbd](https://github.com/joangrigorov/rumil/commit/4126cbd968886c27d90ada7b073524dc7c5b510e))
+
+
+### Bug Fixes
+
+* **deps:** bump the github-actions-dependencies group across 1 directory with 2 updates ([#43](https://github.com/joangrigorov/rumil/issues/43)) ([6cfef0f](https://github.com/joangrigorov/rumil/commit/6cfef0f02ead682aa83579bcad2423322ebddb24))
+* **deps:** bump the go-dependencies group across 1 directory with 2 updates ([#44](https://github.com/joangrigorov/rumil/issues/44)) ([918ad72](https://github.com/joangrigorov/rumil/commit/918ad722eeaf2733f4781dbc7aa1983b4e48ad7c))
+* **review:** fail a session that submits no review ([#49](https://github.com/joangrigorov/rumil/issues/49)) ([c3e0751](https://github.com/joangrigorov/rumil/commit/c3e07515acf964ea96bcbfb8bd212f5b37ea31c9))
+
 ## [0.0.14](https://github.com/joangrigorov/rumil/compare/v0.0.13...v0.0.14) (2026-10-17)
 
 
