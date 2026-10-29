@@ -35,6 +35,8 @@ Your objective is to identify genuine bugs, security vulnerabilities, race condi
 
 	ruleReadOnly = `You are read-only in the repository: you cannot run commands, edit files, push commits, or change repository settings. Your writes are the review itself and the reason you post on a thread you close.`
 
+	ruleContinuation = `This session continues an earlier attempt that ran out of turns. The <previous_attempt> block is that attempt's own context: treat it as material you gathered, verify anything that may have changed, and finish by calling submit_pr_review.`
+
 	ruleFinish = `Finish by calling submit_pr_review exactly once, with a summary_body that explains your findings and no inline comment outside the diff.`
 )
 
@@ -56,12 +58,16 @@ type SessionContext struct {
 	PriorHistory string
 	// ResolveThreads is the operator's review.resolve_threads.
 	ResolveThreads bool
+	// Continuation is the rendered <previous_attempt> body, empty on a first
+	// attempt.
+	Continuation string
 }
 
 // reviewerRules is the rule list in order, without the ones the session cannot
-// keep: recorded rules and search_memory are named only when memory is on, and
-// resolving threads only when the operator left that on.
-func reviewerRules(memory, resolveThreads bool) []string {
+// keep: recorded rules and search_memory are named only when memory is on,
+// resolving threads only when the operator left that on, and the continuation
+// rule only when this session is a second attempt.
+func reviewerRules(memory, resolveThreads, continuation bool) []string {
 	rules := []string{rulePrioritize, ruleGuidelines}
 	if memory {
 		rules[1] += ruleMemory
@@ -71,7 +77,11 @@ func reviewerRules(memory, resolveThreads bool) []string {
 	if resolveThreads {
 		rules = append(rules, ruleResolve)
 	}
-	return append(rules, ruleReadOnly, ruleFinish)
+	rules = append(rules, ruleReadOnly)
+	if continuation {
+		rules = append(rules, ruleContinuation)
+	}
+	return append(rules, ruleFinish)
 }
 
 // PRReviewerSystemPrompt is the prompt a review runs on when the repository has
@@ -89,7 +99,7 @@ func SystemPrompt(ctx SessionContext) string {
 	var b strings.Builder
 	b.WriteString(reviewerIntro)
 	b.WriteString("\n\nSTRICT OPERATING RULES:\n")
-	for i, rule := range reviewerRules(ctx.MemoryOn, ctx.ResolveThreads) {
+	for i, rule := range reviewerRules(ctx.MemoryOn, ctx.ResolveThreads, ctx.Continuation != "") {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, rule)
 	}
 
@@ -106,6 +116,11 @@ func SystemPrompt(ctx SessionContext) string {
 		b.WriteString("\n")
 		b.WriteString(ctx.Memories)
 	}
+	if ctx.Continuation != "" {
+		b.WriteString("\n<previous_attempt>\n")
+		b.WriteString(ctx.Continuation)
+		b.WriteString("\n</previous_attempt>\n")
+	}
 	return b.String()
 }
 
@@ -114,6 +129,16 @@ func ReviewUserPrompt(owner, repo string, number int) string {
 	return fmt.Sprintf(`Review pull request %s/%s#%d.
 
 Work through the diff, verify each candidate finding against the surrounding code, and finish by calling submit_pr_review with your summary and any inline comments.`,
+		owner, repo, number)
+}
+
+// ContinuationUserPrompt is the task message for a second attempt. The earlier
+// attempt's material is in <previous_attempt>, so the task is to finish rather
+// than to start over.
+func ContinuationUserPrompt(owner, repo string, number int) string {
+	return fmt.Sprintf(`Continue the review of pull request %s/%s#%d.
+
+An earlier attempt stopped at its agent-turn budget. Its context is in <previous_attempt>. Verify what may have changed, finish what it left undone, and call submit_pr_review with your summary and any inline comments.`,
 		owner, repo, number)
 }
 

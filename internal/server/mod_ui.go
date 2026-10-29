@@ -280,7 +280,13 @@ func pageFuncs() template.FuncMap {
 			}
 			return id
 		},
-		"date":     func(t time.Time) string { return t.UTC().Format("2 Jan 2006, 15:04 UTC") },
+		"date": func(t time.Time) string { return t.UTC().Format("2 Jan 2006, 15:04 UTC") },
+		"datePtr": func(t *time.Time) string {
+			if t == nil {
+				return ""
+			}
+			return t.UTC().Format("2 Jan 2006, 15:04 UTC")
+		},
 		"lower":    strings.ToLower,
 		"duration": durationText,
 		"sha":      shortSHA,

@@ -595,6 +595,12 @@ textarea:focus {
   color: var(--muted);
 }
 
+.pill-continued {
+  background: var(--surface-muted);
+  border-color: var(--line);
+  color: var(--muted);
+}
+
 .scope-org {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 25%, transparent);
@@ -1130,6 +1136,20 @@ body.console .session-facts a:hover {
   text-decoration: underline;
 }
 
+body.console .continue-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+body.console .continue-hint {
+  color: var(--faint);
+}
+
 body.console .notice-bad {
   margin-bottom: 14px;
   padding: 8px 10px;
@@ -1173,6 +1193,8 @@ body.console.console-fixed .foot {
 
 body.console.console-fixed .page-head,
 body.console.console-fixed .session-facts,
+body.console.console-fixed .continue-form,
+body.console.console-fixed .notice,
 body.console.console-fixed .notice-bad {
   flex: none;
 }

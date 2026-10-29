@@ -255,3 +255,180 @@ func TestListReviewSessionsIsNewestFirstAndBounded(t *testing.T) {
 		t.Errorf("order = #%d, #%d, want #3, #2", sessions[0].PRNumber, sessions[1].PRNumber)
 	}
 }
+
+func TestReviewSessionContinuationRecordsTheAttempt(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	parent, err := db.CreateReviewSession(ctx, NewReviewSession{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+		Model:          "test-model",
+	})
+	if err != nil {
+		t.Fatalf("creating the parent session: %v", err)
+	}
+	if err := db.UpdateReviewSessionMetadata(ctx, parent.ID, "Fix the flap", "headsha1", "basesha1"); err != nil {
+		t.Fatalf("updating the parent metadata: %v", err)
+	}
+	outcome := ReviewOutcome{
+		Status:           ReviewFailed,
+		Summary:          "I had read the diff and was checking the retry loop.",
+		ToolCalls:        4,
+		Error:            "review session ended without submitting a review for acme/payments#42 after 6 steps and 4 tool calls (turn limit 6 reached)",
+		TurnLimitReached: true,
+	}
+	if err := db.FinishReviewSession(ctx, parent.ID, outcome); err != nil {
+		t.Fatalf("finishing the parent session: %v", err)
+	}
+
+	parent, err = db.ReviewSessionByID(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("reading the parent session: %v", err)
+	}
+	if !parent.TurnLimitReached {
+		t.Error("turn_limit_reached = false, want the recorded cause")
+	}
+	if parent.ParentSessionID != "" {
+		t.Errorf("parent_session_id = %q, want empty on a first attempt", parent.ParentSessionID)
+	}
+	if err := parent.Continuable(); err != nil {
+		t.Fatalf("the turn-limited session is not continuable: %v", err)
+	}
+
+	requestedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
+	child, err := db.CreateReviewSession(ctx, NewReviewSession{
+		InstallationID:  98765432,
+		OrgName:         "acme",
+		RepoName:        "payments",
+		PRNumber:        42,
+		Model:           "test-model",
+		ParentSessionID: parent.ID,
+		RequestedBy:     "alice",
+		RequestedAt:     &requestedAt,
+	})
+	if err != nil {
+		t.Fatalf("creating the continuation session: %v", err)
+	}
+	if child.ParentSessionID != parent.ID {
+		t.Errorf("parent_session_id = %q, want %q", child.ParentSessionID, parent.ID)
+	}
+	if child.RequestedBy != "alice" {
+		t.Errorf("requested_by = %q, want alice", child.RequestedBy)
+	}
+	if child.RequestedAt == nil || !child.RequestedAt.Equal(requestedAt) {
+		t.Errorf("requested_at = %v, want %v", child.RequestedAt, requestedAt)
+	}
+
+	found, err := db.ReviewSessionContinuation(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionContinuation returned error: %v", err)
+	}
+	if found == nil || found.ID != child.ID {
+		t.Fatalf("continuation = %+v, want session %s", found, child.ID)
+	}
+
+	none, err := db.ReviewSessionContinuation(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionContinuation(child) returned error: %v", err)
+	}
+	if none != nil {
+		t.Errorf("continuation of the child = %+v, want nil", none)
+	}
+}
+
+func TestReviewSessionContinuable(t *testing.T) {
+	cases := []struct {
+		name    string
+		session ReviewSession
+		want    error
+	}{
+		{
+			name:    "a turn-limited failure",
+			session: ReviewSession{Status: ReviewFailed, TurnLimitReached: true},
+		},
+		{
+			name:    "a failure recorded before the marker existed",
+			session: ReviewSession{Status: ReviewFailed, Error: "review session ended without submitting a review (turn limit 25 reached)"},
+		},
+		{
+			name:    "a session that submitted a review",
+			session: ReviewSession{Status: ReviewSucceeded, ReviewEvent: "COMMENT"},
+			want:    ErrReviewAlreadySubmitted,
+		},
+		{
+			name:    "a failed session that still submitted a review",
+			session: ReviewSession{Status: ReviewFailed, ReviewEvent: "COMMENT", TurnLimitReached: true},
+			want:    ErrReviewAlreadySubmitted,
+		},
+		{
+			name:    "a session that is still running",
+			session: ReviewSession{Status: ReviewRunning, TurnLimitReached: true},
+			want:    ErrReviewNotFailed,
+		},
+		{
+			name:    "a failure with another cause",
+			session: ReviewSession{Status: ReviewFailed, Error: "the GitHub App is not installed"},
+			want:    ErrReviewNotTurnLimited,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.session.Continuable(); !errors.Is(err, tc.want) {
+				t.Errorf("Continuable() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReviewTranscriptEventsKeepsWhatTheSessionLearned(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	session, err := db.CreateReviewSession(ctx, NewReviewSession{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+	})
+	if err != nil {
+		t.Fatalf("creating the session: %v", err)
+	}
+
+	now := time.Now()
+	events := []NewReviewEvent{
+		{Seq: 1, At: now, Type: "tool_call", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_metadata","args":{}}`)},
+		{Seq: 2, At: now, Type: "reasoning_delta", Payload: json.RawMessage(`{"delta":"thinking"}`)},
+		{Seq: 3, At: now, Type: "tool_result", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_metadata","result":"the change adds retries"}`)},
+		{Seq: 4, At: now, Type: "step_start", Payload: json.RawMessage(`{"step":2}`)},
+		{Seq: 5, At: now, Type: "message_end", Payload: json.RawMessage(`{"content":"I should check the retry bound."}`)},
+		{Seq: 6, At: now, Type: "compaction", Payload: json.RawMessage(`{"summary":"the retry helper is bounded"}`)},
+	}
+	if err := db.AppendReviewEvents(ctx, session.ID, events); err != nil {
+		t.Fatalf("appending events: %v", err)
+	}
+
+	all, err := db.ReviewTranscriptEvents(ctx, session.ID, 0)
+	if err != nil {
+		t.Fatalf("ReviewTranscriptEvents returned error: %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("transcript events = %d, want the four that carry context: %+v", len(all), all)
+	}
+	for i, want := range []string{"tool_call", "tool_result", "message_end", "compaction"} {
+		if all[i].Type != want {
+			t.Errorf("event %d is %q, want %q", i, all[i].Type, want)
+		}
+	}
+
+	recent, err := db.ReviewTranscriptEvents(ctx, session.ID, 2)
+	if err != nil {
+		t.Fatalf("ReviewTranscriptEvents(limit 2) returned error: %v", err)
+	}
+	if len(recent) != 2 || recent[0].Seq != 5 || recent[1].Seq != 6 {
+		t.Errorf("recent transcript = %+v, want seqs 5 and 6 in order", recent)
+	}
+}

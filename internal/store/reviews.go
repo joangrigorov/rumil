@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,10 +27,26 @@ const (
 	ReviewListMax       = 200
 	ReviewEventsDefault = 500
 	ReviewEventsMax     = 2000
+	// ReviewTranscriptMax bounds the tool calls and results a continuation
+	// carries into its prompt. The reads are newest first, so a session that
+	// emitted more than this keeps the part it was working on when it stopped.
+	ReviewTranscriptMax = 200
 )
 
 // ErrReviewSessionNotFound reports a session id that is not in the table.
 var ErrReviewSessionNotFound = errors.New("review session not found")
+
+// Reasons a session cannot be given a continuation attempt.
+var (
+	// ErrReviewAlreadySubmitted reports a session that said something about the
+	// pull request. Continuing it would submit a second review over the first.
+	ErrReviewAlreadySubmitted = errors.New("the review session already submitted a review")
+	// ErrReviewNotFailed reports a session that is still running.
+	ErrReviewNotFailed = errors.New("only a failed review session can be continued")
+	// ErrReviewNotTurnLimited reports a failure with another cause. Reusing the
+	// context would not address what stopped it.
+	ErrReviewNotTurnLimited = errors.New("the review session did not stop at the turn limit")
+)
 
 // ReviewSession is one run of the reviewer.
 type ReviewSession struct {
@@ -47,8 +65,18 @@ type ReviewSession struct {
 	ReviewEvent    string
 	ToolCalls      int
 	Error          string
-	StartedAt      time.Time
-	FinishedAt     *time.Time
+	// ParentSessionID is the attempt this session continues, empty for a first
+	// attempt at a pull request.
+	ParentSessionID string
+	// TurnLimitReached records that the session spent its whole step budget
+	// without submitting a review, which is the failure a continuation fixes.
+	TurnLimitReached bool
+	// RequestedBy and RequestedAt are who asked for a continuation and when.
+	// They are empty on a first attempt.
+	RequestedBy string
+	RequestedAt *time.Time
+	StartedAt   time.Time
+	FinishedAt  *time.Time
 }
 
 // NewReviewSession is what a worker knows when a review starts.
@@ -59,6 +87,10 @@ type NewReviewSession struct {
 	RepoName       string
 	PRNumber       int
 	Model          string
+	// ParentSessionID, RequestedBy and RequestedAt are set on a continuation.
+	ParentSessionID string
+	RequestedBy     string
+	RequestedAt     *time.Time
 }
 
 // ReviewOutcome is how a review ended.
@@ -68,6 +100,27 @@ type ReviewOutcome struct {
 	ReviewEvent string
 	ToolCalls   int
 	Error       string
+	// TurnLimitReached says the failure was the step budget, which is what
+	// makes the session continuable.
+	TurnLimitReached bool
+}
+
+// Continuable reports whether the session stopped at its turn limit and can be
+// given another attempt. A session that already submitted a review is refused
+// whatever its status: a continuation would submit a second review over it.
+func (s ReviewSession) Continuable() error {
+	if s.Status == ReviewSucceeded || s.ReviewEvent != "" {
+		return ErrReviewAlreadySubmitted
+	}
+	if s.Status != ReviewFailed {
+		return ErrReviewNotFailed
+	}
+	// A session recorded before the marker existed carries the cause in its
+	// error text, which is how its row still says why it stopped.
+	if !s.TurnLimitReached && !strings.Contains(s.Error, "turn limit") {
+		return ErrReviewNotTurnLimited
+	}
+	return nil
 }
 
 // ReviewSessionFilter selects a page of sessions.
@@ -97,15 +150,19 @@ type NewReviewEvent struct {
 const reviewSessionColumns = `id, coalesce(job_id::text, ''), installation_id, org_name, repo_name,
 	pr_number, coalesce(pr_title, ''), coalesce(head_sha, ''), coalesce(base_sha, ''), coalesce(model, ''),
 	status, coalesce(summary, ''), coalesce(review_event, ''), tool_calls, coalesce(error, ''),
+	coalesce(parent_session_id::text, ''), turn_limit_reached, coalesce(requested_by, ''), requested_at,
 	started_at, finished_at`
 
 // CreateReviewSession records the start of a review and returns the row.
 func (d *DB) CreateReviewSession(ctx context.Context, session NewReviewSession) (ReviewSession, error) {
 	row := d.pool.QueryRow(ctx, `
-		INSERT INTO review_sessions (job_id, installation_id, org_name, repo_name, pr_number, model)
-		VALUES (nullif($1, '')::uuid, $2, $3, $4, $5, nullif($6, ''))
+		INSERT INTO review_sessions (job_id, installation_id, org_name, repo_name, pr_number, model,
+			parent_session_id, requested_by, requested_at)
+		VALUES (nullif($1, '')::uuid, $2, $3, $4, $5, nullif($6, ''),
+			nullif($7, '')::uuid, nullif($8, ''), $9)
 		RETURNING `+reviewSessionColumns,
-		session.JobID, session.InstallationID, session.OrgName, session.RepoName, session.PRNumber, session.Model)
+		session.JobID, session.InstallationID, session.OrgName, session.RepoName, session.PRNumber, session.Model,
+		session.ParentSessionID, session.RequestedBy, session.RequestedAt)
 
 	record, err := scanReviewSession(row)
 	if err != nil {
@@ -147,9 +204,10 @@ func (d *DB) FinishReviewSession(ctx context.Context, id string, outcome ReviewO
 		    review_event = nullif($4, ''),
 		    tool_calls = $5,
 		    error = nullif($6, ''),
+		    turn_limit_reached = $7,
 		    finished_at = now()
 		WHERE id = $1`,
-		id, status, outcome.Summary, outcome.ReviewEvent, outcome.ToolCalls, outcome.Error)
+		id, status, outcome.Summary, outcome.ReviewEvent, outcome.ToolCalls, outcome.Error, outcome.TurnLimitReached)
 	if err != nil {
 		return fmt.Errorf("finishing review session %s: %w", id, err)
 	}
@@ -228,6 +286,28 @@ func (d *DB) ReviewSessionByID(ctx context.Context, id string) (ReviewSession, e
 	return session, nil
 }
 
+// ReviewSessionContinuation returns the latest session that continued
+// parentID, or nil when the parent has not been continued. A parent whose
+// continuation job failed before it started has no child and is reported as
+// not continued.
+func (d *DB) ReviewSessionContinuation(ctx context.Context, parentID string) (*ReviewSession, error) {
+	row := d.pool.QueryRow(ctx, `
+		SELECT `+reviewSessionColumns+`
+		FROM review_sessions
+		WHERE parent_session_id = $1
+		ORDER BY started_at DESC, id DESC
+		LIMIT 1`, parentID)
+
+	session, err := scanReviewSession(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the continuation of session %s: %w", parentID, err)
+	}
+	return &session, nil
+}
+
 // AppendReviewEvents stores a batch in one transaction. A repeated seq is
 // absorbed rather than failing the batch, so a writer that flushes after a
 // restart cannot take the session down with it.
@@ -294,6 +374,46 @@ func (d *DB) ReviewEventsAfter(ctx context.Context, sessionID string, after, lim
 	return events, nil
 }
 
+// ReviewTranscriptEvents returns the events that carry what a session learned,
+// oldest first, bounded to the most recent ones. Deltas and step boundaries are
+// left out: they say what the model was doing, and a continuation needs what it
+// had found. Reading newest first is what makes the bound keep the part the
+// session was working on when it stopped.
+func (d *DB) ReviewTranscriptEvents(ctx context.Context, sessionID string, limit int) ([]ReviewEvent, error) {
+	if limit <= 0 || limit > ReviewTranscriptMax {
+		limit = ReviewTranscriptMax
+	}
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT seq, at, type, payload
+		FROM review_events
+		WHERE session_id = $1
+		  AND type IN ('tool_call', 'tool_result', 'compaction', 'message_end', 'session_error')
+		ORDER BY seq DESC
+		LIMIT $2`, sessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("reading the transcript of session %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	events := make([]ReviewEvent, 0, limit)
+	for rows.Next() {
+		var event ReviewEvent
+		var payload []byte
+		if err := rows.Scan(&event.Seq, &event.At, &event.Type, &payload); err != nil {
+			return nil, fmt.Errorf("scanning a transcript event: %w", err)
+		}
+		event.Payload = payload
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading the transcript of session %s: %w", sessionID, err)
+	}
+
+	slices.Reverse(events)
+	return events, nil
+}
+
 // rowScanner is shared by a single-row query and a row of a result set, so the
 // column list and the scan stay in one place.
 type rowScanner interface {
@@ -306,6 +426,7 @@ func scanReviewSession(row rowScanner) (ReviewSession, error) {
 		&session.ID, &session.JobID, &session.InstallationID, &session.OrgName, &session.RepoName,
 		&session.PRNumber, &session.PRTitle, &session.HeadSHA, &session.BaseSHA, &session.Model,
 		&session.Status, &session.Summary, &session.ReviewEvent, &session.ToolCalls, &session.Error,
+		&session.ParentSessionID, &session.TurnLimitReached, &session.RequestedBy, &session.RequestedAt,
 		&session.StartedAt, &session.FinishedAt,
 	); err != nil {
 		return ReviewSession{}, err

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joangrigorov/rumil/internal/config"
+	"github.com/joangrigorov/rumil/internal/continuation"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
@@ -154,6 +155,8 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 		p.review(ctx, logger, job)
 	case eventIssueComment, eventReviewComment:
 		p.command(ctx, logger, job)
+	case continuation.EventType:
+		p.continuation(ctx, logger, job)
 	default:
 		logger.Info("the event needs no work")
 		p.finish(ctx, logger, job, true, nil)
@@ -218,7 +221,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 	var recorded *sessionObserver
 	var observer reviewer.Observer
 	if p.recorder != nil {
-		session, err := p.recorder.Start(reviewCtx, job, p.engine.ModelName())
+		session, err := p.recorder.Start(reviewCtx, newReviewSession(job, p.engine.ModelName()))
 		if err != nil {
 			logger.Warn("recording the review session failed", "error", err)
 		} else {
@@ -260,6 +263,120 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 	p.finish(ctx, logger, job, true, nil)
 }
 
+// continuation runs one admin-requested attempt at a session that stopped at
+// its turn limit. The attempt is a session row of its own, pointing at the
+// parent, so both records show it as a separate run.
+func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store.Job) {
+	request, err := continuation.Parse(job.Payload)
+	if err != nil {
+		logger.Error("reading the continuation request failed", "error", err)
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+
+	parent, err := p.jobs.ReviewSessionByID(ctx, request.SessionID)
+	if errors.Is(err, store.ErrReviewSessionNotFound) {
+		err = fmt.Errorf("review session %s does not exist", request.SessionID)
+	}
+	if err != nil {
+		logger.Error("reading the session to continue failed", "session_id", request.SessionID, "error", err)
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+	// The check is repeated here because the session may have submitted a
+	// review between the admin asking and a worker starting.
+	if err := parent.Continuable(); err != nil {
+		logger.Warn("refused a continuation", "session_id", parent.ID, "error", err)
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+
+	events, err := p.jobs.ReviewTranscriptEvents(ctx, parent.ID, store.ReviewTranscriptMax)
+	if err != nil {
+		logger.Error("reading the session transcript failed", "session_id", parent.ID, "error", err)
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+
+	continuationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	defer cancel()
+
+	var recorded *sessionObserver
+	var observer reviewer.Observer
+	if p.recorder != nil {
+		session, startErr := p.recorder.Start(continuationCtx, store.NewReviewSession{
+			JobID:           job.ID,
+			InstallationID:  parent.InstallationID,
+			OrgName:         parent.OrgName,
+			RepoName:        parent.RepoName,
+			PRNumber:        parent.PRNumber,
+			Model:           p.engine.ModelName(),
+			ParentSessionID: parent.ID,
+			RequestedBy:     request.RequestedBy,
+			RequestedAt:     &request.RequestedAt,
+		})
+		if startErr != nil {
+			logger.Warn("recording the continuation session failed", "error", startErr)
+		} else {
+			recorded = session
+			observer = session
+		}
+	}
+
+	result, reviewErr := p.engine.Review(continuationCtx, reviewer.Request{
+		Owner:    parent.OrgName,
+		Repo:     parent.RepoName,
+		Number:   parent.PRNumber,
+		Observer: observer,
+		Continuation: &reviewer.Continuation{
+			ParentSessionID: parent.ID,
+			HeadSHA:         parent.HeadSHA,
+			Summary:         parent.Summary,
+			Events:          events,
+			Turns:           request.Turns,
+		},
+	})
+	if recorded != nil {
+		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		recorded.Finish(finishCtx, sessionOutcome(result, reviewErr))
+		finishCancel()
+	}
+	if reviewErr != nil {
+		if classifyFailure(reviewErr) == jobRetry {
+			logger.Warn("continuation interrupted, the job returns to the queue on the next start", "error", reviewErr)
+			return
+		}
+		if errors.Is(reviewErr, context.DeadlineExceeded) {
+			logger.Error("continuation exceeded its budget and will not be retried", "error", reviewErr, "timeout", p.timeout)
+		} else {
+			logger.Error("continuation failed", "session_id", parent.ID, "error", reviewErr)
+		}
+		p.finish(ctx, logger, job, false, reviewErr)
+		return
+	}
+
+	logger.Info("continuation finished",
+		"parent_session_id", parent.ID,
+		"requested_by", request.RequestedBy,
+		"review_submitted", result.ReviewSubmitted,
+		"event", result.Event,
+		"tool_calls", result.ToolCalls,
+	)
+	p.finish(ctx, logger, job, true, nil)
+}
+
+// newReviewSession is what a review job knows when its session starts.
+func newReviewSession(job *store.Job, model string) store.NewReviewSession {
+	return store.NewReviewSession{
+		JobID:          job.ID,
+		InstallationID: job.InstallationID,
+		OrgName:        job.OrgName,
+		RepoName:       job.RepoName,
+		PRNumber:       job.PRNumber,
+		Model:          model,
+	}
+}
+
 // sessionOutcome is what the deck records for a finished review. A review the
 // engine interrupted is FAILED with its cause, so a session row cannot stay
 // RUNNING after the worker has stopped working on it.
@@ -268,10 +385,12 @@ func sessionOutcome(result *reviewer.Result, err error) store.ReviewOutcome {
 	if result != nil {
 		// A failed session keeps its partial text and tool count so the deck
 		// shows what the run did before it stopped, even though the status is
-		// FAILED.
+		// FAILED. The turn-limit marker is what the surfaces read to offer a
+		// continuation.
 		outcome.Summary = result.Summary
 		outcome.ReviewEvent = result.Event
 		outcome.ToolCalls = result.ToolCalls
+		outcome.TurnLimitReached = result.TurnLimitReached
 	}
 	if err != nil {
 		outcome.Status = store.ReviewFailed
