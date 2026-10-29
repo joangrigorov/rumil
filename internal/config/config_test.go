@@ -90,6 +90,53 @@ models:
 	if cfg.Server.Listen != DefaultListen {
 		t.Errorf("server.listen = %q, want %q", cfg.Server.Listen, DefaultListen)
 	}
+	if !cfg.Compaction.CompactionEnabled() {
+		t.Error("compaction is off by default, want it on")
+	}
+	if cfg.Compaction.TriggerTokens != DefaultCompactionTriggerTokens {
+		t.Errorf("compaction.trigger_tokens = %d, want %d", cfg.Compaction.TriggerTokens, DefaultCompactionTriggerTokens)
+	}
+	if cfg.Compaction.ReserveTokens != DefaultCompactionReserveTokens {
+		t.Errorf("compaction.reserve_tokens = %d, want %d", cfg.Compaction.ReserveTokens, DefaultCompactionReserveTokens)
+	}
+	if cfg.Compaction.KeepRecentTokens != DefaultCompactionKeepRecentTokens {
+		t.Errorf("compaction.keep_recent_tokens = %d, want %d", cfg.Compaction.KeepRecentTokens, DefaultCompactionKeepRecentTokens)
+	}
+}
+
+func TestCompactionSettings(t *testing.T) {
+	base := `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`
+
+	cfg := mustParse(t, base+"compaction:\n  enabled: true\n  trigger_tokens: 262144\n  reserve_tokens: 32768\n  keep_recent_tokens: 4096\n")
+	if !cfg.Compaction.CompactionEnabled() {
+		t.Error("CompactionEnabled() = false, want true")
+	}
+	if cfg.Compaction.TriggerTokens != 262144 {
+		t.Errorf("trigger_tokens = %d, want 262144", cfg.Compaction.TriggerTokens)
+	}
+	if cfg.Compaction.ReserveTokens != 32768 {
+		t.Errorf("reserve_tokens = %d, want 32768", cfg.Compaction.ReserveTokens)
+	}
+	if cfg.Compaction.KeepRecentTokens != 4096 {
+		t.Errorf("keep_recent_tokens = %d, want 4096", cfg.Compaction.KeepRecentTokens)
+	}
+
+	cfg = mustParse(t, base+"compaction:\n  enabled: false\n")
+	if cfg.Compaction.CompactionEnabled() {
+		t.Error("CompactionEnabled() = true, want false when explicitly disabled")
+	}
 }
 
 // worker.concurrency must be positive when it is set at all.
@@ -800,6 +847,66 @@ models:
       api_key: "k"
 `,
 			wantSub: "private_key",
+		},
+		{
+			name: "a negative compaction trigger",
+			doc: `
+compaction:
+  trigger_tokens: -1
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "compaction.trigger_tokens",
+		},
+		{
+			name: "a keep-recent budget as large as the trigger",
+			doc: `
+compaction:
+  trigger_tokens: 1000
+  keep_recent_tokens: 1000
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "compaction.keep_recent_tokens must be less than",
+		},
+		{
+			name: "a reserve as large as the trigger",
+			doc: `
+compaction:
+  trigger_tokens: 1000
+  reserve_tokens: 1000
+  keep_recent_tokens: 100
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`,
+			wantSub: "compaction.reserve_tokens must be less than",
 		},
 		{
 			name: "zero max agent turns",

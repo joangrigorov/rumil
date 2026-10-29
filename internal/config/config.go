@@ -42,6 +42,17 @@ const (
 	DefaultWorkerConcurrency = 4
 	// DefaultListen is the HTTP address of `rumil serve`.
 	DefaultListen = ":8080"
+
+	// DefaultCompactionTriggerTokens is when a session summarizes its older
+	// messages. 256K leaves a large working set in place and is well below the
+	// million-token context of the models Rumil is usually pointed at.
+	DefaultCompactionTriggerTokens = 256 * 1024
+	// DefaultCompactionReserveTokens is the output budget kept out of the
+	// trigger, so the session can still answer after the context grows.
+	DefaultCompactionReserveTokens = 16_384
+	// DefaultCompactionKeepRecentTokens is the most recent context that is
+	// never summarized.
+	DefaultCompactionKeepRecentTokens = 20_000
 )
 
 // GuidelinesRef values accepted by review.guidelines_ref.
@@ -62,12 +73,36 @@ type Config struct {
 	App        App        `yaml:"app"`
 	GitHub     GitHub     `yaml:"github"`
 	Review     Review     `yaml:"review"`
+	Compaction Compaction `yaml:"compaction"`
 	Memory     Memory     `yaml:"memory"`
 	Worker     Worker     `yaml:"worker"`
 	Server     Server     `yaml:"server"`
 	Models     Models     `yaml:"models"`
 	Database   Database   `yaml:"database"`
 	Moderation Moderation `yaml:"moderation"`
+}
+
+// Compaction controls how a session condenses its older messages when the
+// context grows. Rumil triggers it itself at TriggerTokens rather than leaving
+// it to the model registry, because the configured OpenAI-compatible model is
+// usually absent from kit's catalog and an unknown model never auto-compacts.
+type Compaction struct {
+	// Enabled is a pointer so that omitting the block turns compaction on,
+	// while an explicit false turns it off.
+	Enabled *bool `yaml:"enabled"`
+	// TriggerTokens is the estimated context size at which older messages are
+	// summarized. Nothing is compacted before this point.
+	TriggerTokens int `yaml:"trigger_tokens"`
+	// ReserveTokens is the output budget kept below TriggerTokens.
+	ReserveTokens int `yaml:"reserve_tokens"`
+	// KeepRecentTokens is the most recent context kept verbatim.
+	KeepRecentTokens int `yaml:"keep_recent_tokens"`
+}
+
+// CompactionEnabled reports whether sessions compact their context. It is on
+// unless the operator set compaction.enabled to false.
+func (c Compaction) CompactionEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // Worker tunes the review job pool of `rumil serve`.
@@ -249,6 +284,15 @@ func (c *Config) applyDefaults() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
 	}
+	if c.Compaction.TriggerTokens == 0 {
+		c.Compaction.TriggerTokens = DefaultCompactionTriggerTokens
+	}
+	if c.Compaction.ReserveTokens == 0 {
+		c.Compaction.ReserveTokens = DefaultCompactionReserveTokens
+	}
+	if c.Compaction.KeepRecentTokens == 0 {
+		c.Compaction.KeepRecentTokens = DefaultCompactionKeepRecentTokens
+	}
 }
 
 // Validate enforces the schema rules that v0.0.1 depends on: app limits, GitHub
@@ -274,6 +318,28 @@ func (c *Config) Validate() error {
 
 	if c.Worker.Concurrency < 1 {
 		return fmt.Errorf("worker.concurrency must be at least 1, got %d", c.Worker.Concurrency)
+	}
+
+	if c.Compaction.CompactionEnabled() {
+		if c.Compaction.TriggerTokens < 1 {
+			return fmt.Errorf("compaction.trigger_tokens must be at least 1, got %d", c.Compaction.TriggerTokens)
+		}
+		if c.Compaction.ReserveTokens < 1 {
+			return fmt.Errorf("compaction.reserve_tokens must be at least 1, got %d", c.Compaction.ReserveTokens)
+		}
+		if c.Compaction.KeepRecentTokens < 1 {
+			return fmt.Errorf("compaction.keep_recent_tokens must be at least 1, got %d", c.Compaction.KeepRecentTokens)
+		}
+		// Keeping as much as the trigger leaves nothing to summarize and would
+		// compact on every later step without reducing the context.
+		if c.Compaction.KeepRecentTokens >= c.Compaction.TriggerTokens {
+			return fmt.Errorf("compaction.keep_recent_tokens must be less than compaction.trigger_tokens (%d), got %d",
+				c.Compaction.TriggerTokens, c.Compaction.KeepRecentTokens)
+		}
+		if c.Compaction.ReserveTokens >= c.Compaction.TriggerTokens {
+			return fmt.Errorf("compaction.reserve_tokens must be less than compaction.trigger_tokens (%d), got %d",
+				c.Compaction.TriggerTokens, c.Compaction.ReserveTokens)
+		}
 	}
 
 	// A negative weight would rank an organization rule above the repository's

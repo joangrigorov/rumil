@@ -144,6 +144,8 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 	if err != nil {
 		return nil, fmt.Errorf("starting the synthesis session: %w", err)
 	}
+	stopCompaction := e.watchContext(ctx, session)
+	defer stopCompaction()
 	defer func() {
 		if closeErr := session.Close(); closeErr != nil {
 			e.logger.Warn("closing the synthesis session failed", "error", closeErr)

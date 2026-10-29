@@ -279,6 +279,8 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
+	stopCompaction := e.watchContext(ctx, session)
+	defer stopCompaction()
 	defer func() {
 		if closeErr := session.Close(); closeErr != nil {
 			e.logger.Warn("closing the review session failed", "error", closeErr)
@@ -320,6 +322,51 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		)
 	}
 	return &result, nil
+}
+
+// watchContext compacts the session when its estimated context reaches the
+// configured trigger. Kit's own AutoCompact reads the model's context window
+// from its catalog; the OpenAI-compatible models Rumil is pointed at are
+// usually absent there, so an unknown model would never trigger. Returning
+// the unregister function keeps the hook scoped to this session.
+func (e *Engine) watchContext(ctx context.Context, session *kit.Kit) func() {
+	if !e.cfg.Compaction.CompactionEnabled() {
+		return func() {}
+	}
+	return session.OnPrepareStep(kit.HookPriorityNormal, func(kit.PrepareStepHook) *kit.PrepareStepResult {
+		e.compactIfNeeded(ctx, session)
+		return nil
+	})
+}
+
+// compactIfNeeded summarizes the older context once the session reaches the
+// configured trigger. The context window handed to kit is the trigger plus the
+// response reserve, which is the budget the summary has to fit back into.
+func (e *Engine) compactIfNeeded(ctx context.Context, session *kit.Kit) {
+	compaction := e.cfg.Compaction
+	tokens := session.EstimateContextTokens()
+	if tokens < compaction.TriggerTokens {
+		return
+	}
+
+	result, err := session.Compact(ctx, &kit.CompactionOptions{
+		ContextWindow:    compaction.TriggerTokens + compaction.ReserveTokens,
+		ReserveTokens:    compaction.ReserveTokens,
+		KeepRecentTokens: compaction.KeepRecentTokens,
+	}, "")
+	if err != nil {
+		e.logger.Warn("compacting the session context failed", "error", err, "estimated_tokens", tokens)
+		return
+	}
+	if result == nil {
+		return
+	}
+	e.logger.Info("compacted the session context",
+		"estimated_tokens", tokens,
+		"original_tokens", result.OriginalTokens,
+		"compacted_tokens", result.CompactedTokens,
+		"messages_removed", result.MessagesRemoved,
+	)
 }
 
 // sessionOptions builds the kit session configuration: isolated from host

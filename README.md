@@ -234,6 +234,10 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `app.log_level` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on stderr |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |
 | `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
+| `compaction.enabled` | `true` | Whether a session summarizes its older context once it reaches `compaction.trigger_tokens`. On by default; set it to `false` to let the model's context window fill |
+| `compaction.trigger_tokens` | `262144` | The estimated context size at which older messages are summarized. Nothing is compacted before this point, so a 256K trigger leaves a large pull request's details in context |
+| `compaction.reserve_tokens` | `16384` | Output budget kept below the trigger, so the session can still answer after the context grows |
+| `compaction.keep_recent_tokens` | `20000` | The most recent context kept verbatim; older messages are replaced by a summary |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
