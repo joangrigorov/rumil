@@ -311,7 +311,7 @@ func TestT001_02_FirstChatProviderSelectedWhenDefaultOmitted(t *testing.T) {
 
 	h := newHarness(t, gh, llm, harnessOpts{})
 
-	if _, err := h.review(t); err != nil {
+	if _, err := h.review(t); err != nil && !errors.Is(err, ErrNoReviewSubmitted) {
 		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
 	}
 
@@ -526,7 +526,7 @@ func TestCompactionSummarizesAtTheConfiguredTrigger(t *testing.T) {
 		compaction: "compaction:\n  trigger_tokens: 60\n  reserve_tokens: 10\n  keep_recent_tokens: 10\n",
 	})
 
-	if _, err := h.review(t); err != nil {
+	if _, err := h.review(t); err != nil && !errors.Is(err, ErrNoReviewSubmitted) {
 		t.Fatalf("Review returned error: %v", err)
 	}
 	if !strings.Contains(h.logs.String(), "compacted the session context") {
@@ -544,9 +544,9 @@ func TestCompactionSummarizesAtTheConfiguredTrigger(t *testing.T) {
 	}
 }
 
-// T-001-07: a model stuck in a tool loop halts at max_agent_turns, logs a
-// warning, and returns cleanly instead of hanging.
-func TestT001_07_TurnLimitHaltsCleanly(t *testing.T) {
+// T-001-07: a model stuck in a tool loop halts at max_agent_turns. The session
+// produced no review, so it is an error rather than a successful run.
+func TestT001_07_TurnLimitIsAnError(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	for i := 0; i < 30; i++ {
@@ -556,23 +556,29 @@ func TestT001_07_TurnLimitHaltsCleanly(t *testing.T) {
 	h := newHarness(t, gh, llm, harnessOpts{maxTurns: 3})
 
 	res, err := h.review(t)
-	if err != nil {
-		t.Fatalf("Review returned error: %v, want a clean stop at the turn cap", err)
+	if !errors.Is(err, ErrNoReviewSubmitted) {
+		t.Fatalf("Review error = %v, want it to wrap ErrNoReviewSubmitted", err)
 	}
 	if res == nil {
 		t.Fatal("Review returned no result")
 	}
 	if !res.TurnLimitReached {
-		t.Errorf("TurnLimitReached = false, want true, tool calls: %d", res.ToolCalls)
+		t.Errorf("TurnLimitReached = false, want true, steps: %d", res.Steps)
 	}
 	if res.ReviewSubmitted {
 		t.Error("ReviewSubmitted = true, want no review from a loop that never submits")
 	}
+	if res.Steps != 3 {
+		t.Errorf("Steps = %d, want the session to stop at max_agent_turns (3)", res.Steps)
+	}
 	if res.ToolCalls != 3 {
-		t.Errorf("ToolCalls = %d, want the session to stop at max_agent_turns (3)", res.ToolCalls)
+		t.Errorf("ToolCalls = %d, want one tool call per step (3)", res.ToolCalls)
 	}
 	if llm.Count() != 3 {
-		t.Errorf("model requests = %d, want 3 (one per turn)", llm.Count())
+		t.Errorf("model requests = %d, want 3 (one per step)", llm.Count())
+	}
+	if !strings.Contains(err.Error(), "turn limit 3 reached") {
+		t.Errorf("error = %v, want it to name the turn limit", err)
 	}
 	if !strings.Contains(h.logs.String(), "ended without submitting a review") {
 		t.Errorf("logs do not warn about the exhausted turn budget:\n%s", h.logs.String())
@@ -587,6 +593,7 @@ func TestUnlimitedAgentTurnsRunsPastTheDefaultCap(t *testing.T) {
 	for i := 0; i < config.DefaultMaxAgentTurns+5; i++ {
 		llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "main.go"})
 	}
+	llm.QueueToolCall("submit_pr_review", map[string]any{"event": "COMMENT", "summary_body": "Looks fine."})
 	llm.QueueText("No further changes requested.")
 
 	h := newHarness(t, gh, llm, harnessOpts{unlimitedTurns: true})
@@ -595,14 +602,17 @@ func TestUnlimitedAgentTurnsRunsPastTheDefaultCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review returned error: %v", err)
 	}
+	if !res.ReviewSubmitted {
+		t.Error("ReviewSubmitted = false, want the run to reach submit_pr_review")
+	}
 	if res.TurnLimitReached {
 		t.Error("TurnLimitReached = true, want false with no cap")
 	}
-	if res.ToolCalls != config.DefaultMaxAgentTurns+5 {
-		t.Errorf("ToolCalls = %d, want all %d calls", res.ToolCalls, config.DefaultMaxAgentTurns+5)
+	if res.ToolCalls != config.DefaultMaxAgentTurns+6 {
+		t.Errorf("ToolCalls = %d, want all %d calls", res.ToolCalls, config.DefaultMaxAgentTurns+6)
 	}
-	if got := llm.Count(); got != config.DefaultMaxAgentTurns+6 {
-		t.Errorf("model requests = %d, want %d", got, config.DefaultMaxAgentTurns+6)
+	if got := llm.Count(); got != config.DefaultMaxAgentTurns+7 {
+		t.Errorf("model requests = %d, want %d", got, config.DefaultMaxAgentTurns+7)
 	}
 }
 

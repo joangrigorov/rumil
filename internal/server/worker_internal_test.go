@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/joangrigorov/rumil/internal/reviewer"
+	"github.com/joangrigorov/rumil/internal/store"
 )
 
 // A job that spent its own budget is recorded as failed rather than left
@@ -44,5 +47,30 @@ func TestClassifyFailure(t *testing.T) {
 				t.Errorf("classifyFailure(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// A session that produced no review is FAILED even though it has a partial
+// summary, and the partial text is still recorded for the observation deck.
+func TestSessionOutcomeFailsAnUnsubmittedReview(t *testing.T) {
+	result := &reviewer.Result{
+		Summary:   "I'll start by reading the pull request metadata.",
+		ToolCalls: 61,
+		Steps:     25,
+	}
+	err := fmt.Errorf("%w: the model stopped", reviewer.ErrNoReviewSubmitted)
+
+	outcome := sessionOutcome(result, err)
+	if outcome.Status != store.ReviewFailed {
+		t.Errorf("status = %q, want %q", outcome.Status, store.ReviewFailed)
+	}
+	if outcome.Error == "" {
+		t.Error("error is empty, want the cause recorded")
+	}
+	if outcome.Summary != result.Summary {
+		t.Errorf("summary = %q, want the partial text %q", outcome.Summary, result.Summary)
+	}
+	if outcome.ToolCalls != result.ToolCalls {
+		t.Errorf("tool calls = %d, want %d", outcome.ToolCalls, result.ToolCalls)
 	}
 }

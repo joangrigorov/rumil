@@ -280,6 +280,40 @@ func TestT010_01_ReviewRequestedIsQueuedAndReviewed(t *testing.T) {
 	}
 }
 
+// A review that never submits anything is a failed job. The worker used to
+// mark it COMPLETED, which is how a stuck session looked successful while
+// saying nothing about the pull request.
+func TestUnsubmittedReviewMarksTheJobFailed(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	for i := 0; i < 10; i++ {
+		llm.QueueToolCall("get_pr_metadata", nil)
+	}
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	body := reviewRequestedPayload("review_requested", "rumil[bot]", "Bot")
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	response := h.deliver(t, handler, "pull_request", "delivery-1", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202\nbody: %s", response.Code, response.Body.String())
+	}
+
+	pool := server.NewPool(h.db, h.engine(t, gh), "@rumil", 1, h.logger)
+	poolCtx, stopPool := context.WithCancel(context.Background())
+	pool.Start(poolCtx)
+	waitFor(t, "the job to fail", func() bool {
+		current, err := h.db.JobByDelivery(context.Background(), "delivery-1")
+		return err == nil && current != nil && current.Status == store.StatusFailed
+	})
+	stopPool()
+	pool.Wait()
+
+	if !bytes.Contains(h.logs.Bytes(), []byte("review failed")) {
+		t.Errorf("logs do not record the failed review:\n%s", h.logs.String())
+	}
+}
+
 // T-010-02: a delivery without a valid signature is rejected and writes
 // nothing.
 func TestT010_02_InvalidSignatureIsRejected(t *testing.T) {

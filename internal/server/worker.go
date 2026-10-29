@@ -250,14 +250,18 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 // engine interrupted is FAILED with its cause, so a session row cannot stay
 // RUNNING after the worker has stopped working on it.
 func sessionOutcome(result *reviewer.Result, err error) store.ReviewOutcome {
-	if err != nil {
-		return store.ReviewOutcome{Status: store.ReviewFailed, Error: err.Error()}
-	}
 	outcome := store.ReviewOutcome{Status: store.ReviewSucceeded}
 	if result != nil {
+		// A failed session keeps its partial text and tool count so the deck
+		// shows what the run did before it stopped, even though the status is
+		// FAILED.
 		outcome.Summary = result.Summary
 		outcome.ReviewEvent = result.Event
 		outcome.ToolCalls = result.ToolCalls
+	}
+	if err != nil {
+		outcome.Status = store.ReviewFailed
+		outcome.Error = err.Error()
 	}
 	return outcome
 }

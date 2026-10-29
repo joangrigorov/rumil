@@ -48,6 +48,8 @@ type Result struct {
 	SkippedDuplicates int
 	// ToolCalls counts the tool calls the session executed.
 	ToolCalls int
+	// Steps counts the model steps the session took.
+	Steps int
 	// TurnLimitReached is true when the session used its whole turn budget
 	// without submitting a review.
 	TurnLimitReached bool
@@ -92,6 +94,11 @@ func NewEngine(cfg *config.Config, logger *slog.Logger, baseURL string, db *stor
 
 // ErrHandleMismatch reports that app.bot_handle is not the App's own slug.
 var ErrHandleMismatch = errors.New("app.bot_handle is not this App's slug")
+
+// ErrNoReviewSubmitted reports that a session ended without reaching GitHub.
+// A review that produced no review is a failure, not a successful run with a
+// warning: nothing was said about the pull request.
+var ErrNoReviewSubmitted = errors.New("review session ended without submitting a review")
 
 // CheckApp holds the configuration against the App's own record and returns
 // what the record says about the rest of it.
@@ -279,6 +286,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
+	stopSteps := session.OnPrepareStep(kit.HookPriorityNormal, func(step kit.PrepareStepHook) *kit.PrepareStepResult {
+		mu.Lock()
+		if step.StepNumber+1 > result.Steps {
+			result.Steps = step.StepNumber + 1
+		}
+		mu.Unlock()
+		return nil
+	})
+	defer stopSteps()
 	stopCompaction := e.watchContext(ctx, session)
 	defer stopCompaction()
 	defer func() {
@@ -312,15 +328,23 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 
 	if !result.ReviewSubmitted {
 		// kit stops the tool loop at Options.MaxSteps and returns whatever text
-		// the model produced, so the engine detects the exhausted budget here
-		// and reports it instead of failing the container.
+		// the model produced. Nothing was said about the pull request, so this
+		// is an error: the worker marks the job FAILED and the session FAILED
+		// instead of reporting a successful review with no review in it.
 		maxTurns := e.cfg.App.MaxTurns()
-		result.TurnLimitReached = maxTurns > 0 && result.ToolCalls >= maxTurns
+		result.TurnLimitReached = maxTurns > 0 && result.Steps >= maxTurns
 		e.logger.Warn("review session ended without submitting a review",
+			"steps", result.Steps,
 			"tool_calls", result.ToolCalls,
 			"max_agent_turns", maxTurns,
 			"turn_limit_reached", result.TurnLimitReached,
 		)
+		limit := ""
+		if result.TurnLimitReached {
+			limit = fmt.Sprintf(" (turn limit %d reached)", maxTurns)
+		}
+		return &result, fmt.Errorf("%w for %s/%s#%d after %d steps and %d tool calls%s",
+			ErrNoReviewSubmitted, req.Owner, req.Repo, req.Number, result.Steps, result.ToolCalls, limit)
 	}
 	return &result, nil
 }
