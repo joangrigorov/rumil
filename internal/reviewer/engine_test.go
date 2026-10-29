@@ -851,3 +851,118 @@ func TestT002_05_HugeGuidelinesAreTruncated(t *testing.T) {
 		t.Errorf("a 5 MB file should be read through the blob API, requests:\n%s", strings.Join(gh.RequestLog(), "\n"))
 	}
 }
+
+// A continuation starts the model on what the earlier attempt learned, and
+// asks it to finish rather than to start over.
+func TestContinuationCarriesStoredContextToTheModel(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	submitComment(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	res, err := h.engine.Review(context.Background(), Request{
+		Owner:  gh.Owner,
+		Repo:   gh.Repo,
+		Number: gh.Number,
+		Continuation: &Continuation{
+			ParentSessionID: "parent",
+			HeadSHA:         gh.HeadSHA,
+			Summary:         "I had read the diff and was checking the retry loop.",
+			Events: []store.ReviewEvent{
+				{Seq: 1, Type: "tool_call", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_diff","args":{}}`)},
+				{Seq: 2, Type: "tool_result", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_diff","result":"the settlement retry is unbounded"}`)},
+			},
+			Turns: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+	if !res.ReviewSubmitted {
+		t.Error("ReviewSubmitted = false, want the continuation to finish with a review")
+	}
+
+	prompt := systemPrompt(t, llm)
+	for _, want := range []string{
+		"<previous_attempt>",
+		"I had read the diff and was checking the retry loop.",
+		"the settlement retry is unbounded",
+		"This session continues an earlier attempt",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the continuation prompt lost %q:\n%s", want, prompt)
+		}
+	}
+	if user := llm.Requests()[0].UserPrompt; !strings.Contains(user, "Continue the review") {
+		t.Errorf("the user prompt does not continue the review:\n%s", user)
+	}
+}
+
+// The continuation's turns are its own: the configured budget is not what the
+// second attempt gets.
+func TestContinuationBudgetIsItsOwn(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	for i := 0; i < 10; i++ {
+		llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "main.go"})
+	}
+
+	h := newHarness(t, gh, llm, harnessOpts{maxTurns: 10})
+
+	res, err := h.engine.Review(context.Background(), Request{
+		Owner:  gh.Owner,
+		Repo:   gh.Repo,
+		Number: gh.Number,
+		Continuation: &Continuation{
+			ParentSessionID: "parent",
+			HeadSHA:         gh.HeadSHA,
+			Turns:           2,
+		},
+	})
+	if !errors.Is(err, ErrNoReviewSubmitted) {
+		t.Fatalf("Review error = %v, want it to wrap ErrNoReviewSubmitted", err)
+	}
+	if res == nil || !res.TurnLimitReached {
+		t.Fatalf("TurnLimitReached = %v, want the continuation's own limit", res)
+	}
+	if res.Steps != 2 {
+		t.Errorf("Steps = %d, want the continuation's budget of 2", res.Steps)
+	}
+	if !strings.Contains(err.Error(), "turn limit 2 reached") {
+		t.Errorf("error = %v, want it to name the continuation budget", err)
+	}
+	if got := llm.Count(); got != 2 {
+		t.Errorf("model requests = %d, want 2", got)
+	}
+}
+
+// The stored transcript describes the commit the earlier attempt reviewed. A
+// moved pull request is refused before a model call spends anything on stale
+// context.
+func TestContinuationRefusesAMovedHead(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	_, err := h.engine.Review(context.Background(), Request{
+		Owner:  gh.Owner,
+		Repo:   gh.Repo,
+		Number: gh.Number,
+		Continuation: &Continuation{
+			ParentSessionID: "parent",
+			HeadSHA:         "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+			Turns:           3,
+		},
+	})
+	if !errors.Is(err, ErrHeadMoved) {
+		t.Fatalf("Review error = %v, want it to wrap ErrHeadMoved", err)
+	}
+	if !strings.Contains(err.Error(), shortCommit("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")) {
+		t.Errorf("error = %v, want it to name the earlier commit", err)
+	}
+	if llm.Count() != 0 {
+		t.Errorf("model requests = %d, want none for a moved head", llm.Count())
+	}
+}

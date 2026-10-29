@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/continuation"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -47,6 +49,7 @@ func (s *SessionsUI) Recorder() *SessionRecorder {
 func (s *SessionsUI) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/sessions", s.auth.authorize(s.list))
 	mux.HandleFunc("GET /ui/sessions/{id}", s.auth.authorize(s.detail))
+	mux.HandleFunc("POST /ui/sessions/{id}/continue", s.auth.authorize(s.auth.sameSite(s.continueSession)))
 	mux.HandleFunc("GET /api/sessions/{id}/events", s.auth.authorize(s.events))
 	mux.HandleFunc("GET /api/sessions/{id}/events.json", s.auth.authorize(s.eventsJSON))
 }
@@ -74,6 +77,17 @@ type reviewSessionPage struct {
 	Fixed   bool
 	Session store.ReviewSession
 	Live    bool
+	// Parent and Continuation are the two attempts of the same review, when
+	// they exist, so the page can link them.
+	Parent       *store.ReviewSession
+	Continuation *store.ReviewSession
+	// CanContinue is set only when the session stopped at its turn limit and
+	// has not been continued yet.
+	CanContinue bool
+	// ContinuationQueued and ContinuationFailed report a continuation request
+	// that has not produced a session yet.
+	ContinuationQueued bool
+	ContinuationFailed bool
 }
 
 func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
@@ -136,13 +150,159 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writePage(w, r, sessionTemplates, "session.html", reviewSessionPage{
+	page := reviewSessionPage{
 		Title:   fmt.Sprintf("%s/%s#%d", session.OrgName, session.RepoName, session.PRNumber),
 		Section: "sessions",
 		Fixed:   true,
 		Session: session,
 		Live:    session.Status == store.ReviewRunning,
+	}
+
+	if session.ParentSessionID != "" {
+		parent, parentErr := s.db.ReviewSessionByID(r.Context(), session.ParentSessionID)
+		switch {
+		case parentErr == nil:
+			page.Parent = &parent
+		case errors.Is(parentErr, store.ErrReviewSessionNotFound):
+			// The parent was removed; the session still stands on its own.
+		default:
+			s.logger.Warn("reading the parent session failed", "session_id", session.ID, "error", parentErr)
+		}
+	}
+
+	if session.Continuable() == nil {
+		child, childErr := s.db.ReviewSessionContinuation(r.Context(), session.ID)
+		if childErr != nil {
+			s.logger.Warn("reading the continuation session failed", "session_id", session.ID, "error", childErr)
+		} else if child != nil {
+			page.Continuation = child
+		} else {
+			// The job is what a queued request looks like before its session
+			// exists, and what a refused request leaves behind.
+			job, jobErr := s.db.JobByDelivery(r.Context(), continuation.DeliveryID(session.ID))
+			switch {
+			case jobErr != nil:
+				s.logger.Warn("reading the continuation job failed", "session_id", session.ID, "error", jobErr)
+			case job == nil:
+				page.CanContinue = true
+			case job.Status == store.StatusFailed:
+				page.ContinuationFailed = true
+			default:
+				page.ContinuationQueued = true
+			}
+		}
+	}
+
+	s.writePage(w, r, sessionTemplates, "session.html", page)
+}
+
+// continueSession queues another attempt at a session that stopped at its turn
+// limit. The work is a job of its own, so the answer is a queued continuation
+// and a new session appears when a worker picks it up.
+func (s *SessionsUI) continueSession(w http.ResponseWriter, r *http.Request) {
+	if !s.readContinueForm(w, r) {
+		return
+	}
+
+	session, err := s.db.ReviewSessionByID(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrReviewSessionNotFound) {
+		s.auth.refuse(w, r, http.StatusNotFound, "no such review session")
+		return
+	}
+	if err != nil {
+		s.logger.Error("reading a review session failed", "error", err)
+		s.auth.refuse(w, r, http.StatusInternalServerError, "the session could not be read")
+		return
+	}
+
+	turns, err := continuationTurns(r)
+	if err != nil {
+		s.auth.refuse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	request, err := continuation.Queue(r.Context(), s.db, session, turns, requestedByOf(r))
+	switch {
+	case errors.Is(err, continuation.ErrAlreadyQueued):
+		s.auth.refuse(w, r, http.StatusConflict, "this session already has a continuation")
+		return
+	case errors.Is(err, store.ErrReviewAlreadySubmitted):
+		s.auth.refuse(w, r, http.StatusConflict, "this session already submitted a review")
+		return
+	case errors.Is(err, store.ErrReviewNotFailed):
+		s.auth.refuse(w, r, http.StatusConflict, "only a failed session can be continued")
+		return
+	case errors.Is(err, store.ErrReviewNotTurnLimited):
+		s.auth.refuse(w, r, http.StatusConflict, "this session did not stop at the turn limit")
+		return
+	case err != nil:
+		s.logger.Error("queueing a continuation failed", "session_id", session.ID, "error", err)
+		s.auth.refuse(w, r, http.StatusInternalServerError, "the continuation could not be queued")
+		return
+	}
+
+	s.logger.Info("queued a review continuation",
+		"session_id", session.ID,
+		"turns", request.Turns,
+		"requested_by", request.RequestedBy,
+	)
+
+	if wantsHTML(r) {
+		http.Redirect(w, r, "/ui/sessions/"+session.ID, http.StatusSeeOther)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"session_id":   session.ID,
+		"turns":        request.Turns,
+		"requested_by": request.RequestedBy,
+		"requested_at": request.RequestedAt,
 	})
+}
+
+// readContinueForm parses the body a continuation arrives in. The body may be
+// empty, which takes the configured budget; anything that is not the form
+// encoding is refused rather than read as no instructions.
+func (s *SessionsUI) readContinueForm(w http.ResponseWriter, r *http.Request) bool {
+	if contentType := r.Header.Get("Content-Type"); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || mediaType != "application/x-www-form-urlencoded" {
+			s.auth.refuse(w, r, http.StatusUnsupportedMediaType,
+				"a continuation is sent as application/x-www-form-urlencoded")
+			return false
+		}
+	}
+	if err := r.ParseForm(); err != nil {
+		s.auth.refuse(w, r, http.StatusBadRequest, "malformed form")
+		return false
+	}
+	return true
+}
+
+// continuationTurns reads the optional turns field. An absent or zero value
+// uses the configured budget, which is what the dashboard button sends.
+func continuationTurns(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.PostFormValue("turns"))
+	if raw == "" {
+		return 0, nil
+	}
+	turns, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("turns has to be a whole number")
+	}
+	if turns < 0 {
+		return 0, fmt.Errorf("turns has to be zero for the configured budget or positive")
+	}
+	return turns, nil
+}
+
+// requestedByOf names the person asking. The credential is shared, so the page
+// cannot know who used it; an API client may name somebody with requested_by,
+// and the default says what the surface actually knows.
+func requestedByOf(r *http.Request) string {
+	if name := strings.TrimSpace(r.PostFormValue("requested_by")); name != "" {
+		return name
+	}
+	return "admin-token"
 }
 
 // writePage renders one operator page with the shared headers.

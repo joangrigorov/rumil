@@ -1,9 +1,8 @@
 -- +goose Up
--- The whole schema lives in this one migration until 0.1.0. Rumil is still
--- being built and holds no data worth keeping, so a schema change edits this
--- file rather than adding a migration that unpicks an earlier one. A second
--- migration appears only when there is data to keep, and never a destructive
--- one (§4).
+-- The initial schema lived in this one migration until the first release a
+-- deployed instance had to upgrade through. A later schema change gets its own
+-- migration, because editing this file would leave an already-migrated
+-- database behind; the migrations are never destructive (§4).
 --
 -- The schema is pinned because an extension is database-wide: a bare
 -- CREATE EXTENSION installs into the first schema on the caller's search_path,

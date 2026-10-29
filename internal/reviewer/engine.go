@@ -41,6 +41,10 @@ type Request struct {
 	// deck. It travels with the request rather than the engine because workers
 	// share one engine and run sessions concurrently.
 	Observer Observer
+	// Continuation, when set, resumes an earlier attempt that stopped at its
+	// turn limit. It carries what the earlier attempt learned and this
+	// attempt's own step budget.
+	Continuation *Continuation
 }
 
 // Result reports what the review produced.
@@ -108,6 +112,11 @@ var ErrHandleMismatch = errors.New("app.bot_handle is not this App's slug")
 // A review that produced no review is a failure, not a successful run with a
 // warning: nothing was said about the pull request.
 var ErrNoReviewSubmitted = errors.New("review session ended without submitting a review")
+
+// ErrHeadMoved reports that a continuation's pull request is no longer at the
+// commit the earlier attempt reviewed. Continuing would judge code whose diff
+// the stored transcript does not describe.
+var ErrHeadMoved = errors.New("the pull request moved since the earlier attempt")
 
 // CheckApp holds the configuration against the App's own record and returns
 // what the record says about the rest of it.
@@ -182,6 +191,26 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	}
 	if observer != nil {
 		observer.Observe(ctx, sessionMetadataEvent(meta.Title, meta.HeadSHA, meta.BaseSHA, len(meta.ChangedFiles)))
+	}
+
+	// A continuation gets its own budget, which is what makes it a second
+	// attempt rather than the same run resumed at zero.
+	maxTurns := e.cfg.App.MaxTurns()
+	if req.Continuation != nil {
+		if req.Continuation.Turns > 0 {
+			maxTurns = req.Continuation.Turns
+		}
+		if req.Continuation.HeadSHA != "" && meta.HeadSHA != req.Continuation.HeadSHA {
+			return nil, fmt.Errorf("%w: the earlier attempt reviewed %s and the pull request is now at %s, so start a fresh review",
+				ErrHeadMoved, shortCommit(req.Continuation.HeadSHA), shortCommit(meta.HeadSHA))
+		}
+		if observer != nil {
+			observer.Observe(ctx, Event{Type: "continuation_start", At: time.Now(), Payload: map[string]any{
+				"parent_session_id": req.Continuation.ParentSessionID,
+				"max_steps":         maxTurns,
+				"transcript_events": len(req.Continuation.Events),
+			}})
+		}
 	}
 	guidelinesRef := meta.BaseSHA
 	if e.cfg.Review.GuidelinesRef == config.GuidelinesRefHead {
@@ -291,7 +320,8 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		MemoryOn:       memoryOn,
 		PriorHistory:   priorHistory,
 		ResolveThreads: resolveThreads,
-	}), sessionTools, e.cfg.App.MaxTurns(), observer != nil))
+		Continuation:   ContinuationBlock(req.Continuation),
+	}), sessionTools, maxTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
 	}
@@ -320,7 +350,11 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		defer unsubscribe()
 	}
 
-	text, promptErr := session.Prompt(ctx, ReviewUserPrompt(req.Owner, req.Repo, req.Number))
+	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number)
+	if req.Continuation != nil {
+		userPrompt = ContinuationUserPrompt(req.Owner, req.Repo, req.Number)
+	}
+	text, promptErr := session.Prompt(ctx, userPrompt)
 
 	mu.Lock()
 	result.Summary = text
@@ -340,7 +374,6 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		// the model produced. Nothing was said about the pull request, so this
 		// is an error: the worker marks the job FAILED and the session FAILED
 		// instead of reporting a successful review with no review in it.
-		maxTurns := e.cfg.App.MaxTurns()
 		result.TurnLimitReached = maxTurns > 0 && result.Steps >= maxTurns
 		e.logger.Warn("review session ended without submitting a review",
 			"steps", result.Steps,

@@ -39,6 +39,9 @@ type Request struct {
 	// SystemPrompt is the concatenated system message, which shows what the
 	// reviewer prompt carried into the session.
 	SystemPrompt string
+	// UserPrompt is the concatenated user message, which is the task the
+	// session was asked to do.
+	UserPrompt string
 	// ToolCallNames lists the tool calls requested by the assistant messages in
 	// this request, which shows whether tool results were fed back.
 	ToolCallNames []string
@@ -246,6 +249,7 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 	req.Tools = toolNamesFrom(body)
 	req.ToolCallNames = toolCallNamesFrom(body)
 	req.SystemPrompt = systemPromptFrom(body)
+	req.UserPrompt = userPromptFrom(body)
 
 	f.mu.Lock()
 	f.requests = append(f.requests, req)
@@ -313,11 +317,19 @@ func toolCallNamesFrom(body map[string]any) []string {
 }
 
 func systemPromptFrom(body map[string]any) string {
+	return messageContentFrom(body, "system")
+}
+
+func userPromptFrom(body map[string]any) string {
+	return messageContentFrom(body, "user")
+}
+
+func messageContentFrom(body map[string]any, role string) string {
 	messages, _ := body["messages"].([]any)
 	var parts []string
 	for _, m := range messages {
 		msg, _ := m.(map[string]any)
-		if role, _ := msg["role"].(string); role != "system" {
+		if got, _ := msg["role"].(string); got != role {
 			continue
 		}
 		if content, ok := msg["content"].(string); ok {

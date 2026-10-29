@@ -93,15 +93,8 @@ func NewSessionRecorder(db *store.DB, broker *broker, logger *slog.Logger) *Sess
 // Start records the session row and returns the observer to attach to the
 // review request. A failure to record leaves the review runnable: observation
 // is a trace, and a database that cannot take one does not fail the review.
-func (r *SessionRecorder) Start(ctx context.Context, job *store.Job, model string) (*sessionObserver, error) {
-	session, err := r.db.CreateReviewSession(ctx, store.NewReviewSession{
-		JobID:          job.ID,
-		InstallationID: job.InstallationID,
-		OrgName:        job.OrgName,
-		RepoName:       job.RepoName,
-		PRNumber:       job.PRNumber,
-		Model:          model,
-	})
+func (r *SessionRecorder) Start(ctx context.Context, request store.NewReviewSession) (*sessionObserver, error) {
+	session, err := r.db.CreateReviewSession(ctx, request)
 	if err != nil {
 		return nil, err
 	}

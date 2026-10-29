@@ -12,13 +12,26 @@
   </div>
 </header>
 
+{{if .ContinuationQueued}}<p class="notice" role="status">Continuation queued. It appears as a new session when a worker picks it up.</p>{{end}}
+{{if .ContinuationFailed}}<p class="notice notice-bad">The continuation request failed before it started. Its cause is on the job record.</p>{{end}}
+
 <div class="session-facts">
   {{if .Session.Model}}<span>model <code>{{.Session.Model}}</code></span>{{end}}
   <span id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</span>
   <span>started {{date .Session.StartedAt}}</span>
   {{if .Session.HeadSHA}}<span>head <code>{{sha .Session.HeadSHA}}</code></span>{{end}}
+  {{if .Parent}}<span>continued from <a href="/ui/sessions/{{.Parent.ID}}"><code>{{short .Parent.ID}}</code></a></span>{{end}}
+  {{if .Session.RequestedBy}}<span>requested by {{.Session.RequestedBy}}{{if .Session.RequestedAt}} at {{datePtr .Session.RequestedAt}}{{end}}</span>{{end}}
+  {{if .Continuation}}<span>continued as <a href="/ui/sessions/{{.Continuation.ID}}"><code>{{short .Continuation.ID}}</code> ({{.Continuation.Status}})</a></span>{{end}}
   <a href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">open on GitHub</a>
 </div>
+
+{{if .CanContinue}}
+<form class="continue-form" method="post" action="/ui/sessions/{{.Session.ID}}/continue">
+  <button class="btn btn-primary" type="submit">Continue review</button>
+  <span class="continue-hint">Another attempt with the configured turn budget, reusing this session's tool results and partial summary.</span>
+</form>
+{{end}}
 
 {{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
 

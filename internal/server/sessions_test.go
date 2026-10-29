@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/continuation"
 	"github.com/joangrigorov/rumil/internal/server"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
@@ -316,5 +318,310 @@ func TestWorkerRecordsAReviewSession(t *testing.T) {
 	}
 	if last := events[len(events)-1]; last.Type != "session_end" {
 		t.Errorf("the last event is %q, want session_end", last.Type)
+	}
+}
+
+// newSessionWithOutcome records a finished session with the outcome a test
+// needs. It is separate from newReviewSession because a failed session that
+// never submitted must not carry a review event.
+func newSessionWithOutcome(t *testing.T, h *harness, outcome store.ReviewOutcome) store.ReviewSession {
+	t.Helper()
+
+	ctx := context.Background()
+	session, err := h.db.CreateReviewSession(ctx, store.NewReviewSession{
+		InstallationID: h.cfg.GitHub.InstallationID,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+		Model:          "test-model",
+	})
+	if err != nil {
+		t.Fatalf("creating a review session: %v", err)
+	}
+	if outcome.Status != store.ReviewRunning {
+		if err := h.db.FinishReviewSession(ctx, session.ID, outcome); err != nil {
+			t.Fatalf("finishing the review session: %v", err)
+		}
+	}
+	stored, err := h.db.ReviewSessionByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reading the review session: %v", err)
+	}
+	return stored
+}
+
+// newTurnLimitedSession is the failure a continuation is for, with the tool
+// context the earlier attempt had gathered.
+func newTurnLimitedSession(t *testing.T, h *harness, headSHA string) store.ReviewSession {
+	t.Helper()
+
+	session := newSessionWithOutcome(t, h, store.ReviewOutcome{
+		Status:           store.ReviewFailed,
+		Summary:          "I had started reading the diff.",
+		ToolCalls:        2,
+		Error:            "review session ended without submitting a review for acme/payments#42 after 6 steps and 2 tool calls (turn limit 6 reached)",
+		TurnLimitReached: true,
+	})
+	ctx := context.Background()
+	if err := h.db.UpdateReviewSessionMetadata(ctx, session.ID, "Fix the flap", headSHA, "base"); err != nil {
+		t.Fatalf("updating the session metadata: %v", err)
+	}
+	now := time.Now().Add(-time.Minute)
+	if err := h.db.AppendReviewEvents(ctx, session.ID, []store.NewReviewEvent{
+		{Seq: 1, At: now, Type: "tool_call", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_diff","args":{}}`)},
+		{Seq: 2, At: now.Add(time.Second), Type: "tool_result", Payload: json.RawMessage(`{"id":"call_1","name":"get_pr_diff","result":"the settlement retry is unbounded"}`)},
+	}); err != nil {
+		t.Fatalf("appending the session transcript: %v", err)
+	}
+	stored, err := h.db.ReviewSessionByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("reading the updated session: %v", err)
+	}
+	return stored
+}
+
+func TestObservationDeckOffersContinuationOnlyAtTheTurnLimit(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+
+	turnLimited := newTurnLimitedSession(t, h, gh.HeadSHA)
+	otherFailure := newSessionWithOutcome(t, h, store.ReviewOutcome{
+		Status: store.ReviewFailed,
+		Error:  "the GitHub App is not installed",
+	})
+	succeeded := newSessionWithOutcome(t, h, store.ReviewOutcome{
+		Status:      store.ReviewSucceeded,
+		ReviewEvent: "COMMENT",
+	})
+
+	offered := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+turnLimited.ID, adminToken, nil, "text/html")
+	if offered.Code != http.StatusOK {
+		t.Fatalf("detail status = %d, want 200 (body: %s)", offered.Code, offered.Body.String())
+	}
+	for _, want := range []string{
+		"Continue review",
+		`action="/ui/sessions/` + turnLimited.ID + `/continue"`,
+		"Another attempt with the configured turn budget",
+	} {
+		if !strings.Contains(offered.Body.String(), want) {
+			t.Errorf("the turn-limited session does not offer a continuation (%q):\n%s", want, offered.Body.String())
+		}
+	}
+
+	for name, session := range map[string]store.ReviewSession{
+		"another failure": otherFailure,
+		"succeeded":       succeeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+session.ID, adminToken, nil, "text/html")
+			if response.Code != http.StatusOK {
+				t.Fatalf("detail status = %d, want 200", response.Code)
+			}
+			if strings.Contains(response.Body.String(), "Continue review") {
+				t.Errorf("a session that is not turn-limited offers a continuation:\n%s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestObservationDeckQueuesAContinuation(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+	session := newTurnLimitedSession(t, h, gh.HeadSHA)
+	path := "/ui/sessions/" + session.ID + "/continue"
+
+	withoutToken := moderatedRequest(t, handler, http.MethodPost, path, "", nil, "text/html")
+	if withoutToken.Code != http.StatusUnauthorized {
+		t.Errorf("a continuation without a token = %d, want 401", withoutToken.Code)
+	}
+	if job, err := h.db.JobByDelivery(context.Background(), continuation.DeliveryID(session.ID)); err != nil {
+		t.Fatalf("reading the job: %v", err)
+	} else if job != nil {
+		t.Error("an unauthenticated continuation queued a job")
+	}
+
+	crossSite := moderatedRequestWith(t, handler, http.MethodPost, path, adminToken, nil, "text/html",
+		map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if crossSite.Code != http.StatusForbidden {
+		t.Errorf("a cross-site continuation = %d, want 403", crossSite.Code)
+	}
+
+	response := moderatedRequest(t, handler, http.MethodPost, path, adminToken, nil, "text/html")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("continuation status = %d, want 303 (body: %s)", response.Code, response.Body.String())
+	}
+	if location := response.Header().Get("Location"); location != "/ui/sessions/"+session.ID {
+		t.Errorf("Location = %q, want the session page", location)
+	}
+
+	job, err := h.db.JobByDelivery(context.Background(), continuation.DeliveryID(session.ID))
+	if err != nil {
+		t.Fatalf("reading the queued job: %v", err)
+	}
+	if job == nil {
+		t.Fatal("no continuation job was queued")
+	}
+	if job.EventType != continuation.EventType {
+		t.Errorf("event_type = %q, want %q", job.EventType, continuation.EventType)
+	}
+	request, err := continuation.Parse(job.Payload)
+	if err != nil {
+		t.Fatalf("parsing the queued request: %v", err)
+	}
+	if request.SessionID != session.ID || request.Turns != 0 || request.RequestedBy != "admin-token" {
+		t.Errorf("queued request = %+v, want the session, the configured budget and the admin token", request)
+	}
+
+	// The page reports the queued request instead of offering a second one.
+	again := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+session.ID, adminToken, nil, "text/html")
+	if !strings.Contains(again.Body.String(), "Continuation queued") {
+		t.Errorf("the page does not report the queued continuation:\n%s", again.Body.String())
+	}
+	if strings.Contains(again.Body.String(), "Continue review") {
+		t.Errorf("the page still offers a second continuation:\n%s", again.Body.String())
+	}
+
+	duplicate := moderatedRequest(t, handler, http.MethodPost, path, adminToken, nil, "text/html")
+	if duplicate.Code != http.StatusConflict {
+		t.Errorf("a duplicate continuation = %d, want 409", duplicate.Code)
+	}
+}
+
+func TestObservationDeckRefusesContinuationAtAnotherCause(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+	session := newSessionWithOutcome(t, h, store.ReviewOutcome{
+		Status: store.ReviewFailed,
+		Error:  "the GitHub App is not installed",
+	})
+
+	response := moderatedRequest(t, handler, http.MethodPost, "/ui/sessions/"+session.ID+"/continue", adminToken, nil, "text/html")
+	if response.Code != http.StatusConflict {
+		t.Errorf("continuation of another failure = %d, want 409", response.Code)
+	}
+}
+
+func TestObservationDeckContinuationTakesItsOwnBudget(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+	session := newTurnLimitedSession(t, h, gh.HeadSHA)
+
+	form := url.Values{"turns": {"7"}, "requested_by": {"alice"}}
+	response := moderatedRequest(t, handler, http.MethodPost, "/ui/sessions/"+session.ID+"/continue", adminToken, form, "")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("JSON continuation status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+	}
+
+	job, err := h.db.JobByDelivery(context.Background(), continuation.DeliveryID(session.ID))
+	if err != nil || job == nil {
+		t.Fatalf("reading the queued job returned (%v, %v), want a job", job, err)
+	}
+	request, err := continuation.Parse(job.Payload)
+	if err != nil {
+		t.Fatalf("parsing the queued request: %v", err)
+	}
+	if request.Turns != 7 || request.RequestedBy != "alice" {
+		t.Errorf("queued request = %+v, want seven turns requested by alice", request)
+	}
+
+	bad := moderatedRequest(t, handler, http.MethodPost, "/ui/sessions/"+session.ID+"/continue", adminToken,
+		url.Values{"turns": {"-1"}}, "")
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("negative turns = %d, want 400", bad.Code)
+	}
+}
+
+// The worker continues the session from its stored transcript and records the
+// new attempt as a session of its own.
+func TestWorkerContinuesATurnLimitedSession(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	_, deck := sessionsHandler(t, h)
+	parent := newTurnLimitedSession(t, h, gh.HeadSHA)
+
+	if _, err := continuation.Queue(context.Background(), h.db, parent, 5, "alice"); err != nil {
+		t.Fatalf("queueing the continuation: %v", err)
+	}
+
+	pool := server.NewPool(h.db, h.engine(t, gh), "@rumil", 1, h.logger)
+	pool.SetSessionRecorder(deck.Recorder())
+	poolCtx, stopPool := context.WithCancel(context.Background())
+	pool.Start(poolCtx)
+	waitFor(t, "the continuation to finish", func() bool {
+		sessions, err := h.db.ListReviewSessions(context.Background(), store.ReviewSessionFilter{})
+		if err != nil {
+			return false
+		}
+		for _, session := range sessions {
+			if session.ParentSessionID == parent.ID && session.Status != store.ReviewRunning {
+				return true
+			}
+		}
+		return false
+	})
+	stopPool()
+	pool.Wait()
+
+	sessions, err := h.db.ListReviewSessions(context.Background(), store.ReviewSessionFilter{})
+	if err != nil {
+		t.Fatalf("listing review sessions: %v", err)
+	}
+	var child *store.ReviewSession
+	for i := range sessions {
+		if sessions[i].ParentSessionID == parent.ID {
+			child = &sessions[i]
+		}
+	}
+	if child == nil {
+		t.Fatal("the continuation recorded no session")
+	}
+	if child.Status != store.ReviewSucceeded {
+		t.Errorf("continuation status = %q, want %q (error: %s)", child.Status, store.ReviewSucceeded, child.Error)
+	}
+	if child.ReviewEvent != "COMMENT" {
+		t.Errorf("continuation review_event = %q, want COMMENT", child.ReviewEvent)
+	}
+	if child.RequestedBy != "alice" {
+		t.Errorf("requested_by = %q, want alice", child.RequestedBy)
+	}
+	if child.RequestedAt == nil {
+		t.Error("requested_at is nil")
+	}
+	if child.JobID == "" || child.JobID == parent.JobID {
+		t.Errorf("job_id = %q, want the continuation job", child.JobID)
+	}
+
+	kept, err := h.db.ReviewSessionByID(context.Background(), parent.ID)
+	if err != nil {
+		t.Fatalf("reading the parent session: %v", err)
+	}
+	if kept.Status != store.ReviewFailed || !kept.TurnLimitReached {
+		t.Errorf("parent = %q (turn limit %t), want the original failure", kept.Status, kept.TurnLimitReached)
+	}
+
+	prompt := llm.Requests()[0].SystemPrompt
+	for _, want := range []string{"<previous_attempt>", "the settlement retry is unbounded"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the continuation prompt lost %q:\n%s", want, prompt)
+		}
+	}
+
+	job, err := h.db.JobByDelivery(context.Background(), continuation.DeliveryID(parent.ID))
+	if err != nil {
+		t.Fatalf("reading the continuation job: %v", err)
+	}
+	if job == nil || job.Status != store.StatusCompleted {
+		t.Errorf("continuation job = %+v, want COMPLETED", job)
 	}
 }

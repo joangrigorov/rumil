@@ -41,6 +41,7 @@
     <a class="session-row" href="/ui/sessions/{{.ID}}">
       <div class="session-row-top">
         <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+        {{if .ParentSessionID}}<span class="pill pill-continued">continued</span>{{end}}
         <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
         <span class="session-when">{{date .StartedAt}}</span>
       </div>
@@ -49,6 +50,7 @@
         {{if .Model}}<code>{{.Model}}</code>{{end}}
         <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
         <span>{{duration .StartedAt .FinishedAt}}</span>
+        {{if .ParentSessionID}}<span>continued from {{short .ParentSessionID}}</span>{{end}}
         {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}
       </div>
     </a>

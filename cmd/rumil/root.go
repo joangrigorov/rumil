@@ -28,6 +28,7 @@ func newRootCmd() *cobra.Command {
 			"or /etc/rumil/rumil.yaml is used, and "+config.EnvConfig+" names one instead")
 	root.AddCommand(newReviewCmd(&configPath))
 	root.AddCommand(newServeCmd(&configPath))
+	root.AddCommand(newSessionsCmd(&configPath))
 	root.AddCommand(newModCmd(&configPath))
 	root.AddCommand(newInitCmd(&configPath))
 
