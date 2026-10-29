@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.17](https://github.com/joangrigorov/rumil/compare/v0.0.16...v0.0.17) (2026-10-29)
+
+
+### Features
+
+* **reviewer:** give the reviewer a local working tree to read ([#56](https://github.com/joangrigorov/rumil/issues/56)) ([7c3780e](https://github.com/joangrigorov/rumil/commit/7c3780e801946e991ad22ff7cc6fde91f35ae286))
+
 ## [0.0.16](https://github.com/joangrigorov/rumil/compare/v0.0.15...v0.0.16) (2026-10-29)
 
 
