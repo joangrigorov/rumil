@@ -229,7 +229,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | Key | Default | Notes |
 | :--- | :--- | :--- |
 | `app.bot_handle` | `@rumil` | Your App's slug. A leading `@` and a trailing `[bot]` are ignored, so `acme-rumil`, `@acme-rumil` and `acme-rumil[bot]` all match. `rumil serve` and `rumil review` read `GET /app` at startup and refuse to run when this is not the App's slug, because a handle that names something else silently disables the comment commands, the review requests and thread resolution. The same read warns about the one permission GitHub refuses thread resolution without |
-| `app.max_agent_turns` | `25` | How many model turns one session may take. A session that runs out submits nothing, and the log says so |
+| `app.max_agent_turns` | `25` | How many model steps one session may take. `0` removes the cap, so the session runs until the model stops or the job timeout arrives |
 | `app.max_diff_bytes` | `250000` | Larger diffs are paginated instead of handed over in one piece |
 | `app.log_level` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on stderr |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |

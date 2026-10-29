@@ -6,7 +6,7 @@
 
 app:
   bot_handle: "@rumil"
-  max_agent_turns: 25
+  max_agent_turns: 25             # 0 removes the cap; the job timeout still bounds the run
   max_diff_bytes: 250000          # Diffs larger than this are paginated by get_pr_diff
   log_level: "info"               # debug | info | warn | error
 
