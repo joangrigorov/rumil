@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -578,4 +579,57 @@ func TestReviewGuidelines(t *testing.T) {
 			t.Errorf("a 5 MB file should be read through the blob API, requests:\n%s", strings.Join(gh.RequestLog(), "\n"))
 		}
 	})
+}
+
+// Tree is read once and lists only blobs, which is what the review tools need.
+func TestTreeListsBlobsAndCaches(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Contents["internal/a.go"] = "package internal\n"
+	client := newTestClient(t, gh)
+
+	entries, cut, err := client.Tree(context.Background(), gh.HeadSHA)
+	if err != nil {
+		t.Fatalf("Tree: %v", err)
+	}
+	if cut {
+		t.Error("Tree reported a truncated listing for the fake repository")
+	}
+	paths := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		paths[entry.Path] = true
+	}
+	for _, want := range []string{"main.go", "service.go", "internal/a.go"} {
+		if !paths[want] {
+			t.Errorf("Tree = %v, want %s", paths, want)
+		}
+	}
+
+	if _, _, err := client.Tree(context.Background(), gh.HeadSHA); err != nil {
+		t.Fatalf("second Tree: %v", err)
+	}
+	requests := strings.Join(gh.RequestLog(), "\n")
+	if got := strings.Count(requests, "/git/trees/"); got != 1 {
+		t.Errorf("tree requests = %d, want one cached read", got)
+	}
+}
+
+// Archive follows GitHub's redirect without carrying the installation token to
+// the archive host.
+func TestArchiveDownloadsTheTarball(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	client := newTestClient(t, gh)
+
+	body, err := client.Archive(context.Background(), gh.HeadSHA)
+	if err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	defer body.Close()
+
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("reading the archive: %v", err)
+	}
+	if len(raw) == 0 || raw[0] != 0x1f || raw[1] != 0x8b {
+		t.Errorf("archive does not start with a gzip header: %x", raw[:min(len(raw), 4)])
+	}
 }

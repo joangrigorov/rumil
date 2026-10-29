@@ -34,6 +34,16 @@ compaction:
   reserve_tokens: 16384           # output budget kept below the trigger
   keep_recent_tokens: 20000       # most recent context kept verbatim
 
+# The reviewed commit is materialized as a read-only working tree, so listing,
+# searching and reading files are local calls instead of one GitHub API request
+# per guess. The tree is removed when the session ends; a repository above
+# max_bytes falls back to the GitHub API tools.
+snapshot:
+  enabled: true
+  max_bytes: 536870912            # 512 MiB of extracted files; 0 uses the default
+  timeout: "2m"                   # download plus extraction
+  # dir: "/var/tmp/rumil"         # parent for per-session trees; empty uses the OS temp directory
+
 memory:                           # Used from v0.0.6
   repo_scope_boost: 0.05          # added to a repository rule's similarity when ranking, so a project exception outranks a general organization rule; 0 ranks by similarity alone
 

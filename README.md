@@ -239,6 +239,10 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `compaction.trigger_tokens` | `262144` | The estimated context size at which older messages are summarized. Nothing is compacted before this point, so a 256K trigger leaves a large pull request's details in context |
 | `compaction.reserve_tokens` | `16384` | Output budget kept below the trigger, so the session can still answer after the context grows |
 | `compaction.keep_recent_tokens` | `20000` | The most recent context kept verbatim; older messages are replaced by a summary |
+| `snapshot.enabled` | `true` | Whether a session materializes the reviewed commit as a read-only working tree in a temporary directory. It backs the listing, search and read tools; turning it off leaves the GitHub API tools, which cost a request per lookup |
+| `snapshot.max_bytes` | `536870912` | The largest working tree a session extracts. A bigger repository falls back to the GitHub API tools instead of filling the disk |
+| `snapshot.timeout` | `2m` | How long the archive download and extraction may take, as a Go duration. The time comes out of the job's own `worker.job_timeout` |
+| `snapshot.dir` | operating system temp directory | Where the per-session working trees are created. Set it when the temp directory has no room for the repository |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
@@ -323,7 +327,7 @@ Without `--config` it reads the first file of the [search](#where-the-file-is-fo
 ### What a review does
 
 1. GitHub delivers a webhook. Rumil verifies the signature and queues the job in Postgres.
-2. A worker claims the job and starts a review session against your model provider. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open.
+2. A worker claims the job and starts a review session against your model provider. Before the first turn it downloads the reviewed commit as a tarball into a temporary directory and removes it when the session ends. The session reads the pull request description and the files it touches, the annotated diff and the surrounding file contents, the whole conversation with every reply, and any threads earlier rounds left open. That working tree backs `list_repository_tree`, `list_directory`, `search_code` and the default file read, so the reviewer finds exact paths and searches the code locally instead of spending a round on each guessed path. A repository larger than `snapshot.max_bytes`, or a download that fails, falls back to the GitHub API tools and the review continues.
 3. It posts one review: a summary of what earlier rounds raised and what this one found, plus inline comments anchored to lines in the diff. Where an earlier thread's finding is genuinely gone from the code, it posts a one-line reason into that thread and resolves it, so a resolution is never silent. An installation whose Contents permission is Read cannot resolve a thread — GitHub refuses the mutation — so in that configuration the reason goes into the thread, the summary names the threads to close, and a person clicks resolve.
 
 To start one, mention the App's handle in a comment with `review` and nothing else:
@@ -433,6 +437,8 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 **"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, a turn was cut off at the model's output limit, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model. A message that ends with "(model output limit reached)" means the provider's response budget ran out before the tool call: set `models.providers[].max_tokens` on the chat provider, because reasoning counts against that budget and `thinking_level: max` can use all of it. Continue the session from `/ui/sessions` or with `rumil sessions continue <session-id>`: the new attempt reuses its tool results and gets its own budget. When a turn alone is cut off, Rumil asks the model once more for the tool call before failing.
 
 **A reasoning model answers suspiciously fast.** Set `models.providers[].thinking_level` on the chat provider, for example `thinking_level: "high"` or `thinking_level: "max"` where the provider exposes it. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place, and a provider that does not accept the field may reject the request.
+
+**"Repository snapshot unavailable".** The session could not download or extract the reviewed commit, so it continues with the GitHub API tools: listing still works, but `search_code` is absent and each read is a request. The session log names the cause. The usual ones are a repository above `snapshot.max_bytes`, no room in `snapshot.dir` or the temp directory, a network policy that blocks the archive host, or a job that reached `snapshot.timeout`.
 
 **Every webhook delivery is rejected.** `github.webhook_secret` must match the App's webhook secret exactly, and the endpoint GitHub reaches is `POST /webhooks/github` on whatever host you configured.
 

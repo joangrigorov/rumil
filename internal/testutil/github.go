@@ -4,6 +4,9 @@
 package testutil
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
@@ -17,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	pathpkg "path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -137,6 +141,13 @@ type FakeGitHub struct {
 	// ContentsByRef overrides Contents for a specific ref, so a test can serve
 	// different text on the base SHA and the head SHA.
 	ContentsByRef map[string]map[string]string
+	// Tarball is the repository archive the fake serves for the reviewed
+	// commit, as a gzipped tar with a single top directory. NewFakeGitHub
+	// builds it from Contents; a test that wants a different tree sets it.
+	Tarball []byte
+	// TarballStatus, when non-zero, is returned by the archive endpoint
+	// instead of a redirect, so a test can drive the snapshot fallback.
+	TarballStatus int
 	// Blobs backs the git blobs endpoint. handleContents fills it for files the
 	// contents API declines to inline.
 	Blobs map[string]string
@@ -253,7 +264,45 @@ func NewFakeGitHub(t *testing.T) *FakeGitHub {
 
 	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.Server.Close)
+	f.Tarball = TarGz(t, f.Contents)
 	return f
+}
+
+// TarGz builds the repository archive a GitHub tarball endpoint serves: one
+// gzipped tar with a single top directory.
+func TarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		body := []byte(files[name])
+		header := &tar.Header{
+			Name:     "acme-payments-2222222/" + name,
+			Mode:     0o644,
+			Size:     int64(len(body)),
+			Typeflag: tar.TypeReg,
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatalf("writing the test archive header: %v", err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatalf("writing the test archive body: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing the test archive: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing the test archive: %v", err)
+	}
+	return buf.Bytes()
 }
 
 // URL is the API root, suitable for both go-github and ghinstallation.
@@ -321,6 +370,23 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleReaction(w, r, "review_comment", f.commentID(r.URL.Path, f.repoPath()+"/pulls/comments/"))
 	case r.Method == http.MethodPost && r.URL.Path == f.pullPath()+"/reviews":
 		f.handleReview(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/archive/rumil.tar.gz":
+		f.mu.Lock()
+		body := append([]byte(nil), f.Tarball...)
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(body)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/tarball/"):
+		f.mu.Lock()
+		status := f.TarballStatus
+		f.mu.Unlock()
+		if status != 0 {
+			http.Error(w, `{"message":"archive unavailable"}`, status)
+			return
+		}
+		http.Redirect(w, r, f.Server.URL+"/archive/rumil.tar.gz", http.StatusFound)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/git/trees/"):
+		f.handleTree(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/contents/"):
 		f.handleContents(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/git/blobs/"):
@@ -760,6 +826,31 @@ func (f *FakeGitHub) Resolved() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.ResolvedThreads...)
+}
+
+func (f *FakeGitHub) handleTree(w http.ResponseWriter, r *http.Request) {
+	sha := pathpkg.Base(r.URL.Path)
+	f.mu.Lock()
+	names := make([]string, 0, len(f.Contents))
+	for name := range f.Contents {
+		names = append(names, name)
+	}
+	sizes := make(map[string]int, len(names))
+	for _, name := range names {
+		sizes[name] = len(f.Contents[name])
+	}
+	f.mu.Unlock()
+	sort.Strings(names)
+
+	tree := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		tree = append(tree, map[string]any{
+			"path": name, "mode": "100644", "type": "blob", "size": sizes[name],
+		})
+	}
+	f.writeJSON(w, http.StatusOK, map[string]any{
+		"sha": sha, "truncated": false, "tree": tree,
+	})
 }
 
 func (f *FakeGitHub) writeJSON(w http.ResponseWriter, status int, body any) {

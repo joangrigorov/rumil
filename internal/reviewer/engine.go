@@ -19,6 +19,7 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/mcpservers"
+	"github.com/joangrigorov/rumil/internal/snapshot"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -262,7 +263,26 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	// rule 4, T-020-07).
 	priorHistory, priorReviews := readPriorHistory(ctx, githubClient, e.cfg.App.BotHandle, e.logger)
 
-	githubTools := mcpservers.NewGithubTools(githubClient, e.cfg.App.MaxDiffBytes, e.cfg.App.BotHandle, e.logger, priorReviews)
+	// The working tree is what makes listing, searching and reading local.
+	// A snapshot that cannot be fetched is not fatal: the GitHub API tools
+	// stay registered and the session reads the same commit through them.
+	snap := e.openSnapshot(ctx, githubClient, meta.HeadSHA, observer)
+	if snap != nil {
+		defer func() {
+			if closeErr := snap.Close(); closeErr != nil {
+				e.logger.Warn("removing the repository snapshot failed", "error", closeErr)
+			}
+		}()
+	}
+
+	githubTools := mcpservers.NewGithubTools(githubClient, mcpservers.GithubToolsOptions{
+		MaxDiffBytes: e.cfg.App.MaxDiffBytes,
+		BotHandle:    e.cfg.App.BotHandle,
+		Logger:       e.logger,
+		PriorReviews: priorReviews,
+		Snapshot:     snap,
+		HeadSHA:      meta.HeadSHA,
+	})
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
 		result.ReviewSubmitted = true
@@ -334,6 +354,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 		PriorHistory:   priorHistory,
 		ResolveThreads: resolveThreads,
 		Continuation:   ContinuationBlock(req.Continuation),
+		LocalFiles:     snap != nil,
 	}), sessionTools, maxTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
@@ -435,6 +456,51 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			ErrNoReviewSubmitted, req.Owner, req.Repo, req.Number, result.Steps, result.ToolCalls, cause)
 	}
 	return &result, nil
+}
+
+// openSnapshot materializes the reviewed commit for the session's read tools.
+// A failure is a warning rather than an error: the session keeps the GitHub
+// API tools and still reviews the same commit through them.
+func (e *Engine) openSnapshot(ctx context.Context, client *ghapp.Client, head string, observer Observer) *snapshot.Snapshot {
+	if !e.cfg.Snapshot.SnapshotEnabled() {
+		return nil
+	}
+	snapCtx, cancel := context.WithTimeout(ctx, e.cfg.Snapshot.TimeoutOrDefault())
+	defer cancel()
+
+	archive, err := client.Archive(snapCtx, head)
+	if err != nil {
+		e.snapshotFailed(ctx, observer, err)
+		return nil
+	}
+	defer archive.Close()
+
+	snap, err := snapshot.Create(snapCtx, archive, snapshot.Options{
+		MaxBytes: e.cfg.Snapshot.MaxBytesOrDefault(),
+		Dir:      e.cfg.Snapshot.Dir,
+	})
+	if err != nil {
+		e.snapshotFailed(ctx, observer, err)
+		return nil
+	}
+
+	e.logger.Info("repository snapshot ready", "ref", shortCommit(head), "files", snap.Count())
+	if observer != nil {
+		observer.Observe(ctx, Event{Type: "snapshot_ready", At: time.Now(), Payload: map[string]any{
+			"ref":   head,
+			"files": snap.Count(),
+		}})
+	}
+	return snap
+}
+
+func (e *Engine) snapshotFailed(ctx context.Context, observer Observer, err error) {
+	e.logger.Warn("the repository snapshot could not be built; the review uses the GitHub API tools", "error", err)
+	if observer != nil {
+		observer.Observe(ctx, Event{Type: "snapshot_failed", At: time.Now(), Payload: map[string]any{
+			"error": err.Error(),
+		}})
+	}
 }
 
 // watchContext compacts the session when its estimated context reaches the

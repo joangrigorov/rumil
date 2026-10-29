@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,6 +86,9 @@ type harnessOpts struct {
 	// thinkingLevel sets models.providers[].thinking_level on the first chat
 	// provider.
 	thinkingLevel string
+	// snapshot replaces the snapshot block. Empty disables the working tree in
+	// tests that do not exercise it, so they do not download an archive.
+	snapshot string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -124,6 +128,11 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 	top += opts.memory
 	top += opts.compaction
+	if opts.snapshot != "" {
+		top += opts.snapshot
+	} else {
+		top += "snapshot:\n  enabled: false\n"
+	}
 
 	thinkingLevel := ""
 	if opts.thinkingLevel != "" {
@@ -1022,5 +1031,70 @@ func TestContinuationRefusesAMovedHead(t *testing.T) {
 	}
 	if llm.Count() != 0 {
 		t.Errorf("model requests = %d, want none for a moved head", llm.Count())
+	}
+}
+
+// A session with a working tree can list, search and read the commit locally.
+// The locate rule is part of the prompt, and search_code reaches the tool set.
+func TestSnapshotOffersLocalSearch(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Contents["internal/reward.go"] = "package internal\n\nfunc CreateRewardHandler() {}\n"
+	gh.Tarball = testutil.TarGz(t, gh.Contents)
+
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueToolCall("search_code", map[string]any{"query": "CreateRewardHandler"})
+	llm.QueueToolCall("get_file_contents", map[string]any{"file_path": "internal/reward.go"})
+	submitComment(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{snapshot: "snapshot:\n  enabled: true\n"})
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+	if !res.ReviewSubmitted {
+		t.Error("ReviewSubmitted = false, want the review to reach GitHub")
+	}
+
+	offered := llm.OfferedToolNames()
+	for _, want := range []string{"list_repository_tree", "list_directory", "search_code"} {
+		if !slices.Contains(offered, want) {
+			t.Errorf("the session was not offered %s, tools: %v", want, offered)
+		}
+	}
+	if prompt := systemPrompt(t, llm); !strings.Contains(prompt, "Never guess a file path") {
+		t.Errorf("the prompt does not tell the model to locate paths:\n%s", prompt)
+	}
+
+	results := strings.Join(llm.ToolResults(), "\n")
+	if !strings.Contains(results, "internal/reward.go:3:") {
+		t.Errorf("the search result did not reach the model:\n%s", results)
+	}
+	if !strings.Contains(h.logs.String(), "repository snapshot ready") {
+		t.Errorf("logs do not record the snapshot:\n%s", h.logs.String())
+	}
+}
+
+// A snapshot that cannot be fetched costs the review its local tools, not the
+// review itself.
+func TestSnapshotFailureKeepsTheReviewRunning(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.TarballStatus = http.StatusInternalServerError
+
+	llm := testutil.NewFakeLLM(t)
+	submitComment(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{snapshot: "snapshot:\n  enabled: true\n"})
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+	if !res.ReviewSubmitted {
+		t.Error("ReviewSubmitted = false, want the API tools to carry the review")
+	}
+	if offered := llm.OfferedToolNames(); slices.Contains(offered, "search_code") {
+		t.Errorf("search_code was offered without a snapshot: %v", offered)
+	}
+	if !strings.Contains(h.logs.String(), "repository snapshot could not be built") {
+		t.Errorf("logs do not name the fallback:\n%s", h.logs.String())
 	}
 }

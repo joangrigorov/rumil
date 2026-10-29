@@ -12,13 +12,17 @@ import (
 // TestSpecsPinTheToolSurface pins the tool surface the model sees: the names,
 // and the JSON Schema fields a valid call is built from.
 func TestSpecsPinTheToolSurface(t *testing.T) {
-	tools := mcpservers.NewGithubTools(nil, 4096, "@rumil", slog.New(slog.DiscardHandler), nil)
+	tools := mcpservers.NewGithubTools(nil, mcpservers.GithubToolsOptions{
+		MaxDiffBytes: 4096, BotHandle: "@rumil", Logger: slog.New(slog.DiscardHandler),
+	})
 	specs := tools.Specs()
 
 	wantNames := []string{
 		"get_pr_metadata",
 		"get_pr_diff",
 		"get_file_contents",
+		"list_repository_tree",
+		"list_directory",
 		"list_pr_conversation",
 		"resolve_review_thread",
 		"submit_pr_review",

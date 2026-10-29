@@ -231,6 +231,14 @@
         marker("info", "Context compacted", compactionDescription(payload));
         break;
 
+      case "snapshot_ready":
+        marker("info", "Repository snapshot ready", count(payload.files, "file") + " at " + shortSHA(payload.ref) + " read locally.");
+        break;
+
+      case "snapshot_failed":
+        marker("warn", "Repository snapshot unavailable", payload.error + " — the review falls back to the GitHub API tools.");
+        break;
+
       case "events_dropped":
         marker("warn", "Some streaming fragments were dropped", count(payload.count, "fragment") + " under load; the stored message and tool results are intact.");
         break;

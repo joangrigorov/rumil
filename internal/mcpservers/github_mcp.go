@@ -11,11 +11,14 @@ package mcpservers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/snapshot"
 )
 
 // Handler runs one tool call. A returned error is reported to the model as a
@@ -39,6 +42,13 @@ type GithubTools struct {
 	botLogin     string
 	logger       *slog.Logger
 
+	// snap is the session's working tree, nil when the snapshot is off or the
+	// download failed. It backs the local read and search tools; the GitHub
+	// API remains the fallback for listing and for other refs.
+	snap *snapshot.Snapshot
+	// headSHA is the commit under review, the default ref of every read.
+	headSHA string
+
 	// OnReviewSubmitted is called once a review reaches GitHub, so the caller
 	// can record the outcome of the session.
 	OnReviewSubmitted func(outcome ghapp.ReviewOutcome)
@@ -55,6 +65,21 @@ type GithubTools struct {
 	resolutions   int
 }
 
+// GithubToolsOptions carries what one session's tool set is scoped to.
+type GithubToolsOptions struct {
+	MaxDiffBytes int
+	BotHandle    string
+	Logger       *slog.Logger
+	// PriorReviews is the review list as it stood when the session was
+	// created; see NewGithubTools.
+	PriorReviews []ghapp.Review
+	// Snapshot, when set, is the working tree at HeadSHA. It makes listing,
+	// searching and reading local.
+	Snapshot *snapshot.Snapshot
+	// HeadSHA is the commit under review.
+	HeadSHA string
+}
+
 // NewGithubTools scopes the tools to one pull request. botHandle is the
 // configured handle, which is how a review recognises its own comments.
 //
@@ -67,22 +92,33 @@ type GithubTools struct {
 // baseline is an argument and not something the tool set fills in on first use.
 // A nil slice is a session whose history could not be read; the resolution
 // guard then counts no earlier round, which is the safe direction.
-func NewGithubTools(client *ghapp.Client, maxDiffBytes int, botHandle string, logger *slog.Logger, priorReviews []ghapp.Review) *GithubTools {
+func NewGithubTools(client *ghapp.Client, opts GithubToolsOptions) *GithubTools {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &GithubTools{
 		client:       client,
-		maxDiffBytes: maxDiffBytes,
-		botLogin:     botHandle,
+		maxDiffBytes: opts.MaxDiffBytes,
+		botLogin:     opts.BotHandle,
 		logger:       logger,
-		reviews:      priorReviews,
+		reviews:      opts.PriorReviews,
 		reviewsRead:  true,
+		snap:         opts.Snapshot,
+		headSHA:      opts.HeadSHA,
 	}
 }
 
 // Specs returns the tool set described in project_plan.md §5.1. The reads are
-// diff, file, history; the writes are the review and, from a pull request's
-// second review on, closing Rumil's own threads with a reason.
+// diff, file, tree, history; the writes are the review and, from a pull
+// request's second review on, closing Rumil's own threads with a reason.
+//
+// search_code is present only when the session has a working tree: without one
+// there is nothing to search locally, and GitHub's code search reads the
+// default branch rather than the commit under review, so advertising it would
+// invite answers about different code.
 func (t *GithubTools) Specs() []Spec {
-	return []Spec{
+	specs := []Spec{
 		{
 			Name:        "get_pr_metadata",
 			Description: "Return the pull request title, description, author, base and head SHAs, state, the changed files with their addition and deletion counts, and last_reviewed_commit: the SHA the most recent review was submitted against, empty when this pull request has not been reviewed yet.",
@@ -100,6 +136,18 @@ func (t *GithubTools) Specs() []Spec {
 			Description: "Read a file from the repository at a git ref, defaulting to the pull request head SHA. Binary files are rejected and a single read is capped at 500 lines.",
 			Schema:      json.RawMessage(`{"type":"object","properties":{"file_path":{"type":"string","description":"Repository-relative file path."},"ref":{"type":"string","description":"Git ref, defaults to the pull request head SHA."},"start_line":{"type":"integer","description":"First line to return, 1-based."},"end_line":{"type":"integer","description":"Last line to return, inclusive."}},"required":["file_path"],"additionalProperties":false}`),
 			Handle:      t.getFileContents,
+		},
+		{
+			Name:        "list_repository_tree",
+			Description: "List file paths in the repository at the reviewed commit. Filter with prefix to stay inside a directory and with glob to match a file name such as *.go, then read only the files a finding needs instead of guessing a path.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"prefix":{"type":"string","description":"Only paths starting with this directory or prefix, for example internal/component/reward."},"glob":{"type":"string","description":"File-name glob such as *.go or *_test.go; a glob containing a slash is matched against the whole path."},"page":{"type":"integer","description":"1-based page of the result, default 1."},"limit":{"type":"integer","description":"Files per page, 1 to 1000, default 200."}},"additionalProperties":false}`),
+			Handle:      t.listTree,
+		},
+		{
+			Name:        "list_directory",
+			Description: "List the immediate entries of a repository directory at the reviewed commit, with subdirectories marked by a trailing slash. Path is empty or omitted for the repository root.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Repository-relative directory path, empty for the root."}},"additionalProperties":false}`),
+			Handle:      t.listDirectory,
 		},
 		{
 			Name:        "list_pr_conversation",
@@ -120,6 +168,15 @@ func (t *GithubTools) Specs() []Spec {
 			Handle:      t.submitReview,
 		},
 	}
+	if t.snap != nil {
+		specs = append(specs, Spec{
+			Name:        "search_code",
+			Description: "Search the repository at the reviewed commit with a regular expression and return path:line matches. Narrow it with path_prefix or glob; matches are capped, so refine the query rather than raising max_results blindly.",
+			Schema:      json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"Go regular expression, for example CreateRewardHandler|func .*Reward.*Create."},"path_prefix":{"type":"string","description":"Only files under this directory or prefix."},"glob":{"type":"string","description":"File-name glob such as *.go; a glob containing a slash is matched against the whole path."},"max_results":{"type":"integer","description":"Matches to return, 1 to 200, default 50."},"ignore_case":{"type":"boolean","description":"Match case-insensitively."}},"required":["query"],"additionalProperties":false}`),
+			Handle:      t.searchCode,
+		})
+	}
+	return specs
 }
 
 func (t *GithubTools) getMetadata(ctx context.Context, _ map[string]any) (string, error) {
@@ -224,11 +281,151 @@ func (t *GithubTools) getFileContents(ctx context.Context, args map[string]any) 
 		return "", fmt.Errorf("file_path is required")
 	}
 
+	if t.snap != nil && (ref == "" || ref == t.headSHA) {
+		content, err := t.snap.Read(filePath, intArg(args, "start_line"), intArg(args, "end_line"))
+		if err != nil {
+			if errors.Is(err, snapshot.ErrNotFound) {
+				return "", fmt.Errorf("%w (use list_repository_tree to find the exact path)", err)
+			}
+			return "", err
+		}
+		return content, nil
+	}
+
 	content, err := t.client.FileContents(ctx, filePath, ref, intArg(args, "start_line"), intArg(args, "end_line"))
 	if err != nil {
 		return "", err
 	}
 	return content, nil
+}
+
+// repositoryFiles is the tree of the reviewed commit, from the local snapshot
+// when the session has one and from the GitHub tree API otherwise.
+func (t *GithubTools) repositoryFiles(ctx context.Context) ([]snapshot.File, bool, error) {
+	if t.snap != nil {
+		return t.snap.All(), false, nil
+	}
+	sha := t.headSHA
+	if sha == "" {
+		meta, err := t.client.Metadata(ctx)
+		if err != nil {
+			return nil, false, fmt.Errorf("reading the pull request metadata: %w", err)
+		}
+		sha = meta.HeadSHA
+	}
+	entries, cut, err := t.client.Tree(ctx, sha)
+	if err != nil {
+		return nil, false, err
+	}
+	files := make([]snapshot.File, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, snapshot.File{Path: entry.Path, Size: entry.Size})
+	}
+	return files, cut, nil
+}
+
+func (t *GithubTools) listTree(ctx context.Context, args map[string]any) (string, error) {
+	prefix, _ := args["prefix"].(string)
+	glob, _ := args["glob"].(string)
+	limit := intArg(args, "limit")
+	if limit < 1 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	page := intArg(args, "page")
+	if page < 1 {
+		page = 1
+	}
+
+	files, cut, err := t.repositoryFiles(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list_repository_tree failed: %w", err)
+	}
+	selected, total, _ := snapshot.Filter(files, prefix, glob, (page-1)*limit, limit)
+
+	var b strings.Builder
+	if total == 0 {
+		fmt.Fprintf(&b, "no files match prefix %q and glob %q at this commit\n", prefix, glob)
+		return b.String(), nil
+	}
+	if (page-1)*limit >= total {
+		return "", fmt.Errorf("page %d does not exist, %d files match", page, total)
+	}
+	for _, file := range selected {
+		b.WriteString(file.Path)
+		b.WriteByte('\n')
+	}
+	if shown := (page - 1) * limit; shown+len(selected) < total {
+		fmt.Fprintf(&b, "\n[%d files match; this page shows %d-%d. Refine prefix or glob, or request page %d]\n",
+			total, shown+1, shown+len(selected), page+1)
+	}
+	if cut {
+		b.WriteString("\n[GitHub truncated the tree listing: refine prefix or glob]\n")
+	}
+	return b.String(), nil
+}
+
+func (t *GithubTools) listDirectory(ctx context.Context, args map[string]any) (string, error) {
+	dir, _ := args["path"].(string)
+	files, _, err := t.repositoryFiles(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list_directory failed: %w", err)
+	}
+	entries, err := snapshot.EntriesOf(files, dir)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 0 {
+		return "the directory is empty at this commit\n", nil
+	}
+
+	var b strings.Builder
+	for _, entry := range entries {
+		if entry.Dir {
+			b.WriteString(entry.Path)
+			b.WriteByte('/')
+			b.WriteByte('\n')
+			continue
+		}
+		fmt.Fprintf(&b, "%s (%s)\n", entry.Path, snapshot.FormatSize(entry.Size))
+	}
+	return b.String(), nil
+}
+
+func (t *GithubTools) searchCode(ctx context.Context, args map[string]any) (string, error) {
+	query, _ := args["query"].(string)
+	prefix, _ := args["path_prefix"].(string)
+	glob, _ := args["glob"].(string)
+	ignoreCase, _ := args["ignore_case"].(bool)
+	maxResults := intArg(args, "max_results")
+	if maxResults < 1 {
+		maxResults = 50
+	}
+	if maxResults > 200 {
+		maxResults = 200
+	}
+	if t.snap == nil {
+		return "", fmt.Errorf("search_code needs the local repository snapshot, which this session does not have")
+	}
+
+	matches, more, err := t.snap.Search(ctx, query, prefix, glob, maxResults, ignoreCase)
+	if err != nil {
+		return "", fmt.Errorf("search_code failed: %w", err)
+	}
+	if len(matches) == 0 {
+		return "no matches\n", nil
+	}
+
+	var b strings.Builder
+	for _, match := range matches {
+		fmt.Fprintf(&b, "%s:%d: %s\n", match.Path, match.Line, match.Text)
+	}
+	if more {
+		fmt.Fprintf(&b, "\n[stopped after %d matches; narrow the query with path_prefix or glob]\n", len(matches))
+	}
+	return b.String(), nil
 }
 
 // shortSHA is the seven-character form of a commit, which is what fits in a

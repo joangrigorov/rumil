@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -50,6 +52,13 @@ type Client struct {
 	mu   sync.Mutex
 	meta *PRMetadata
 	diff *Diff
+
+	treeMu   sync.Mutex
+	treeSHA  string
+	tree     []TreeEntry
+	treeCut  bool
+	treeRead bool
+	treeErr  error
 }
 
 // NewClient builds a client scoped to a single pull request.
@@ -175,6 +184,88 @@ func (c *Client) Diff(ctx context.Context) (*Diff, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.diffLocked(ctx)
+}
+
+// TreeEntry is one file of the repository tree at the reviewed commit.
+type TreeEntry struct {
+	Path string
+	Size int64
+}
+
+// Tree returns every file path in the repository at sha, read once per client.
+// cut reports that GitHub truncated the listing, which only happens on
+// repositories far larger than a review can read anyway.
+func (c *Client) Tree(ctx context.Context, sha string) (entries []TreeEntry, cut bool, err error) {
+	c.treeMu.Lock()
+	if c.treeRead && c.treeSHA == sha {
+		files, truncated, readErr := c.tree, c.treeCut, c.treeErr
+		c.treeMu.Unlock()
+		return append([]TreeEntry(nil), files...), truncated, readErr
+	}
+	c.treeMu.Unlock()
+
+	tree, _, err := c.gh.Git.GetTree(ctx, c.owner, c.repo, sha, true)
+	if err != nil {
+		err = fmt.Errorf("reading the repository tree at %s: %w", shortSHA(sha), err)
+	} else {
+		for _, entry := range tree.Entries {
+			if entry.GetType() != "blob" {
+				continue
+			}
+			entries = append(entries, TreeEntry{Path: entry.GetPath(), Size: int64(entry.GetSize())})
+		}
+	}
+
+	c.treeMu.Lock()
+	c.treeSHA = sha
+	c.tree = entries
+	c.treeCut = err == nil && tree != nil && tree.GetTruncated()
+	c.treeRead = true
+	c.treeErr = err
+	cut = c.treeCut
+	c.treeMu.Unlock()
+
+	return append([]TreeEntry(nil), entries...), cut, err
+}
+
+// Archive returns the repository tarball at sha for the session's working
+// tree. The caller owns the reader and must close it.
+//
+// GitHub answers the API endpoint with a short-lived signed URL, so the
+// download goes through a plain client: the installation token must not travel
+// to the archive host. Errors are returned without that URL, which carries the
+// signature.
+func (c *Client) Archive(ctx context.Context, sha string) (io.ReadCloser, error) {
+	link, _, err := c.gh.Repositories.GetArchiveLink(ctx, c.owner, c.repo, github.Tarball,
+		&github.RepositoryContentGetOptions{Ref: sha}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("asking GitHub for the repository archive at %s: %w", shortSHA(sha), err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("building the archive request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, fmt.Errorf("downloading the repository archive at %s: %w", shortSHA(sha), err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("downloading the repository archive at %s: %s", shortSHA(sha), resp.Status)
+	}
+	return resp.Body, nil
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
 }
 
 func (c *Client) diffLocked(ctx context.Context) (*Diff, error) {
