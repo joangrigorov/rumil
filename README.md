@@ -417,6 +417,8 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 
 **"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model.
 
+**A reasoning model answers suspiciously fast.** Set `models.providers[].thinking_level` on the chat provider, for example `thinking_level: "high"`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place, and a provider that does not accept the field may reject the request.
+
 **Every webhook delivery is rejected.** `github.webhook_secret` must match the App's webhook secret exactly, and the endpoint GitHub reaches is `POST /webhooks/github` on whatever host you configured.
 
 **`/ui/moderation` answers "the moderation surface needs moderation.admin_token".** Set `moderation.admin_token` — the example config takes it from `${RUMIL_ADMIN_TOKEN}` — and restart. Until then the page and the API refuse every request rather than standing open.
