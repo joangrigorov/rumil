@@ -243,6 +243,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
+| `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium` or `high`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `high` asks for the most reasoning |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
 | `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. Unset means both refuse every request |

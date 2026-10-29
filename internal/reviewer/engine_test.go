@@ -3,6 +3,7 @@ package reviewer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -43,7 +44,7 @@ github:
       model_name: "test-model-a"
       api_key: "chat-a-key"
       max_tokens: 1024
-    - id: "chat-b"
+%s    - id: "chat-b"
       provider: "openai-compatible"
       base_url: %q
       model_name: "test-model-b"
@@ -81,6 +82,9 @@ type harnessOpts struct {
 	memory string
 	// compaction is a compaction block to splice into the configuration.
 	compaction string
+	// thinkingLevel sets models.providers[].thinking_level on the first chat
+	// provider.
+	thinkingLevel string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -121,12 +125,17 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	top += opts.memory
 	top += opts.compaction
 
+	thinkingLevel := ""
+	if opts.thinkingLevel != "" {
+		thinkingLevel = fmt.Sprintf("      thinking_level: %q\n", opts.thinkingLevel)
+	}
+
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
-		llm.URL()+"/v1", llm.URL()+"/v1", llm.URL()+"/v1")
+		llm.URL()+"/v1", llm.URL()+"/v1", thinkingLevel, llm.URL()+"/v1")
 
 	cfg, err := config.Parse([]byte(doc), "engine_test.yaml")
 	if err != nil {
-		t.Fatalf("parsing test config: %v", err)
+		t.Fatalf("parsing test config: %v\n%s", err, doc)
 	}
 
 	logs := &bytes.Buffer{}
@@ -542,6 +551,44 @@ func TestCompactionSummarizesAtTheConfiguredTrigger(t *testing.T) {
 	if summaries < 1 {
 		t.Error("the session never asked for a summary")
 	}
+}
+
+// Kit's built-in OpenAI-compatible route drops the thinking level. Rumil's
+// factory carries it onto the chat-completions request as reasoning_effort.
+func TestThinkingLevelReachesTheChatCompletionsRequest(t *testing.T) {
+	requestBody := func(t *testing.T, level string) map[string]any {
+		t.Helper()
+		gh := testutil.NewFakeGitHub(t)
+		llm := testutil.NewFakeLLM(t)
+		llm.QueueText("nothing to report")
+
+		h := newHarness(t, gh, llm, harnessOpts{thinkingLevel: level})
+		if _, err := h.review(t); err != nil && !errors.Is(err, ErrNoReviewSubmitted) {
+			t.Fatalf("Review returned error: %v", err)
+		}
+
+		requests := llm.Requests()
+		if len(requests) == 0 {
+			t.Fatal("the model received no request")
+		}
+		var body map[string]any
+		if err := json.Unmarshal(requests[0].Raw, &body); err != nil {
+			t.Fatalf("decoding the request body: %v", err)
+		}
+		return body
+	}
+
+	t.Run("high is sent as effort", func(t *testing.T) {
+		if got := requestBody(t, config.ThinkingHigh)["reasoning_effort"]; got != config.ThinkingHigh {
+			t.Errorf("reasoning_effort = %v, want %q", got, config.ThinkingHigh)
+		}
+	})
+
+	t.Run("unset leaves the field out", func(t *testing.T) {
+		if got, ok := requestBody(t, "")["reasoning_effort"]; ok {
+			t.Errorf("reasoning_effort = %v, want the field absent", got)
+		}
+	})
 }
 
 // T-001-07: a model stuck in a tool loop halts at max_agent_turns. The session

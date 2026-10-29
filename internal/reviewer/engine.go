@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"charm.land/fantasy"
+	"charm.land/fantasy/providers/openai"
+	"charm.land/fantasy/providers/openaicompat"
 	kit "github.com/mark3labs/kit/pkg/kit"
 
 	"github.com/joangrigorov/rumil/internal/config"
@@ -22,6 +25,12 @@ import (
 // providerWireOpenAICompat selects chat completions on the configured
 // OpenAI-compatible endpoint.
 const providerWireOpenAICompat = "openai-compat"
+
+// reasoningProvider is the instance provider factory that carries a reasoning
+// effort on the chat-completions wire. Kit's built-in OpenAI-compatible route
+// has no reasoning option, so a level set on the provider would otherwise be
+// silently dropped.
+const reasoningProvider = "rumil-openai-compat"
 
 // Request identifies the pull request to review.
 type Request struct {
@@ -401,6 +410,14 @@ func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, 
 	options := &kit.Options{}
 	kit.Isolated()(options)
 	kit.WithModel(modelString(provider))(options)
+	if provider.ThinkingLevel != "" {
+		// The custom provider is what actually sends the effort on the
+		// chat-completions wire; the option keeps kit's own view consistent.
+		options.Providers = map[string]kit.ProviderFactory{
+			reasoningProvider: reasoningProviderFactory(provider.ThinkingLevel),
+		}
+		kit.WithThinkingLevel(provider.ThinkingLevel)(options)
+	}
 	kit.WithSystemPrompt(systemPrompt)(options)
 	// Streaming is what turns reasoning and text into events as they happen.
 	// It is off without an observer, which keeps the one-off CLI path and the
@@ -424,5 +441,56 @@ func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, 
 }
 
 func modelString(provider *config.Provider) string {
+	if provider.ThinkingLevel != "" {
+		return reasoningProvider + "/" + provider.ModelName
+	}
 	return "openai/" + provider.ModelName
+}
+
+// reasoningProviderFactory builds the same OpenAI-compatible provider kit uses,
+// with the chat-completions reasoning effort attached as provider options.
+func reasoningProviderFactory(level string) kit.ProviderFactory {
+	return func(ctx context.Context, cfg *kit.ProviderConfig, modelName string) (*kit.ProviderResult, error) {
+		provider, err := openaicompat.New(
+			openaicompat.WithBaseURL(cfg.ProviderURL),
+			openaicompat.WithAPIKey(cfg.ProviderAPIKey),
+			openaicompat.WithName(reasoningProvider),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("building the reasoning provider: %w", err)
+		}
+		model, err := provider.LanguageModel(ctx, modelName)
+		if err != nil {
+			return nil, fmt.Errorf("selecting model %q on the reasoning provider: %w", modelName, err)
+		}
+		return &kit.ProviderResult{
+			Model: model,
+			ProviderOptions: fantasy.ProviderOptions{
+				reasoningProvider: &openaicompat.ProviderOptions{
+					ReasoningEffort: reasoningEffort(level),
+				},
+			},
+		}, nil
+	}
+}
+
+// reasoningEffort maps a configured level onto the chat-completions effort.
+// "off" returns nil, which leaves the provider's own default in place.
+func reasoningEffort(level string) *openai.ReasoningEffort {
+	var effort openai.ReasoningEffort
+	switch level {
+	case config.ThinkingNone:
+		effort = openai.ReasoningEffortNone
+	case config.ThinkingMinimal:
+		effort = openai.ReasoningEffortMinimal
+	case config.ThinkingLow:
+		effort = openai.ReasoningEffortLow
+	case config.ThinkingMedium:
+		effort = openai.ReasoningEffortMedium
+	case config.ThinkingHigh:
+		effort = openai.ReasoningEffortHigh
+	default:
+		return nil
+	}
+	return &effort
 }

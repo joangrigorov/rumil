@@ -145,6 +145,38 @@ models:
 	}
 }
 
+func TestThinkingLevelValidation(t *testing.T) {
+	doc := func(level string) []byte {
+		return []byte(fmt.Sprintf(`
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+      thinking_level: %q
+`, level))
+	}
+
+	for _, level := range ThinkingLevels {
+		cfg := mustParse(t, string(doc(level)))
+		if got := cfg.Models.Providers[0].ThinkingLevel; got != level {
+			t.Errorf("thinking_level = %q, want %q", got, level)
+		}
+	}
+
+	if _, err := Parse(doc("maximum"), "test.yaml"); err == nil {
+		t.Error("Parse accepted thinking_level \"maximum\", want a validation error")
+	} else if !strings.Contains(err.Error(), "thinking_level") {
+		t.Errorf("error = %v, want it to name thinking_level", err)
+	}
+}
+
 func TestCompactionSettings(t *testing.T) {
 	base := `
 github:
