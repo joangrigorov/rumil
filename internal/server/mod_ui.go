@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -290,7 +291,35 @@ func pageFuncs() template.FuncMap {
 		"lower":    strings.ToLower,
 		"duration": durationText,
 		"sha":      shortSHA,
+		"tokens":   tokenText,
+		"usd":      usdText,
 	}
+}
+
+// tokenText groups a token count in thousands, which is how a bill reads.
+func tokenText(count int64) string {
+	digits := strconv.FormatInt(count, 10)
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	var b strings.Builder
+	for i, digit := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(digit)
+	}
+	return sign + b.String()
+}
+
+// usdText is an estimated cost. Sub-cent amounts keep four decimals, so a cheap
+// review does not read as free.
+func usdText(cost float64) string {
+	if cost >= 1 {
+		return fmt.Sprintf("$%.2f", cost)
+	}
+	return fmt.Sprintf("$%.4f", cost)
 }
 
 // durationText is how long a session has run, or ran.

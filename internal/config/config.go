@@ -343,6 +343,42 @@ type Provider struct {
 	// ThinkingLevel is the reasoning effort sent to a chat model. Empty leaves
 	// the provider default in place.
 	ThinkingLevel string `yaml:"thinking_level"`
+	// The three prices are what a million tokens cost on this provider. They
+	// are optional: unset means the cost of that kind of token is unknown, and
+	// no estimated cost is reported until at least the input and output prices
+	// are set.
+	PriceInputPerMTok     *float64 `yaml:"price_input_per_mtok"`
+	PriceOutputPerMTok    *float64 `yaml:"price_output_per_mtok"`
+	PriceCacheReadPerMTok *float64 `yaml:"price_cache_read_per_mtok"`
+}
+
+// TokenPrice is the cost of one million tokens of each kind. A kind the
+// operator did not price counts as zero.
+type TokenPrice struct {
+	Input     float64
+	Output    float64
+	CacheRead float64
+}
+
+// TokenPrice returns the configured rates, leaving an unpriced kind at zero.
+func (p Provider) TokenPrice() TokenPrice {
+	price := TokenPrice{}
+	if p.PriceInputPerMTok != nil {
+		price.Input = *p.PriceInputPerMTok
+	}
+	if p.PriceOutputPerMTok != nil {
+		price.Output = *p.PriceOutputPerMTok
+	}
+	if p.PriceCacheReadPerMTok != nil {
+		price.CacheRead = *p.PriceCacheReadPerMTok
+	}
+	return price
+}
+
+// HasPrice reports whether the two rates that dominate a bill are set, which is
+// what makes an estimated cost meaningful.
+func (p Provider) HasPrice() bool {
+	return p.PriceInputPerMTok != nil && p.PriceOutputPerMTok != nil
 }
 
 // IsEmbedding reports whether the provider produces embeddings.
@@ -382,6 +418,13 @@ type Review struct {
 	// is a pointer so that an operator can turn it off explicitly, since the
 	// default is on and a plain bool could not tell the two apart.
 	ResolveThreads *bool `yaml:"resolve_threads"`
+	// MaxTotalTokens bounds the tokens one session may use. The session stops
+	// before its next step once the reported usage passes it. Zero means no
+	// token budget.
+	MaxTotalTokens int64 `yaml:"max_total_tokens"`
+	// MaxCostUSD bounds the estimated cost one session may use, from the chat
+	// provider's prices. Zero means no cost budget.
+	MaxCostUSD float64 `yaml:"max_cost_usd"`
 }
 
 // ThreadsResolvable reports whether the reviewer may resolve its own review
@@ -613,6 +656,26 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("review.guidelines_ref must be %q or %q, got %q", GuidelinesRefBase, GuidelinesRefHead, c.Review.GuidelinesRef)
 	}
 
+	if c.Review.MaxTotalTokens < 0 {
+		return fmt.Errorf("review.max_total_tokens must be zero for no budget or positive, got %d", c.Review.MaxTotalTokens)
+	}
+	if math.IsNaN(c.Review.MaxCostUSD) || c.Review.MaxCostUSD < 0 {
+		return fmt.Errorf("review.max_cost_usd must be zero for no budget or positive, got %v", c.Review.MaxCostUSD)
+	}
+	if c.Review.MaxCostUSD > 0 {
+		// A cost budget the prices cannot evaluate would either never fire or
+		// fire at a number nobody can reproduce, so require the two rates that
+		// dominate a bill.
+		provider, err := c.Models.ChatProvider()
+		if err != nil {
+			return err
+		}
+		if !provider.HasPrice() {
+			return fmt.Errorf("review.max_cost_usd needs models.providers[%s].price_input_per_mtok and price_output_per_mtok to estimate a cost",
+				provider.ID)
+		}
+	}
+
 	if c.Worker.Concurrency < 1 {
 		return fmt.Errorf("worker.concurrency must be at least 1, got %d", c.Worker.Concurrency)
 	}
@@ -743,6 +806,15 @@ func (m Models) validate() error {
 		if !validThinkingLevel(p.ThinkingLevel) {
 			return fmt.Errorf("models.providers[%d].thinking_level must be one of %s, got %q",
 				i, strings.Join(ThinkingLevels, ", "), p.ThinkingLevel)
+		}
+		for name, value := range map[string]*float64{
+			"price_input_per_mtok":      p.PriceInputPerMTok,
+			"price_output_per_mtok":     p.PriceOutputPerMTok,
+			"price_cache_read_per_mtok": p.PriceCacheReadPerMTok,
+		} {
+			if value != nil && (math.IsNaN(*value) || *value < 0) {
+				return fmt.Errorf("models.providers[%d].%s must be zero or positive, got %v", i, name, *value)
+			}
 		}
 		if p.EmbeddingTimeout != "" {
 			if !p.IsEmbedding() {

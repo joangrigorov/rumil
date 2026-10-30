@@ -24,6 +24,8 @@ github:
 review:
   guidelines_ref: "base"          # base reads the pull request base SHA; head trusts the branch under review
   resolve_threads: true           # the reviewer resolves its own review threads once it verifies the finding is gone
+  # max_total_tokens: 2000000     # per-session ceiling over input + output + cache tokens; 0 or unset is no limit
+  # max_cost_usd: 2.50            # per-session estimated-cost ceiling; needs the chat provider's input and output prices
 
 # Older context is summarized when a session reaches the trigger. The trigger
 # is deliberately high: 256K leaves room for a large pull request before any
@@ -92,6 +94,9 @@ models:
       max_tokens: 32768             # caps one response, reasoning included; too low a value ends a thinking turn before its tool call
       thinking_level: "high"        # off | none | minimal | low | medium | high | max; sent as reasoning_effort
       request_timeout: "2m"         # how long to wait for the provider's response headers; a streamed answer is not cut
+      # price_input_per_mtok: 0.27  # optional: turns on the estimated cost shown in the deck; cache writes use the input rate
+      # price_output_per_mtok: 1.10
+      # price_cache_read_per_mtok: 0.07
     - id: "text-embedding-3-small"
       provider: "openai-compatible"
       base_url: "https://api.openai.com/v1"

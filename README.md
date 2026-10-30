@@ -29,6 +29,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Review one pull request from the command line](#review-one-pull-request-from-the-command-line)
 - [Run the webhook server](#run-the-webhook-server)
 - [Custom MCP servers](#custom-mcp-servers)
+- [Token usage and cost](#token-usage-and-cost)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Measuring review quality](#measuring-review-quality)
@@ -240,6 +241,8 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `mcp_servers` | empty | Operator-provided MCP servers whose tools a review may call. Each needs a `name` and either `command` (stdio) or `url` (http), and `tools.allow` names the tools that are exposed. See [Custom MCP servers](#custom-mcp-servers) |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |
 | `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
+| `review.max_total_tokens` | unset | Per-session token ceiling, counting input, output and cache tokens together. The session stops before its next step once the reported usage passes it. `0` or unset is no limit; see [Token usage and cost](#token-usage-and-cost) |
+| `review.max_cost_usd` | unset | Per-session estimated-cost ceiling. Requires `price_input_per_mtok` and `price_output_per_mtok` on the chat provider. `0` or unset is no limit |
 | `compaction.enabled` | `true` | Whether a session summarizes its older context once it reaches `compaction.trigger_tokens`. On by default; set it to `false` to let the model's context window fill |
 | `compaction.trigger_tokens` | `262144` | The estimated context size at which older messages are summarized. Nothing is compacted before this point, so a 256K trigger leaves a large pull request's details in context |
 | `compaction.reserve_tokens` | `16384` | Output budget kept below the trigger, so the session can still answer after the context grows |
@@ -256,6 +259,9 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium`, `high` or `max`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `max` is for providers that expose it, such as DeepSeek V4 Flash |
+| `models.providers[].price_input_per_mtok` | unset | What a million plain input tokens cost on this chat provider, for the estimated cost. Unset means no estimate |
+| `models.providers[].price_output_per_mtok` | unset | What a million output tokens cost. `price_input_per_mtok` and this one turn the estimate on |
+| `models.providers[].price_cache_read_per_mtok` | unset | What a million input tokens served from the provider's cache cost. Unset counts cached input at zero |
 | `models.providers[].max_tokens` | unset | The most tokens one model response may generate, reasoning included. Unset leaves the provider's default, which can be far below the context window: DeepSeek's chat endpoint generates at most 8192 unless asked for more, so `thinking_level: max` can spend the whole budget on reasoning and never reach the tool call. Set it above the reasoning a step needs |
 | `models.providers[].embedding_timeout` | `30s` | The budget for one embeddings call, as a Go duration. Only an embedding provider (one with `dimensions`) may set it. A local backend can spend a minute or more on its first call while it loads the model, so raise it when the embeddings server starts on demand; the review then keeps its pre-retrieved rules instead of logging `memory_failed` |
 | `models.providers[].request_timeout` | `2m` | How long a chat provider may take to send its response headers, as a Go duration. Only a chat provider may set it. A provider that queues a request can sit silent for minutes; the attempt fails at this budget so the retry policy can try again, rather than holding a worker until `worker.job_timeout`. The streamed answer is not cut off, because only the wait before its first byte is bounded |
@@ -411,6 +417,34 @@ A stdio server receives the session as environment variables, in addition to the
 `RUMIL_WORKSPACE` is what lets a test-runner server act on the same commit the reviewer is reading. It is removed when the session ends.
 
 A server that fails to connect, or a tool that errors, costs that server's tools for that review; the review continues with its own. Tool output is capped at `max_output_bytes` (1 MiB at most) and treated as untrusted data by the reviewer's rules.
+
+## Token usage and cost
+
+Every review session records what the provider reported for each step: input, output, cache-read and cache-creation tokens. The session page shows the totals with the cache categories kept apart, and the session list totals the filtered sessions. When the provider reports no usage, Rumil records nothing and the deck says **usage not reported**; it does not show a free review.
+
+Prices are optional. Set them on the chat provider to see an estimated cost:
+
+```yaml
+models:
+  providers:
+    - id: "deepseek-v4-flash"
+      # ...
+      price_input_per_mtok: 0.27
+      price_output_per_mtok: 1.10
+      price_cache_read_per_mtok: 0.07
+```
+
+A million tokens costs `price_input_per_mtok` for plain input, `price_output_per_mtok` for output, and `price_cache_read_per_mtok` for input the provider served from its cache. Cache-creation tokens are priced at the input rate. The estimate appears only when the input and output rates are set; the tokens remain the source of truth.
+
+Two per-session budgets bound spending:
+
+```yaml
+review:
+  max_total_tokens: 2000000    # input + output + cache tokens; 0 is no limit
+  max_cost_usd: 2.50           # requires the chat provider's input and output prices
+```
+
+Rumil checks the budget between steps, after a step's usage is reported and before the next model request. A session over its budget stops with an error naming the limit, is recorded FAILED, and does not post a review it had not already submitted. Spending exactly the limit is allowed; the next token is over it.
 
 ## Repository guidelines
 

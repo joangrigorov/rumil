@@ -5,7 +5,7 @@
     <h1>Review sessions</h1>
     <p class="lede">Every review a worker has run, newest first. Open one to read the model's reasoning, the tools it called, and how the review ended.</p>
   </div>
-  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}session{{else}}sessions{{end}}{{if .Live}} <span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}</p>
+  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}session{{else}}sessions{{end}}{{if .Live}} <span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}{{if .Usage.Reported}}<span class="usage-total">{{tokens .Usage.TotalTokens}} tokens{{if .Usage.CostReported}} · est. {{usd .Usage.CostUSD}}{{end}}</span>{{end}}</p>
 </header>
 
 <form class="filters" method="get" action="/ui/sessions" aria-label="Filter sessions">
@@ -49,6 +49,7 @@
       <div class="session-meta">
         {{if .Model}}<code>{{.Model}}</code>{{end}}
         <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+        {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{if .Usage.CostUSD}}<span>est. {{usd .Usage.CostUSD}}</span>{{end}}{{end}}
         <span>{{duration .StartedAt .FinishedAt}}</span>
         {{if .ParentSessionID}}<span>continued from {{short .ParentSessionID}}</span>{{end}}
         {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}

@@ -44,6 +44,43 @@ var (
 	ErrReviewNotFailed = errors.New("only a failed review session can be continued")
 )
 
+// TokenUsage is what one review session was billed for. Cache tokens are kept
+// separate so the deck can show how much of the input came from a cache.
+type TokenUsage struct {
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	// CostUSD is the estimated cost, nil when the provider has no prices.
+	CostUSD *float64
+}
+
+// TotalTokens sums every category.
+func (u TokenUsage) TotalTokens() int64 {
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheCreationTokens
+}
+
+// UsageTotals aggregates the sessions a list shows.
+type UsageTotals struct {
+	// Sessions is how many sessions the filter matches, and Reported how many
+	// of them carried usage. The two differ when a provider reports nothing.
+	Sessions            int
+	Reported            int
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	// CostUSD is the sum of the recorded estimates, and CostReported how many
+	// sessions carried one.
+	CostUSD      float64
+	CostReported int
+}
+
+// TotalTokens sums every category.
+func (t UsageTotals) TotalTokens() int64 {
+	return t.InputTokens + t.OutputTokens + t.CacheReadTokens + t.CacheCreationTokens
+}
+
 // ReviewSession is one run of the reviewer.
 type ReviewSession struct {
 	ID             string
@@ -71,8 +108,10 @@ type ReviewSession struct {
 	// They are empty on a first attempt.
 	RequestedBy string
 	RequestedAt *time.Time
-	StartedAt   time.Time
-	FinishedAt  *time.Time
+	// Usage is what the provider reported, nil when it reported nothing.
+	Usage      *TokenUsage
+	StartedAt  time.Time
+	FinishedAt *time.Time
 }
 
 // NewReviewSession is what a worker knows when a review starts.
@@ -99,6 +138,9 @@ type ReviewOutcome struct {
 	// TurnLimitReached says the failure was the step budget rather than a
 	// provider or tool error.
 	TurnLimitReached bool
+	// Usage is what the provider reported for the session, nil when it
+	// reported nothing.
+	Usage *TokenUsage
 }
 
 // Continuable reports whether the session failed without submitting a review
@@ -143,6 +185,7 @@ const reviewSessionColumns = `id, coalesce(job_id::text, ''), installation_id, o
 	pr_number, coalesce(pr_title, ''), coalesce(head_sha, ''), coalesce(base_sha, ''), coalesce(model, ''),
 	status, coalesce(summary, ''), coalesce(review_event, ''), tool_calls, coalesce(error, ''),
 	coalesce(parent_session_id::text, ''), turn_limit_reached, coalesce(requested_by, ''), requested_at,
+	input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd,
 	started_at, finished_at`
 
 // CreateReviewSession records the start of a review and returns the row.
@@ -197,9 +240,19 @@ func (d *DB) FinishReviewSession(ctx context.Context, id string, outcome ReviewO
 		    tool_calls = $5,
 		    error = nullif($6, ''),
 		    turn_limit_reached = $7,
+		    input_tokens = $8,
+		    output_tokens = $9,
+		    cache_read_tokens = $10,
+		    cache_creation_tokens = $11,
+		    cost_usd = $12,
 		    finished_at = now()
 		WHERE id = $1`,
-		id, status, outcome.Summary, outcome.ReviewEvent, outcome.ToolCalls, outcome.Error, outcome.TurnLimitReached)
+		id, status, outcome.Summary, outcome.ReviewEvent, outcome.ToolCalls, outcome.Error, outcome.TurnLimitReached,
+		usageField(outcome.Usage, func(u TokenUsage) int64 { return u.InputTokens }),
+		usageField(outcome.Usage, func(u TokenUsage) int64 { return u.OutputTokens }),
+		usageField(outcome.Usage, func(u TokenUsage) int64 { return u.CacheReadTokens }),
+		usageField(outcome.Usage, func(u TokenUsage) int64 { return u.CacheCreationTokens }),
+		costField(outcome.Usage))
 	if err != nil {
 		return fmt.Errorf("finishing review session %s: %w", id, err)
 	}
@@ -207,6 +260,23 @@ func (d *DB) FinishReviewSession(ctx context.Context, id string, outcome ReviewO
 		return ErrReviewSessionNotFound
 	}
 	return nil
+}
+
+// usageField is one nullable token column: NULL when the provider reported no
+// usage, the number otherwise.
+func usageField(usage *TokenUsage, field func(TokenUsage) int64) any {
+	if usage == nil {
+		return nil
+	}
+	return field(*usage)
+}
+
+// costField is the nullable cost column.
+func costField(usage *TokenUsage) any {
+	if usage == nil || usage.CostUSD == nil {
+		return nil
+	}
+	return *usage.CostUSD
 }
 
 // InterruptRunningReviewSessions closes sessions that were running when the
@@ -262,6 +332,32 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 		return nil, fmt.Errorf("listing review sessions: %w", err)
 	}
 	return sessions, nil
+}
+
+// ReviewSessionUsage aggregates the sessions a filter matches, which is what
+// the list's header totals. It is a full scan of the filter, not of the page
+// the list happens to show.
+func (d *DB) ReviewSessionUsage(ctx context.Context, filter ReviewSessionFilter) (UsageTotals, error) {
+	var totals UsageTotals
+	err := d.pool.QueryRow(ctx, `
+		SELECT count(*), count(input_tokens),
+		       coalesce(sum(input_tokens), 0)::bigint,
+		       coalesce(sum(output_tokens), 0)::bigint,
+		       coalesce(sum(cache_read_tokens), 0)::bigint,
+		       coalesce(sum(cache_creation_tokens), 0)::bigint,
+		       coalesce(sum(cost_usd), 0)::double precision, count(cost_usd)
+		FROM review_sessions
+		WHERE ($1 = '' OR status::text = $1)
+		  AND ($2 = '' OR org_name = $2)
+		  AND ($3 = '' OR repo_name = $3)`,
+		filter.Status, filter.OrgName, filter.RepoName).Scan(
+		&totals.Sessions, &totals.Reported,
+		&totals.InputTokens, &totals.OutputTokens, &totals.CacheReadTokens, &totals.CacheCreationTokens,
+		&totals.CostUSD, &totals.CostReported)
+	if err != nil {
+		return UsageTotals{}, fmt.Errorf("aggregating review session usage: %w", err)
+	}
+	return totals, nil
 }
 
 // ReviewSessionByID returns one session, or ErrReviewSessionNotFound.
@@ -414,14 +510,41 @@ type rowScanner interface {
 
 func scanReviewSession(row rowScanner) (ReviewSession, error) {
 	var session ReviewSession
+	var (
+		inputTokens         *int64
+		outputTokens        *int64
+		cacheReadTokens     *int64
+		cacheCreationTokens *int64
+		costUSD             *float64
+	)
 	if err := row.Scan(
 		&session.ID, &session.JobID, &session.InstallationID, &session.OrgName, &session.RepoName,
 		&session.PRNumber, &session.PRTitle, &session.HeadSHA, &session.BaseSHA, &session.Model,
 		&session.Status, &session.Summary, &session.ReviewEvent, &session.ToolCalls, &session.Error,
 		&session.ParentSessionID, &session.TurnLimitReached, &session.RequestedBy, &session.RequestedAt,
+		&inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, &costUSD,
 		&session.StartedAt, &session.FinishedAt,
 	); err != nil {
 		return ReviewSession{}, err
 	}
+	if inputTokens != nil {
+		session.Usage = &TokenUsage{
+			InputTokens:         *inputTokens,
+			OutputTokens:        valueOrZero(outputTokens),
+			CacheReadTokens:     valueOrZero(cacheReadTokens),
+			CacheCreationTokens: valueOrZero(cacheCreationTokens),
+			CostUSD:             costUSD,
+		}
+	}
 	return session, nil
+}
+
+// valueOrZero reads a nullable counter. The columns are written together, so a
+// NULL in one of the others is a row a migration left behind rather than a
+// value to reject.
+func valueOrZero(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }

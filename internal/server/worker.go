@@ -445,12 +445,28 @@ func sessionOutcome(result *reviewer.Result, err error) store.ReviewOutcome {
 		outcome.ReviewEvent = result.Event
 		outcome.ToolCalls = result.ToolCalls
 		outcome.TurnLimitReached = result.TurnLimitReached
+		outcome.Usage = usageOutcome(result.Usage)
 	}
 	if err != nil {
 		outcome.Status = store.ReviewFailed
 		outcome.Error = err.Error()
 	}
 	return outcome
+}
+
+// usageOutcome converts the engine's usage into the store's shape, keeping nil
+// as "the provider reported nothing".
+func usageOutcome(usage *reviewer.Usage) *store.TokenUsage {
+	if usage == nil {
+		return nil
+	}
+	return &store.TokenUsage{
+		InputTokens:         usage.InputTokens,
+		OutputTokens:        usage.OutputTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		CostUSD:             usage.CostUSD,
+	}
 }
 
 // remember distills the command a comment carried into a rule and answers the
