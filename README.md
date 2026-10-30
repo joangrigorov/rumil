@@ -183,10 +183,12 @@ Rumil authenticates as a GitHub App you own. Both ways of running it need the Ap
    | Permission | Access | Why |
    | :--- | :--- | :--- |
    | Contents | Read | Read `RUMIL.md` and the file contents behind a diff hunk. **Read and write** is what GitHub requires before it lets an App installation resolve a review thread, so a read-only App leaves its own threads for a person to close. Raising it on the App is not enough on its own: the installation's owner has to accept the change before the tokens carry it |
-   | Checks | Read and write | Report each review's progress as a check run. Optional: without it the check is skipped and the review still runs |
+   | Checks | Read and write | Report each review's progress as a check run. **Required for the check run:** with Read alone, GitHub refuses the create and update calls. Rumil logs the refusal and posts the review without a check, so the feature is missing rather than the review failing |
    | Issues | Read and write | Read the pull request conversation, and post the reply to a remembered rule |
    | Pull requests | Read and write | Read metadata, diffs, reviews and review threads; submit the review, and reply to review comments |
    | Metadata | Read | Always required by GitHub |
+
+   Checks must be Read and write for the check run. Take the permission in the App settings, then accept the updated permissions on every installation: a token minted before the installation's owner accepted the change does not carry it, and the check is skipped until a fresh token is minted.
 
 4. Create the App, then **Generate a private key** and download the `.pem`. Point `github.private_key_path` at it, or put its contents in the `GITHUB_PRIVATE_KEY` environment variable.
 5. Note the **App ID** on the App's settings page: that is `github.app_id`.
@@ -395,7 +397,7 @@ The comment is the trigger, and the only one. A GitHub App cannot be requested a
 
 Rumil answers a command with a `+1` reaction on the comment as soon as it has taken it, so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
 
-Each review also opens a **Rumil review** check run on the reviewed commit. It shows as in progress while the session runs and completes as success for an approval, neutral for a comment-only review, and action required for requested changes. A failed session completes it as a failure with the reason. One check run covers a commit, so a continuation updates it rather than adding another. The App needs the Checks permission; without it the check is skipped and the review still posts. Set `server.public_url` to link the check to the session page.
+Each review also opens a **Rumil review** check run on the reviewed commit. It shows as in progress while the session runs and completes as success for an approval, neutral for a comment-only review, and action required for requested changes. A failed session completes it as a failure with the reason. One check run covers a commit, so a continuation updates it rather than adding another. This feature needs the App's **Checks: Read and write** repository permission, accepted on the installation: with Checks on Read only, or off, GitHub refuses the check-run call, Rumil logs the refusal, and the review still posts without a check. Set `server.public_url` to link the check to the session page.
 
 ### Continuing a failed review
 
@@ -724,13 +726,15 @@ It prints the effective non-secret settings and one line per check, then exits n
 | `chat` | One small completion, with its latency and the usage the provider reported | The provider does not answer, or answers without a completion |
 | `embedding` | One call to the embedding provider, and the vector width it returned | The provider is configured and returns another width or no vector |
 | `snapshot` | With `--snapshot owner/name`: the default branch's archive is downloaded, extracted into a temporary directory, and removed | The archive or the extraction fails, or the configured directory is unusable |
-| `server` | `github.webhook_secret` and `moderation.admin_token` are set when `database.dsn` configures `rumil serve` | A missing webhook secret |
+| `server` | `github.webhook_secret` and an admin credential (`moderation.admin_token` or an entry of `moderation.admin_tokens`) are set when `database.dsn` configures `rumil serve` | A missing webhook secret; a missing admin credential is a warning |
 
 `--json` writes the same report as an object with `config_path`, `settings` and `checks` (each with `name`, `status` and `detail`), for a script or a monitoring probe. A provider that answers without reporting usage is a warning: reviews still run, but the token and cost budgets cannot count that provider.
 
 ## Troubleshooting
 
 **A review never appears.** Rumil reviews only when the App is requested as a reviewer, so check that the pull request actually asks for it. Then look at the App's **Advanced → Recent Deliveries**: a delivery that is not a review request, comes from another installation, or carries a bad signature is answered `200` or `401` and logged with the reason it was ignored. `docker compose logs -f rumil` shows those lines.
+
+**No check run appears on the commit.** The App's **Checks** repository permission is not Read and write, or the installation has not accepted the updated permissions. Grant Read and write on Checks in the App settings, then accept the change on the installation; a token minted before the acceptance does not carry it. Restart Rumil after the installation accepts so the next review mints a fresh token. The review itself still posts, and the logged check-run refusal names the cause.
 
 **"review session ended without submitting a review".** The session stopped without saying anything about the pull request. It reached `app.max_agent_turns`, a turn was cut off at the model's output limit, or the chat endpoint does not support tool calling. The run is recorded as failed. Raise the limit, set `app.max_agent_turns: 0` for no cap, or point `models.default_chat` at a larger model. A message that ends with "(model output limit reached)" means the provider's response budget ran out before the tool call: set `models.providers[].max_tokens` on the chat provider, because reasoning counts against that budget and `thinking_level: max` can use all of it. Continue the session from `/ui/sessions` or with `rumil sessions continue <session-id>`: the new attempt reuses its tool results and gets its own budget. When a turn alone is cut off, Rumil asks the model once more for the tool call before failing.
 
