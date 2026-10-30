@@ -69,6 +69,12 @@ const (
 	// spend longer than this on its first request while it loads or compiles
 	// the model, which is what models.providers[].embedding_timeout raises.
 	DefaultEmbeddingTimeout = 30 * time.Second
+
+	// DefaultRequestTimeout bounds how long a chat provider may take to start
+	// answering. A provider that queues a request behind its own load can sit
+	// silent for minutes; the header timeout fails the attempt so the retry
+	// policy can try again instead of holding a worker.
+	DefaultRequestTimeout = 2 * time.Minute
 )
 
 // GuidelinesRef values accepted by review.guidelines_ref.
@@ -270,6 +276,10 @@ type Provider struct {
 	// such as "90s". It applies to an embedding provider; empty uses
 	// DefaultEmbeddingTimeout.
 	EmbeddingTimeout string `yaml:"embedding_timeout"`
+	// RequestTimeout bounds how long a chat provider may take to send the
+	// response headers, as a Go duration string. It applies to a chat
+	// provider; empty uses DefaultRequestTimeout.
+	RequestTimeout string `yaml:"request_timeout"`
 	// ThinkingLevel is the reasoning effort sent to a chat model. Empty leaves
 	// the provider default in place.
 	ThinkingLevel string `yaml:"thinking_level"`
@@ -287,6 +297,19 @@ func (p Provider) EmbeddingTimeoutOrDefault() time.Duration {
 	timeout, err := time.ParseDuration(p.EmbeddingTimeout)
 	if err != nil {
 		return DefaultEmbeddingTimeout
+	}
+	return timeout
+}
+
+// RequestTimeoutOrDefault is how long the provider may take to start
+// answering, defaulted when the operator left it out.
+func (p Provider) RequestTimeoutOrDefault() time.Duration {
+	if p.RequestTimeout == "" {
+		return DefaultRequestTimeout
+	}
+	timeout, err := time.ParseDuration(p.RequestTimeout)
+	if err != nil {
+		return DefaultRequestTimeout
 	}
 	return timeout
 }
@@ -590,6 +613,20 @@ func (m Models) validate() error {
 			}
 			if timeout <= 0 {
 				return fmt.Errorf("models.providers[%d].embedding_timeout must be positive, got %q", i, p.EmbeddingTimeout)
+			}
+		}
+		if p.RequestTimeout != "" {
+			if p.IsEmbedding() {
+				return fmt.Errorf("models.providers[%d].request_timeout applies to a chat provider, but %q declares dimensions; use embedding_timeout for its embeddings calls",
+					i, p.ID)
+			}
+			timeout, err := time.ParseDuration(p.RequestTimeout)
+			if err != nil {
+				return fmt.Errorf("models.providers[%d].request_timeout must be a duration such as \"90s\" or \"2m\", got %q: %w",
+					i, p.RequestTimeout, err)
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("models.providers[%d].request_timeout must be positive, got %q", i, p.RequestTimeout)
 			}
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -27,11 +28,11 @@ import (
 // OpenAI-compatible endpoint.
 const providerWireOpenAICompat = "openai-compat"
 
-// reasoningProvider is the instance provider factory that carries a reasoning
-// effort on the chat-completions wire. Kit's built-in OpenAI-compatible route
-// has no reasoning option, so a level set on the provider would otherwise be
-// silently dropped.
-const reasoningProvider = "rumil-openai-compat"
+// chatProvider is the instance provider factory. Kit's built-in
+// OpenAI-compatible route has no place to set the HTTP client or a reasoning
+// effort, so Rumil registers its own: the client bounds the wait for the
+// response headers, and the effort rides the chat-completions wire.
+const chatProvider = "rumil-openai-compat"
 
 // stopReasonLength is the finish reason of a response cut off at the model's
 // output token cap, which fantasy spells "length".
@@ -573,15 +574,27 @@ func (e *Engine) compactIfNeeded(ctx context.Context, session *kit.Kit) {
 func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, tools []kit.Tool, maxSteps int, streaming bool) *kit.Options {
 	options := &kit.Options{}
 	kit.Isolated()(options)
-	kit.WithModel(modelString(provider))(options)
+	// The custom factory is what bounds the wait for a provider's response
+	// headers; without it a stalled request holds a worker for the whole job
+	// timeout.
+	options.Providers = map[string]kit.ProviderFactory{
+		chatProvider: chatProviderFactory(provider),
+	}
+	kit.WithModel(chatProvider + "/" + provider.ModelName)(options)
 	if provider.ThinkingLevel != "" {
 		// The custom provider is what actually sends the effort on the
 		// chat-completions wire; the option keeps kit's own view consistent.
-		options.Providers = map[string]kit.ProviderFactory{
-			reasoningProvider: reasoningProviderFactory(provider.ThinkingLevel),
-		}
 		kit.WithThinkingLevel(provider.ThinkingLevel)(options)
 	}
+	// The default policy allows four attempts within two minutes, which a
+	// two-minute header timeout would spend on one attempt. A few minutes of
+	// headroom lets a provider that is briefly overloaded recover.
+	kit.WithRetryPolicy(kit.RetryPolicy{
+		MaxAttempts:  4,
+		InitialDelay: time.Second,
+		MaxDelay:     30 * time.Second,
+		MaxElapsed:   5 * time.Minute,
+	})(options)
 	kit.WithSystemPrompt(systemPrompt)(options)
 	// Streaming is what turns reasoning and text into events as they happen.
 	// It is off without an observer, which keeps the one-off CLI path and the
@@ -604,38 +617,50 @@ func (e *Engine) sessionOptions(provider *config.Provider, systemPrompt string, 
 	return options
 }
 
-func modelString(provider *config.Provider) string {
-	if provider.ThinkingLevel != "" {
-		return reasoningProvider + "/" + provider.ModelName
-	}
-	return "openai/" + provider.ModelName
-}
-
-// reasoningProviderFactory builds the same OpenAI-compatible provider kit uses,
-// with the chat-completions reasoning effort attached as provider options.
-func reasoningProviderFactory(level string) kit.ProviderFactory {
+// chatProviderFactory builds the OpenAI-compatible provider kit would build,
+// with two additions: a client that gives up waiting for the response headers
+// after the provider's request timeout, and the reasoning effort when one is
+// configured.
+func chatProviderFactory(provider *config.Provider) kit.ProviderFactory {
 	return func(ctx context.Context, cfg *kit.ProviderConfig, modelName string) (*kit.ProviderResult, error) {
-		provider, err := openaicompat.New(
+		built, err := openaicompat.New(
 			openaicompat.WithBaseURL(cfg.ProviderURL),
 			openaicompat.WithAPIKey(cfg.ProviderAPIKey),
-			openaicompat.WithName(reasoningProvider),
+			openaicompat.WithName(chatProvider),
+			openaicompat.WithHTTPClient(boundedHTTPClient(provider.RequestTimeoutOrDefault())),
 		)
 		if err != nil {
-			return nil, fmt.Errorf("building the reasoning provider: %w", err)
+			return nil, fmt.Errorf("building the chat provider: %w", err)
 		}
-		model, err := provider.LanguageModel(ctx, modelName)
+		model, err := built.LanguageModel(ctx, modelName)
 		if err != nil {
-			return nil, fmt.Errorf("selecting model %q on the reasoning provider: %w", modelName, err)
+			return nil, fmt.Errorf("selecting model %q on the chat provider: %w", modelName, err)
 		}
-		return &kit.ProviderResult{
-			Model: model,
-			ProviderOptions: fantasy.ProviderOptions{
-				reasoningProvider: &openaicompat.ProviderOptions{
-					ReasoningEffort: reasoningEffort(level),
+		result := &kit.ProviderResult{Model: model}
+		if provider.ThinkingLevel != "" {
+			result.ProviderOptions = fantasy.ProviderOptions{
+				chatProvider: &openaicompat.ProviderOptions{
+					ReasoningEffort: reasoningEffort(provider.ThinkingLevel),
 				},
-			},
-		}, nil
+			}
+		}
+		return result, nil
 	}
+}
+
+// boundedHTTPClient bounds the wait for a provider's response headers. The
+// streamed body is not cut: a reasoning answer may take minutes to finish once
+// it starts, and only a provider that never starts is the problem.
+func boundedHTTPClient(timeout time.Duration) *http.Client {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	var bounded *http.Transport
+	if ok {
+		bounded = transport.Clone()
+	} else {
+		bounded = &http.Transport{}
+	}
+	bounded.ResponseHeaderTimeout = timeout
+	return &http.Client{Transport: bounded}
 }
 
 // reasoningEffort maps a configured level onto the chat-completions effort.
