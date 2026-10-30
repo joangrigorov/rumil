@@ -113,4 +113,9 @@ database:                         # Required from v0.0.3
 moderation:                       # Used from v0.0.4, surface from v0.0.5
   accept_all: false               # MUST stay false from v0.0.4 on: the bypass for the memory approval gate
   auto_approve_associations: []   # Optional: commenters with these GitHub author_associations record rules APPROVED, for example ["OWNER", "MEMBER"]
-  admin_token: "${RUMIL_ADMIN_TOKEN}" # Bearer (or basic-auth password) for /ui/moderation and /api/moderation; unset disables them
+  admin_token: "${RUMIL_ADMIN_TOKEN}" # Single credential, accepted as an entry named "legacy"; unset with no admin_tokens disables the operator surfaces
+  # admin_tokens:                   # Optional: named credentials, each accepted and recorded in the audit trail
+  #   - name: "alice"
+  #     token: "${ALICE_ADMIN_TOKEN}"
+  #   - name: "ci-bot"
+  #     token: "${CI_ADMIN_TOKEN}"

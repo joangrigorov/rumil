@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/embedder"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/server"
@@ -21,6 +22,15 @@ import (
 )
 
 const adminToken = "test-admin-token"
+
+// credentialsFor wraps one token in the named shape the surfaces take now. The
+// name is "legacy", which is what a lone moderation.admin_token is called.
+func credentialsFor(token string) []config.AdminCredential {
+	if token == "" {
+		return nil
+	}
+	return []config.AdminCredential{{Name: "legacy", Token: token}}
+}
 
 // textEmbedder is the embedding provider a moderation test edits rules with.
 // The vector is a function of the text, so a rule approved against the edited
@@ -80,9 +90,16 @@ func seedScopedMemory(t *testing.T, h *harness, rule, scope string) store.Memory
 // database behind it.
 func moderationHandler(t *testing.T, h *harness, embedder moderation.Embedder, token string) http.Handler {
 	t.Helper()
+	return moderationHandlerWith(t, h, embedder, credentialsFor(token))
+}
+
+// moderationHandlerWith mounts the surface with a caller-chosen credential set,
+// which is how a test names two holders.
+func moderationHandlerWith(t *testing.T, h *harness, embedder moderation.Embedder, credentials []config.AdminCredential) http.Handler {
+	t.Helper()
 
 	service := moderation.NewService(h.db, embedder, h.cfg.GitHub.InstallationID, h.logger)
-	return server.Handler(h.webhook(), h.db, server.NewModerationUI(service, token, h.logger))
+	return server.Handler(h.webhook(), h.db, server.NewModerationUI(service, credentials, h.logger))
 }
 
 func moderatedRequest(t *testing.T, handler http.Handler, method, path, token string, form url.Values, accept string) *httptest.ResponseRecorder {
@@ -165,6 +182,50 @@ func TestT030_06_ModerationSurfaceNeedsTheToken(t *testing.T) {
 	}
 }
 
+// Two named credentials both authorize, an unknown one does not, and the name
+// of the matching credential is what a decision records.
+func TestNamedAdminCredentialsAuthorizeAndNameTheHolder(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	rule := seedMemory(t, h, "Money is decimal, never float")
+
+	credentials := []config.AdminCredential{
+		{Name: "alice", Token: "alice-token"},
+		{Name: "bob", Token: "bob-token"},
+	}
+	handler := moderationHandlerWith(t, h, &textEmbedder{}, credentials)
+
+	for _, token := range []string{"alice-token", "bob-token"} {
+		response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", token, nil, "text/html")
+		if response.Code != http.StatusOK {
+			t.Errorf("token %q got status %d, want 200", token, response.Code)
+		}
+	}
+	if response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", "carol-token", nil, "text/html"); response.Code != http.StatusUnauthorized {
+		t.Errorf("an unknown token got status %d, want 401", response.Code)
+	}
+
+	response := moderatedRequest(t, handler, http.MethodPost,
+		"/api/moderation/"+rule.ID+"/approve", "alice-token", url.Values{}, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("approval status = %d, want 200 (body: %s)", response.Code, response.Body.String())
+	}
+	stored, err := h.db.MemoryByID(context.Background(), 98765432, rule.ID)
+	if err != nil {
+		t.Fatalf("MemoryByID returned error: %v", err)
+	}
+	if stored.ReviewedBy != "alice" {
+		t.Errorf("reviewed_by = %q, want the credential name %q", stored.ReviewedBy, "alice")
+	}
+
+	// Removing one entry stops it on the next request, with no other change.
+	removed := moderationHandlerWith(t, h, &textEmbedder{}, credentials[:1])
+	if response := moderatedRequest(t, removed, http.MethodGet, "/ui/moderation", "bob-token", nil, "text/html"); response.Code != http.StatusUnauthorized {
+		t.Errorf("a removed token got status %d, want 401", response.Code)
+	}
+}
+
 // A surface with no token configured refuses everything rather than becoming an
 // open admin route.
 func TestModerationSurfaceWithoutATokenRefuses(t *testing.T) {
@@ -241,7 +302,7 @@ func TestModerationApprovesAndRejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MemoryByID returned error: %v", err)
 	}
-	if stored.Status != store.MemoryApproved || stored.ReviewedBy != "admin-token" {
+	if stored.Status != store.MemoryApproved || stored.ReviewedBy != "legacy" {
 		t.Errorf("row is %+v, want APPROVED and decided by the token holder", stored)
 	}
 	if stored.PathGlob != "pkg/auth/**" {
@@ -668,7 +729,7 @@ func TestModerationTakesTheModeratorFromTheBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MemoryByID returned error: %v", err)
 	}
-	if stored.ReviewedBy != "admin-token" {
+	if stored.ReviewedBy != "legacy" {
 		t.Errorf("reviewed_by = %q, want the token holder rather than the query string", stored.ReviewedBy)
 	}
 

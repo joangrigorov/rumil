@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/continuation"
 	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/store"
@@ -39,13 +40,13 @@ func WithSessionsMetrics(meter *metrics.Metrics) SessionsOption {
 
 // NewSessionsUI builds the deck. The broker is owned here so the recorder the
 // worker pool uses and the streams the browser reads are the same fan-out.
-func NewSessionsUI(db *store.DB, token string, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {
+func NewSessionsUI(db *store.DB, credentials []config.AdminCredential, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	ui := &SessionsUI{
 		db:     db,
-		auth:   newAdminAuth(token, "rumil sessions", logger),
+		auth:   newAdminAuth(credentials, "rumil sessions", logger),
 		broker: newBroker(),
 		logger: logger,
 	}
@@ -325,11 +326,14 @@ func continuationTurns(r *http.Request) (int, error) {
 	return turns, nil
 }
 
-// requestedByOf names the person asking. The credential is shared, so the page
-// cannot know who used it; an API client may name somebody with requested_by,
-// and the default says what the surface actually knows.
+// requestedByOf names the person asking. An API client may still name somebody
+// with requested_by; otherwise the default is the configured credential that
+// authorized the request, which is what the surface actually knows.
 func requestedByOf(r *http.Request) string {
 	if name := strings.TrimSpace(r.PostFormValue("requested_by")); name != "" {
+		return name
+	}
+	if name := adminIdentity(r); name != "" {
 		return name
 	}
 	return "admin-token"
@@ -374,6 +378,8 @@ func (s *SessionsUI) events(w http.ResponseWriter, r *http.Request) {
 		s.auth.refuse(w, r, http.StatusInternalServerError, "this server cannot stream")
 		return
 	}
+
+	s.logger.Info("a session stream opened", "session_id", session.ID, "admin", adminIdentity(r))
 
 	after := lastEventID(r)
 	live, unsubscribe := s.broker.subscribe(session.ID)

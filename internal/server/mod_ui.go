@@ -13,30 +13,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/server/web"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
 // ModerationUI is the maintainer's surface: the rules waiting for a decision,
-// and the two ways to decide. It is guarded by moderation.admin_token and has
-// no login page, no session and no cookie, so it is stateless by construction.
+// and the two ways to decide. It is guarded by the configured admin credentials
+// and has no login page and no session of its own.
 type ModerationUI struct {
 	service *moderation.Service
 	auth    *adminAuth
 	logger  *slog.Logger
 }
 
-// NewModerationUI builds the surface. An empty token disables it rather than
-// opening it: with no token there is no way to tell an operator from a
-// stranger, so every request is refused.
-func NewModerationUI(service *moderation.Service, token string, logger *slog.Logger) *ModerationUI {
+// NewModerationUI builds the surface. An empty credential list disables it
+// rather than opening it: with no token there is no way to tell an operator
+// from a stranger, so every request is refused.
+func NewModerationUI(service *moderation.Service, credentials []config.AdminCredential, logger *slog.Logger) *ModerationUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &ModerationUI{
 		service: service,
-		auth:    newAdminAuth(token, "rumil moderation", logger),
+		auth:    newAdminAuth(credentials, "rumil moderation", logger),
 		logger:  logger,
 	}
 }
@@ -247,6 +248,11 @@ func moderatorOf(r *http.Request) string {
 	// The body, not r.FormValue: the query string is part of a URL that gets
 	// pasted around, and an audit line is about the decision, not about a link.
 	if name := strings.TrimSpace(r.PostFormValue("moderator")); name != "" {
+		return name
+	}
+	// The credential that authorized the request is what the surface knows
+	// about the holder; a shared token used to leave only "admin-token" here.
+	if name := adminIdentity(r); name != "" {
 		return name
 	}
 	return "admin-token"

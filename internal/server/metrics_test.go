@@ -29,7 +29,7 @@ func scrapeMetrics(t *testing.T, m *metrics.Metrics) string {
 func TestMetricsOnTheMainListenerNeedsTheAdminToken(t *testing.T) {
 	m := metrics.New()
 	handler := server.WithMetricsEndpoint(http.NotFoundHandler(),
-		server.MetricsHandler(m, "secret-token", slog.New(slog.DiscardHandler)))
+		server.MetricsHandler(m, credentialsFor("secret-token"), slog.New(slog.DiscardHandler)))
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	recorder := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestMetricsOnTheMainListenerNeedsTheAdminToken(t *testing.T) {
 func TestMetricsOnTheMainListenerRefusesWithoutAConfiguredToken(t *testing.T) {
 	m := metrics.New()
 	handler := server.WithMetricsEndpoint(http.NotFoundHandler(),
-		server.MetricsHandler(m, "", slog.New(slog.DiscardHandler)))
+		server.MetricsHandler(m, nil, slog.New(slog.DiscardHandler)))
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -123,7 +123,7 @@ func TestACompletedReviewMovesTheReviewCounters(t *testing.T) {
 	}
 
 	pool := server.NewPool(h.db, h.engine(t, gh), h.cfg.App.BotHandle, 1, h.logger, server.WithMetrics(m))
-	sessionsUI := server.NewSessionsUI(h.db, "admin-token", h.logger, server.WithSessionsMetrics(m))
+	sessionsUI := server.NewSessionsUI(h.db, credentialsFor("admin-token"), h.logger, server.WithSessionsMetrics(m))
 	pool.SetSessionRecorder(sessionsUI.Recorder())
 
 	poolCtx, stopPool := context.WithCancel(context.Background())

@@ -98,7 +98,7 @@ func newServeCmd(configPath *string) *cobra.Command {
 			// The observation deck shares the moderation credential. Its
 			// recorder is attached to the pool before the workers start, so a
 			// review that begins immediately is still recorded.
-			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminToken, logger,
+			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminCredentials(), logger,
 				server.WithSessionsMetrics(meter))
 			pool.SetSessionRecorder(sessionsUI.Recorder())
 
@@ -111,14 +111,14 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.InstallationID, logger)
-			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminToken, logger)
+			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminCredentials(), logger)
 
 			handler := server.Handler(webhook, db, moderationUI, sessionsUI)
 			var metricsServer *http.Server
 			if cfg.Server.MetricsListen == "" {
 				// No separate listener: the endpoint shares the main one and
 				// needs the admin credential like every other operator surface.
-				handler = server.WithMetricsEndpoint(handler, server.MetricsHandler(meter, cfg.Moderation.AdminToken, logger))
+				handler = server.WithMetricsEndpoint(handler, server.MetricsHandler(meter, cfg.Moderation.AdminCredentials(), logger))
 			} else {
 				// A separate address is what makes it reachable: the operator
 				// binds it to loopback or a firewalled interface and the
