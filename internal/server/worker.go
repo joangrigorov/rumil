@@ -23,15 +23,16 @@ const pollInterval = 250 * time.Millisecond
 
 // Pool drains the webhook job queue with a fixed number of workers.
 type Pool struct {
-	jobs     *store.DB
-	engine   *reviewer.Engine
-	botLogin string
-	workers  int
-	interval time.Duration
-	timeout  time.Duration
-	recorder *SessionRecorder
-	meter    *metrics.Metrics
-	logger   *slog.Logger
+	jobs          *store.DB
+	engine        *reviewer.Engine
+	botLogin      string
+	workers       int
+	interval      time.Duration
+	timeout       time.Duration
+	recorder      *SessionRecorder
+	meter         *metrics.Metrics
+	installations []int64
+	logger        *slog.Logger
 
 	wg sync.WaitGroup
 }
@@ -40,6 +41,12 @@ type Pool struct {
 // sessions that ended without a review.
 func WithMetrics(meter *metrics.Metrics) PoolOption {
 	return func(p *Pool) { p.meter = meter }
+}
+
+// WithPoolInstallations limits the pool to one installation's jobs. Empty
+// claims any installation, which is what a single-pool test does.
+func WithPoolInstallations(ids []int64) PoolOption {
+	return func(p *Pool) { p.installations = ids }
 }
 
 // SetSessionRecorder attaches the observation deck's worker half. It is set
@@ -115,7 +122,7 @@ func (p *Pool) work(ctx context.Context, workerID string) {
 			return
 		}
 
-		job, err := p.jobs.ClaimJob(ctx, workerID)
+		job, err := p.jobs.ClaimJobFor(ctx, workerID, p.installations)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
@@ -165,6 +172,7 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 		// carries no comment to answer.
 		p.acknowledgeReview(ctx, logger, reviewer.Request{
 			Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
+			InstallationID: job.InstallationID,
 		})
 		p.review(ctx, logger, job, "")
 	case eventIssueComment, eventReviewComment:
@@ -191,7 +199,8 @@ func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job)
 	// the command was taken, which is what they are waiting for.
 	p.acknowledgeCommand(ctx, logger, reviewer.RememberRequest{
 		Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
-		CommentID: delivery.Comment.ID, Conversation: job.EventType == eventIssueComment,
+		InstallationID: job.InstallationID,
+		CommentID:      delivery.Comment.ID, Conversation: job.EventType == eventIssueComment,
 	})
 
 	switch command.Verb {
@@ -258,13 +267,14 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 
 	started := time.Now()
 	result, err := p.engine.Review(reviewCtx, reviewer.Request{
-		Owner:     job.OrgName,
-		Repo:      job.RepoName,
-		Number:    job.PRNumber,
-		Focus:     focus,
-		SessionID: sessionID,
-		Observer:  observer,
-		Cancelled: watcher.Stopped,
+		Owner:          job.OrgName,
+		Repo:           job.RepoName,
+		Number:         job.PRNumber,
+		InstallationID: job.InstallationID,
+		Focus:          focus,
+		SessionID:      sessionID,
+		Observer:       observer,
+		Cancelled:      watcher.Stopped,
 	})
 	p.observeReview(result, err, started)
 	if recorded != nil {
@@ -378,12 +388,13 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 
 	started := time.Now()
 	result, reviewErr := p.engine.Review(continuationCtx, reviewer.Request{
-		Owner:     parent.OrgName,
-		Repo:      parent.RepoName,
-		Number:    parent.PRNumber,
-		SessionID: sessionID,
-		Observer:  observer,
-		Cancelled: watcher.Stopped,
+		Owner:          parent.OrgName,
+		Repo:           parent.RepoName,
+		Number:         parent.PRNumber,
+		InstallationID: parent.InstallationID,
+		SessionID:      sessionID,
+		Observer:       observer,
+		Cancelled:      watcher.Stopped,
 		Continuation: &reviewer.Continuation{
 			ParentSessionID: parent.ID,
 			HeadSHA:         parent.HeadSHA,
@@ -598,16 +609,17 @@ func (p *Pool) answer(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		line = delivery.Comment.OriginalLine
 	}
 	req := reviewer.AnswerRequest{
-		Owner:       job.OrgName,
-		Repo:        job.RepoName,
-		Number:      job.PRNumber,
-		CommentID:   delivery.Comment.ID,
-		InReplyToID: delivery.Comment.InReplyToID,
-		Question:    command.Instruction,
-		RequestedBy: delivery.Comment.User.Login,
-		Path:        delivery.Comment.Path,
-		Line:        line,
-		DiffHunk:    delivery.Comment.DiffHunk,
+		Owner:          job.OrgName,
+		Repo:           job.RepoName,
+		Number:         job.PRNumber,
+		InstallationID: job.InstallationID,
+		CommentID:      delivery.Comment.ID,
+		InReplyToID:    delivery.Comment.InReplyToID,
+		Question:       command.Instruction,
+		RequestedBy:    delivery.Comment.User.Login,
+		Path:           delivery.Comment.Path,
+		Line:           line,
+		DiffHunk:       delivery.Comment.DiffHunk,
 	}
 
 	answerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
@@ -671,6 +683,7 @@ func (p *Pool) rememberRequest(job *store.Job, delivery payload, command Command
 		Owner:             job.OrgName,
 		Repo:              job.RepoName,
 		Number:            job.PRNumber,
+		InstallationID:    job.InstallationID,
 		Command:           command.Instruction,
 		OrgScoped:         command.Org,
 		CommentID:         delivery.Comment.ID,

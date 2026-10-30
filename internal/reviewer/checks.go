@@ -21,7 +21,12 @@ func (e *Engine) startReviewCheck(ctx context.Context, req Request, headSHA stri
 	if headSHA == "" {
 		return 0
 	}
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	authClient, err := e.auth.ClientFor(req.InstallationID)
+	if err != nil {
+		e.logger.Warn("starting the review check run failed, the review continues without it", "error", err)
+		return 0
+	}
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 	id, err := client.StartReviewCheck(ctx, headSHA, e.checkDetailsURL(req.SessionID), e.cfg.GitHub.AppID)
 	if err != nil {
 		e.logger.Warn("starting the review check run failed, the review continues without it", "error", err)
@@ -41,7 +46,12 @@ func (e *Engine) finishReviewCheck(parent context.Context, req Request, id int64
 	defer cancel()
 
 	conclusion, summary := checkConclusion(result, reviewErr)
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	authClient, err := e.auth.ClientFor(req.InstallationID)
+	if err != nil {
+		e.logger.Warn("completing the review check run failed", "error", err)
+		return
+	}
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 	if err := client.FinishReviewCheck(ctx, id, conclusion, summary); err != nil {
 		e.logger.Warn("completing the review check run failed", "error", err)
 	}

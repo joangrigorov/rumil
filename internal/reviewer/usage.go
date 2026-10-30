@@ -82,13 +82,14 @@ type usageBudget struct {
 	priced    bool
 }
 
-// newUsageBudget reads the limits from the configuration. provider is the chat
-// provider this session runs on, which is what prices the cost limit when a
-// repository chose a provider of its own.
-func (e *Engine) newUsageBudget(provider *config.Provider) usageBudget {
+// newUsageBudget reads the limits from the effective review settings, which may
+// carry an installation's own budget. provider is the chat provider this
+// session runs on, which is what prices the cost limit when a repository chose
+// a provider of its own.
+func (e *Engine) newUsageBudget(provider *config.Provider, review config.Review) usageBudget {
 	budget := usageBudget{
-		maxTokens: e.cfg.Review.MaxTotalTokens,
-		maxCost:   e.cfg.Review.MaxCostUSD,
+		maxTokens: review.MaxTotalTokens,
+		maxCost:   review.MaxCostUSD,
 	}
 	if provider != nil {
 		budget.price = provider.TokenPrice()

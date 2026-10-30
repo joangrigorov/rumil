@@ -17,8 +17,9 @@ var githubAPIBaseURL string
 // newReviewCmd implements `rumil review --repo owner/name --pr <number>`.
 func newReviewCmd(configPath *string) *cobra.Command {
 	var (
-		repo string
-		pr   int
+		repo         string
+		pr           int
+		installation int64
 	)
 
 	cmd := &cobra.Command{
@@ -43,7 +44,7 @@ func newReviewCmd(configPath *string) *cobra.Command {
 
 			logger := newLogger(cfg.App.LogLevel).With(
 				"config", path,
-				"installation_id", cfg.GitHub.InstallationID,
+				"installation_id", cfg.GitHub.PrimaryInstallationID(),
 				"repo", owner+"/"+name,
 				"pr", pr,
 			)
@@ -72,7 +73,9 @@ func newReviewCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
-			result, err := engine.Review(cmd.Context(), reviewer.Request{Owner: owner, Repo: name, Number: pr})
+			result, err := engine.Review(cmd.Context(), reviewer.Request{
+				Owner: owner, Repo: name, Number: pr, InstallationID: installation,
+			})
 			if err != nil {
 				return err
 			}
@@ -112,6 +115,8 @@ func newReviewCmd(configPath *string) *cobra.Command {
 
 	cmd.Flags().StringVar(&repo, "repo", "", "target repository as owner/name (required)")
 	cmd.Flags().IntVar(&pr, "pr", 0, "pull request number (required)")
+	cmd.Flags().Int64Var(&installation, "installation", 0,
+		"installation id to authenticate as (default: the one configured, or the first that can read the repository)")
 	_ = cmd.MarkFlagRequired("repo")
 	_ = cmd.MarkFlagRequired("pr")
 

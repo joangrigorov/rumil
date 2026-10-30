@@ -170,6 +170,47 @@ func TestEnqueueAndClaim(t *testing.T) {
 	}
 }
 
+func TestClaimJobForFiltersByInstallation(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	first := sampleJob("delivery-first")
+	first.InstallationID = 111
+	second := sampleJob("delivery-second")
+	second.InstallationID = 222
+	for _, job := range []Job{first, second} {
+		if err := db.Enqueue(ctx, job); err != nil {
+			t.Fatalf("Enqueue(%s) returned error: %v", job.DeliveryID, err)
+		}
+	}
+
+	claimed, err := db.ClaimJobFor(ctx, "worker-second", []int64{222})
+	if err != nil {
+		t.Fatalf("ClaimJobFor returned error: %v", err)
+	}
+	if claimed == nil || claimed.DeliveryID != "delivery-second" {
+		t.Fatalf("claimed = %+v, want the job of installation 222", claimed)
+	}
+
+	// That installation has nothing left, even though another job waits.
+	again, err := db.ClaimJobFor(ctx, "worker-second", []int64{222})
+	if err != nil {
+		t.Fatalf("second ClaimJobFor returned error: %v", err)
+	}
+	if again != nil {
+		t.Errorf("claimed %s again, want nothing for installation 222", again.DeliveryID)
+	}
+
+	// An empty list claims any installation, which is the single-pool form.
+	unfiltered, err := db.ClaimJobFor(ctx, "worker-any", nil)
+	if err != nil {
+		t.Fatalf("unfiltered ClaimJobFor returned error: %v", err)
+	}
+	if unfiltered == nil || unfiltered.DeliveryID != "delivery-first" {
+		t.Fatalf("unfiltered claim = %+v, want the remaining job", unfiltered)
+	}
+}
+
 func TestEnqueueIsIdempotentPerDelivery(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()

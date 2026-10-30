@@ -12,7 +12,15 @@ import (
 // Callers treat a failure as a warning: a reaction that could not be posted is
 // not a review that cannot run.
 func (e *Engine) Acknowledge(ctx context.Context, req Request) error {
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	installationID, err := e.resolveInstallation(ctx, req.InstallationID, req.Owner, req.Repo)
+	if err != nil {
+		return err
+	}
+	authClient, err := e.auth.ClientFor(installationID)
+	if err != nil {
+		return err
+	}
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 	return client.ReactToPullRequest(ctx, ghapp.ReactionAcknowledged)
 }
 
@@ -22,6 +30,14 @@ func (e *Engine) AcknowledgeCommand(ctx context.Context, req RememberRequest) er
 	if req.CommentID == 0 {
 		return nil
 	}
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	installationID, err := e.resolveInstallation(ctx, req.InstallationID, req.Owner, req.Repo)
+	if err != nil {
+		return err
+	}
+	authClient, err := e.auth.ClientFor(installationID)
+	if err != nil {
+		return err
+	}
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 	return client.ReactToComment(ctx, req.CommentID, !req.Conversation, ghapp.ReactionAcknowledged)
 }

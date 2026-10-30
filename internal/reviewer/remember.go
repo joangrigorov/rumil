@@ -27,6 +27,9 @@ type RememberRequest struct {
 	Owner  string
 	Repo   string
 	Number int
+	// InstallationID is the installation the command arrived through. Zero
+	// uses the primary installation.
+	InstallationID int64
 	// Command is the person's own words, the raw material of the rule.
 	Command string
 	// OrgScoped is true when the command asked for an organization-wide rule
@@ -85,15 +88,24 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 	if e.memory == nil {
 		return nil, fmt.Errorf("%w: set database.dsn and models.default_embedding to record rules", ErrMemoryNotConfigured)
 	}
-	if err := e.auth.Verify(ctx); err != nil {
+	installationID, err := e.resolveInstallation(ctx, req.InstallationID, req.Owner, req.Repo)
+	if err != nil {
 		return nil, err
 	}
-	provider, err := e.cfg.Models.ChatProvider()
+	req.InstallationID = installationID
+	if err := e.auth.VerifyInstallation(ctx, installationID); err != nil {
+		return nil, err
+	}
+	provider, err := e.chatProviderFor(installationID, "")
 	if err != nil {
 		return nil, fmt.Errorf("selecting the chat provider: %w", err)
 	}
+	authClient, err := e.auth.ClientFor(installationID)
+	if err != nil {
+		return nil, err
+	}
 
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 
 	// Rumil's own comment in the thread is the finding the person is answering,
 	// so the rule is distilled against it. A thread Rumil never wrote in, and a
@@ -117,7 +129,7 @@ func (e *Engine) Remember(ctx context.Context, req RememberRequest) (*RememberRe
 	// The synthesis session gets ProposeSpecs alone, so the boosting weight a
 	// search ranks with is left off: nothing in this session ranks anything.
 	memoryTools := mcpservers.NewMemoryTools(e.memory.store, e.memory.embedder, mcpservers.MemorySession{
-		InstallationID: e.memory.installationID,
+		InstallationID: req.InstallationID,
 		OrgName:        req.Owner,
 		RepoName:       req.Repo,
 		PRNumber:       req.Number,

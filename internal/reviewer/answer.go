@@ -31,6 +31,9 @@ type AnswerRequest struct {
 	Owner  string
 	Repo   string
 	Number int
+	// InstallationID is the installation the command arrived through. Zero
+	// uses the primary installation.
+	InstallationID int64
 	// CommentID is the command's own comment, which the answer replies to and
 	// which the marker on the answer names.
 	CommentID int64
@@ -65,15 +68,24 @@ type AnswerResult struct {
 // by a tool. A question whose thread Rumil never wrote in is answered from the
 // thread's own context, and the prompt says not to claim the finding.
 func (e *Engine) Answer(ctx context.Context, req AnswerRequest) (*AnswerResult, error) {
-	if err := e.auth.Verify(ctx); err != nil {
+	installationID, err := e.resolveInstallation(ctx, req.InstallationID, req.Owner, req.Repo)
+	if err != nil {
 		return nil, err
 	}
-	provider, err := e.cfg.Models.ChatProvider()
+	req.InstallationID = installationID
+	if err := e.auth.VerifyInstallation(ctx, installationID); err != nil {
+		return nil, err
+	}
+	provider, err := e.chatProviderFor(installationID, "")
 	if err != nil {
 		return nil, fmt.Errorf("selecting the chat provider: %w", err)
 	}
+	authClient, err := e.auth.ClientFor(installationID)
+	if err != nil {
+		return nil, err
+	}
 
-	client := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	client := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 
 	// An interrupted job returns to the queue and runs again. The marker is what
 	// stops the second run from answering the same comment twice; a check that

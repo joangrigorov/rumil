@@ -240,7 +240,7 @@ func TestUsageBudgetUsesTheSessionsProvider(t *testing.T) {
 	provider := &config.Provider{ID: "cheap", PriceInputPerMTok: &input, PriceOutputPerMTok: &output}
 	engine := &Engine{cfg: &config.Config{Review: config.Review{MaxCostUSD: 10}}}
 
-	budget := engine.newUsageBudget(provider)
+	budget := engine.newUsageBudget(provider, engine.cfg.Review)
 	usage := Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
 	if got := budget.cost(usage); math.Abs(got-3) > 1e-9 {
 		t.Errorf("budget cost = %v, want 3 at the session's provider", got)

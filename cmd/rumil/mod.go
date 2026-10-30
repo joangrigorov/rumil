@@ -237,8 +237,9 @@ func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(
 	if cfg.Database.DSN == "" {
 		return nil, nil, nil, fmt.Errorf("database.dsn is required to read the recorded rules")
 	}
-	if cfg.GitHub.InstallationID <= 0 {
-		return nil, nil, nil, fmt.Errorf("github.installation_id is required to scope the recorded rules")
+	primary := cfg.GitHub.PrimaryInstallationID()
+	if primary <= 0 {
+		return nil, nil, nil, fmt.Errorf("github.installation_id or github.installations is required to scope the recorded rules")
 	}
 
 	ctx := context.Background()
@@ -253,7 +254,7 @@ func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(
 		return nil, nil, nil, err
 	}
 
-	service := moderation.NewService(db, client, cfg.GitHub.InstallationID, logger)
+	service := moderation.NewService(db, client, primary, logger)
 	return service, logger, db.Close, nil
 }
 

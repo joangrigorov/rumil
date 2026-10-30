@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,28 +90,47 @@ func newServeCmd(configPath *string) *cobra.Command {
 			meter := metrics.New()
 			meter.CollectDatabase(db, logger)
 
-			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger,
-				server.WithJobTimeout(cfg.Worker.Timeout()),
-				server.WithMetrics(meter))
-			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger,
-				server.WithWebhookMetrics(meter))
-
+			installations := cfg.GitHub.InstallationIDs()
 			// The observation deck shares the moderation credential. Its
-			// recorder is attached to the pool before the workers start, so a
+			// recorder is attached to every pool before the workers start, so a
 			// review that begins immediately is still recorded.
 			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminCredentials(), logger,
 				server.WithSessionsMetrics(meter))
-			pool.SetSessionRecorder(sessionsUI.Recorder())
+
+			// One pool per installation: its workers claim only that account's
+			// jobs, so a busy installation cannot take another's workers. An
+			// installation may set its own concurrency; the rest inherit the
+			// operator-wide value.
+			pools := make([]*server.Pool, 0, len(installations))
+			for _, id := range installations {
+				concurrency := cfg.Worker.Concurrency
+				if installation := cfg.GitHub.InstallationByID(id); installation != nil && installation.WorkerConcurrency > 0 {
+					concurrency = installation.WorkerConcurrency
+				}
+				pool := server.NewPool(db, engine, cfg.App.BotHandle, concurrency,
+					logger.With("installation_id", id),
+					server.WithJobTimeout(cfg.Worker.Timeout()),
+					server.WithMetrics(meter),
+					server.WithPoolInstallations([]int64{id}))
+				pool.SetSessionRecorder(sessionsUI.Recorder())
+				pools = append(pools, pool)
+			}
+
+			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.PrimaryInstallationID(), db, logger,
+				server.WithWebhookMetrics(meter),
+				server.WithInstallations(installations))
 
 			// The moderation surface is mounted with whatever the operator
 			// configured: no token means every request to it is refused, and no
 			// embedding provider means an edit is refused while approving the
-			// rule as it was proposed still works.
+			// rule as it was proposed still works. Rules are not per-tenant, so
+			// the surface records and closes findings with the primary
+			// installation's token.
 			embedderClient, err := moderationEmbedder(cfg)
 			if err != nil {
 				return err
 			}
-			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.InstallationID, logger)
+			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.PrimaryInstallationID(), logger)
 			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminCredentials(), logger)
 
 			handler := server.Handler(webhook, db, moderationUI, sessionsUI)
@@ -140,11 +160,15 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 			poolCtx, stopPool := context.WithCancel(context.Background())
 			defer stopPool()
-			pool.Start(poolCtx)
+			for _, pool := range pools {
+				pool.Start(poolCtx)
+			}
 
 			serveErr := make(chan error, 2)
 			go func() {
-				logger.Info("listening", "address", address, "worker_concurrency", cfg.Worker.Concurrency)
+				logger.Info("listening", "address", address,
+					"worker_concurrency", cfg.Worker.Concurrency,
+					"installations", len(installations))
 				if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					serveErr <- err
 				}
@@ -183,7 +207,15 @@ func newServeCmd(configPath *string) *cobra.Command {
 
 			drained := make(chan struct{})
 			go func() {
-				pool.Wait()
+				var wg sync.WaitGroup
+				for _, pool := range pools {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						pool.Wait()
+					}()
+				}
+				wg.Wait()
 				close(drained)
 			}()
 

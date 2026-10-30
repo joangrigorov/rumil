@@ -190,7 +190,7 @@ Rumil authenticates as a GitHub App you own. Both ways of running it need the Ap
 
 4. Create the App, then **Generate a private key** and download the `.pem`. Point `github.private_key_path` at it, or put its contents in the `GITHUB_PRIVATE_KEY` environment variable.
 5. Note the **App ID** on the App's settings page: that is `github.app_id`.
-6. **Install** the App on the account that owns the repositories it should review, all of them or a selection. The installation's ID is the number at the end of the URL after installing (`.../installations/<id>`): that is `github.installation_id`.
+6. **Install** the App on the account that owns the repositories it should review, all of them or a selection. The installation's ID is the number at the end of the URL after installing (`.../installations/<id>`): that is `github.installation_id`. A deployment that serves several accounts of the same App lists the others under `github.installations` ([Serving several installations](#serving-several-installations)).
 
 The webhook URL, the webhook secret and the subscribed events are only needed to run the server. [Run the webhook server](#run-the-webhook-server) covers those.
 
@@ -229,7 +229,8 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | Key | Notes |
 | :--- | :--- |
 | `github.app_id` | The App's ID, from [Create the GitHub App](#create-the-github-app) |
-| `github.installation_id` | The installation to serve, from the same section |
+| `github.installation_id` | The installation to serve, from the same section. It stays the unnamed first installation when `github.installations` is set |
+| `github.installations` | The other installations of the same App, each with `id` and a unique `name`, plus optional `chat_provider`, `worker_concurrency`, `max_total_tokens` and `max_cost_usd`. At most 50 installations in total. See [Serving several installations](#serving-several-installations) |
 | `github.private_key_path` | Path to the App's `.pem`, from the same section. `github.private_key` takes the PEM itself, and the `GITHUB_PRIVATE_KEY` environment variable is used when neither is set |
 | `github.webhook_secret` | Required by `rumil serve`. The secret you set on the App, and it has to match exactly |
 | `models.providers` | At least one provider; every provider needs `id`, `provider: openai-compatible`, `base_url`, `model_name` and `api_key` |
@@ -258,7 +259,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `snapshot.timeout` | `2m` | How long the archive download and extraction may take, as a Go duration. The time comes out of the job's own `worker.job_timeout` |
 | `snapshot.dir` | operating system temp directory | Where the per-session working trees are created. Set it when the temp directory has no room for the repository |
 | `memory.repo_scope_boost` | `0.05` | How much a repository's own rule outranks an organization-wide one when both are candidates |
-| `worker.concurrency` | `4` | Reviews processed in parallel |
+| `worker.concurrency` | `4` | Reviews processed in parallel. With `github.installations`, each installation gets its own pool of this size unless its `worker_concurrency` says otherwise |
 | `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `server.public_url` | unset | Public base address of the deck, used as the details link on the review's GitHub check run. Unset leaves the check without a link |
@@ -285,7 +286,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 rumil review --repo acme/payments --pr 42
 ```
 
-It needs the App credentials and a chat provider, and it submits the review as the App. It reads the file the [search](#where-the-file-is-found) finds, so the `rumil.yaml` you copied in the step above is enough, and `--config` names another one. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so. A run that ends without submitting a review exits non-zero; the server records the same outcome as a failed job.
+It needs the App credentials and a chat provider, and it submits the review as the App. It reads the file the [search](#where-the-file-is-found) finds, so the `rumil.yaml` you copied in the step above is enough, and `--config` names another one. With several installations configured, it uses the first one that can read the repository; `--installation` names one explicitly. With `database.dsn` and an embedding provider set, it also applies the rules you have approved; without both, it reviews with no memory and logs a warning saying so. A run that ends without submitting a review exits non-zero; the server records the same outcome as a failed job.
 
 ## Run the webhook server
 
@@ -298,6 +299,30 @@ In the App's settings:
 1. **Webhook URL**: `https://<your-rumil-host>/webhooks/github`
 2. **Webhook secret**: a long random string, and the same value as `github.webhook_secret`
 3. **Subscribe to events**: *Pull request*, *Issue comment* and *Pull request review comment*. Add *Pull request review* and *Reaction* if you want the finding-quality report to fill in
+
+### Serving several installations
+
+One Rumil process can serve several installations of the same App, which is one deployment for a set of accounts rather than one process each. List them under `github.installations`; `github.installation_id` keeps working as the unnamed first installation, so a configuration written before this option needs no change.
+
+```yaml
+github:
+  app_id: 123456
+  installation_id: 98765432     # the first installation, unnamed
+  installations:
+    - id: 55555555
+      name: "acme-eu"           # shown in logs and on the deck
+      chat_provider: "deepseek" # optional: this account's default review model
+      worker_concurrency: 2     # optional: this account's workers, else worker.concurrency
+      max_total_tokens: 2000000 # optional: overrides review.max_total_tokens
+      max_cost_usd: 5.0         # optional: overrides review.max_cost_usd
+  private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}"
+```
+
+Every installation belongs to the same App, so they share the private key and the App-wide webhook secret. Install the App on each account and use that account's installation id.
+
+The webhook accepts a delivery through any listed installation and ignores one through an account the configuration does not name, before anything is written. Each installation gets its own worker pool, which claims only its account's jobs, so a busy account cannot take another's workers. A repository rule (`review` settings in `.rumil.yaml`) applies to its repository; `chat_provider` and the budgets apply when that account's repository does not set them.
+
+`rumil review` resolves the installation from `--repo` by asking each configured installation in turn which one can read it, and `--installation` names one explicitly. The moderation page, the session deck and the finding report are not per-tenant: they read and write with the primary installation, which is `github.installation_id` when it is set and otherwise the first listed installation.
 
 ### Docker Compose
 
@@ -479,36 +504,6 @@ The same action appears on a running session's page. It needs an admin credentia
 ## Metrics
 
 `rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs an admin credential — `moderation.admin_token` or any entry of `moderation.admin_tokens` — as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
-
-```yaml
-server:
-  metrics_listen: "127.0.0.1:9090"
-```
-
-With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or the admin token.
-
-| Metric | Type | Labels | Meaning |
-|---|---|---|---|
-| `rumil_webhook_jobs_total` | counter | `event`, `outcome` | Deliveries by event and outcome: `received`, `queued`, `completed`, `failed` |
-| `rumil_queue_jobs` | gauge | `status` | Jobs waiting (`queued`) and being worked on (`running`), read from the database at scrape time |
-| `rumil_queue_oldest_job_age_seconds` | gauge | | Age of the oldest queued job; zero when the queue is empty |
-| `rumil_sessions` | gauge | `status` | Review sessions `running`, `succeeded` and `failed`, read at scrape time |
-| `rumil_review_duration_seconds` | histogram | `outcome` | Wall-clock time of a review: `submitted`, `turn_limit`, `output_limit`, `no_submission`, `cancelled` or `failed` |
-| `rumil_provider_requests_total` | counter | `class` | Model steps: `ok`, or the error class `auth`, `rate_limit`, `unavailable`, `invalid_request`, `context_overflow`, `other` |
-| `rumil_provider_retries_total` | counter | | Provider requests the retry policy scheduled again |
-| `rumil_provider_header_timeouts_total` | counter | | Provider calls that timed out before the response headers arrived |
-| `rumil_reviews_without_submission_total` | counter | `reason` | Sessions that said nothing about the pull request, using the same reasons as the duration histogram |
-| `rumil_snapshot_fallbacks_total` | counter | | Sessions that used the GitHub API tools because the working tree was unavailable |
-| `rumil_memory_retrieval_failures_total` | counter | | Pre-retrieval attempts that could not read the recorded rules |
-| `rumil_tokens_total` | counter | `kind` | Tokens used: `input`, `output`, `cache_read` and `cache_creation` |
-| `rumil_estimated_cost_usd_total` | counter | | Estimated provider cost of completed sessions, when the chat provider is priced |
-| `rumil_metrics_scrape_errors_total` | counter | | Database reads behind `/metrics` that failed; the gauges are then left out of that scrape |
-
-Labels stay low-cardinality: no repository, pull request, session id, tool argument or error text is a label. A delivery for another installation, or an event Rumil does not handle, is counted under its event name or `other`; the queue and session gauges come from the database, so a restarted process reports the current state rather than the counters it remembered.
-
-## Metrics
-
-`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs `moderation.admin_token`, as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
 
 ```yaml
 server:

@@ -78,6 +78,10 @@ type Request struct {
 	// how a fallback attempt selects the next provider instead of the one the
 	// operator or the repository chose.
 	ProviderID string
+	// InstallationID selects the GitHub App installation. Zero uses the
+	// primary installation, or, when several are configured, the first one
+	// that can read the repository.
+	InstallationID int64
 }
 
 // Result reports what the review produced.
@@ -192,25 +196,32 @@ var ErrHeadMoved = errors.New("the pull request moved since the earlier attempt"
 // The warnings are the parts of the configuration that GitHub will refuse
 // later, in the middle of a round rather than at its start.
 func (e *Engine) CheckApp(ctx context.Context) ([]string, error) {
-	record, err := e.auth.Record(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !ghapp.SameLogin(record.Slug, e.cfg.App.BotHandle) {
-		return nil, fmt.Errorf("%w: the configuration says %q and the App's slug is %q, so set app.bot_handle to %q",
-			ErrHandleMismatch, e.cfg.App.BotHandle, record.Slug, record.Slug)
-	}
-
 	var warnings []string
-	// Closing a review thread is refused for an installation whose Contents
-	// permission is read, whatever its pull_requests permission says, and the
-	// refusal arrives at the end of a round that has already been paid for. The
-	// installation is what answers this, not the App: a permission raised on the
-	// App does not reach the tokens until the installation's owner accepts it.
-	if level := record.Permissions.GetContents(); level != "write" {
-		warnings = append(warnings, fmt.Sprintf(
-			"closing review threads will be refused: GitHub answers resolveReviewThread only when the installation's Contents permission is read and write, and installation %d's is %q. If the App's own settings already say write, the installation has not accepted the change yet, and its owner accepts it in the installation's settings",
-			e.cfg.GitHub.InstallationID, level))
+	for _, installationID := range e.cfg.GitHub.InstallationIDs() {
+		// Minting the token is what proves this installation belongs to the
+		// App and is installed; the record read then says what it may do.
+		if err := e.auth.VerifyInstallation(ctx, installationID); err != nil {
+			return nil, err
+		}
+		record, err := e.auth.RecordFor(ctx, installationID)
+		if err != nil {
+			return nil, err
+		}
+		if !ghapp.SameLogin(record.Slug, e.cfg.App.BotHandle) {
+			return nil, fmt.Errorf("%w: installation %d's App's slug is %q and the configuration says %q, so set app.bot_handle to %q",
+				ErrHandleMismatch, installationID, record.Slug, e.cfg.App.BotHandle, record.Slug)
+		}
+
+		// Closing a review thread is refused for an installation whose Contents
+		// permission is read, whatever its pull_requests permission says, and the
+		// refusal arrives at the end of a round that has already been paid for. The
+		// installation is what answers this, not the App: a permission raised on the
+		// App does not reach the tokens until the installation's owner accepts it.
+		if level := record.Permissions.GetContents(); level != "write" {
+			warnings = append(warnings, fmt.Sprintf(
+				"closing review threads will be refused: GitHub answers resolveReviewThread only when the installation's Contents permission is read and write, and installation %d's is %q. If the App's own settings already say write, the installation has not accepted the change yet, and its owner accepts it in the installation's settings",
+				installationID, level))
+		}
 	}
 	return warnings, nil
 }
@@ -231,6 +242,12 @@ func (e *Engine) ModelName() string {
 // again. A review that already reached GitHub is never followed by another
 // attempt.
 func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
+	installationID, err := e.resolveInstallation(ctx, req.InstallationID, req.Owner, req.Repo)
+	if err != nil {
+		return nil, err
+	}
+	req.InstallationID = installationID
+
 	used := map[string]bool{}
 	for {
 		result, err := e.reviewAttempt(ctx, req)
@@ -271,6 +288,51 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	}
 }
 
+// resolveInstallation picks the installation a request runs as. An explicit id
+// is held against the configured set. Zero uses the only configured
+// installation, and with several asks GitHub which one can read the
+// repository: the CLI reaches one pull request at a time and has no delivery to
+// say which account it belongs to.
+func (e *Engine) resolveInstallation(ctx context.Context, requested int64, owner, repo string) (int64, error) {
+	if requested > 0 {
+		if !e.cfg.GitHub.HasInstallation(requested) {
+			return 0, fmt.Errorf("%w: %d", ghapp.ErrInstallationNotAllowed, requested)
+		}
+		return requested, nil
+	}
+
+	ids := e.cfg.GitHub.InstallationIDs()
+	if len(ids) == 0 {
+		return 0, errors.New("github.installation_id or github.installations is required to review a pull request")
+	}
+	if len(ids) == 1 {
+		return ids[0], nil
+	}
+
+	for _, id := range ids {
+		client, err := e.auth.ClientFor(id)
+		if err != nil {
+			continue
+		}
+		if _, _, err := client.Repositories.Get(ctx, owner, repo); err == nil {
+			return id, nil
+		}
+	}
+	return 0, fmt.Errorf("no configured installation can read %s/%s", owner, repo)
+}
+
+// chatProviderFor resolves the chat provider for one installation. An
+// installation may name its own provider; otherwise the operator default is
+// used, and a request-level id still wins.
+func (e *Engine) chatProviderFor(installationID int64, requested string) (*config.Provider, error) {
+	if requested == "" {
+		if installation := e.cfg.GitHub.InstallationByID(installationID); installation != nil {
+			requested = installation.ChatProvider
+		}
+	}
+	return e.cfg.Models.ChatProviderByID(requested)
+}
+
 // nextFallbackProvider returns the first configured fallback this review has
 // not run on, in order.
 func (e *Engine) nextFallbackProvider(used map[string]bool) (id, model string) {
@@ -301,14 +363,15 @@ func isProviderFailure(err error) bool {
 // fallback chain.
 func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result, err error) {
 	observer := req.Observer
-	if err := e.auth.Verify(ctx); err != nil {
+	if err := e.auth.VerifyInstallation(ctx, req.InstallationID); err != nil {
 		return nil, err
 	}
-	if e.cfg.GitHub.InstallationID <= 0 {
-		return nil, errors.New("github.installation_id is required to review a pull request")
+	authClient, err := e.auth.ClientFor(req.InstallationID)
+	if err != nil {
+		return nil, err
 	}
 
-	githubClient := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
+	githubClient := ghapp.NewClient(authClient, req.Owner, req.Repo, req.Number)
 
 	// Repository guidelines are read before the first turn, from the base SHA
 	// unless the operator opted into trusting the branch under review
@@ -381,13 +444,29 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 	if err != nil {
 		return nil, err
 	}
-	effective := repoSettings.Apply(e.cfg.Review)
+	// An installation may override the operator-wide budget. The repository's
+	// settings narrow the review further but do not touch the budget.
+	reviewConfig := e.cfg.Review
+	installation := e.cfg.GitHub.InstallationByID(req.InstallationID)
+	if installation != nil {
+		if installation.MaxTotalTokens > 0 {
+			reviewConfig.MaxTotalTokens = installation.MaxTotalTokens
+		}
+		if installation.MaxCostUSD > 0 {
+			reviewConfig.MaxCostUSD = installation.MaxCostUSD
+		}
+	}
+	effective := repoSettings.Apply(reviewConfig)
 
 	// The provider is selected after the repository's settings are known: a
 	// repository may name a cheaper model, and only the operator's configured
-	// providers are candidates. A fallback attempt names its provider
+	// providers are candidates. An installation's own provider applies when the
+	// repository is silent, and a fallback attempt names its provider
 	// explicitly, which is how the chain advances.
 	providerID := effective.ChatProviderID
+	if providerID == "" && installation != nil {
+		providerID = installation.ChatProvider
+	}
 	if req.ProviderID != "" {
 		providerID = req.ProviderID
 	}
@@ -562,7 +641,7 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 	// between steps, so a session over its limit stops before paying for
 	// another request.
 	tracker := &usageTracker{}
-	budget := e.newUsageBudget(provider)
+	budget := e.newUsageBudget(provider, reviewConfig)
 	if budget.enabled() {
 		stopBudget := session.OnPrepareStep(kit.HookPriorityHigh, func(kit.PrepareStepHook) *kit.PrepareStepResult {
 			mu.Lock()

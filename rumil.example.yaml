@@ -14,7 +14,14 @@ app:
 # repositories Rumil should review, and fill in the three credential values below.
 github:
   app_id: 123456
-  installation_id: 98765432       # Installation of your App on the target account
+  installation_id: 98765432       # Installation of your App on the target account; the unnamed first installation
+  # installations:                # Other installations of the same App this instance serves
+  #   - id: 55555555
+  #     name: "acme-eu"           # Shown in logs and on the deck; must be unique
+  #     chat_provider: "deepseek" # Optional: this account's default review model
+  #     worker_concurrency: 2     # Optional: this account's workers, else worker.concurrency
+  #     max_total_tokens: 2000000 # Optional: overrides review.max_total_tokens
+  #     max_cost_usd: 5.0         # Optional: overrides review.max_cost_usd
   private_key_path: "${GITHUB_APP_PRIVATE_KEY_PATH}" # Leave empty to use private_key below, or the GITHUB_PRIVATE_KEY environment variable
   # private_key: "${GITHUB_PRIVATE_KEY}"             # The PEM itself, for a secret store that hands over its contents rather than a path
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"         # Required from v0.0.3 for webhook verification
@@ -74,7 +81,7 @@ memory:                           # Used from v0.0.6
 
 # `rumil serve` drains this queue.
 worker:
-  concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms
+  concurrency: 4                  # reviews processed in parallel per installation; an idle worker polls the queue every 250ms
   job_timeout: "15m"              # wall-clock budget per review or command; raise it for long unlimited runs
 
 server:
