@@ -67,6 +67,7 @@ models:
       temperature: 0.1
       max_tokens: 32768             # caps one response, reasoning included; too low a value ends a thinking turn before its tool call
       thinking_level: "high"        # off | none | minimal | low | medium | high | max; sent as reasoning_effort
+      request_timeout: "2m"         # how long to wait for the provider's response headers; a streamed answer is not cut
     - id: "text-embedding-3-small"
       provider: "openai-compatible"
       base_url: "https://api.openai.com/v1"

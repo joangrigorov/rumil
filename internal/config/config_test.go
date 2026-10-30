@@ -1255,3 +1255,62 @@ models:
 		}
 	})
 }
+
+// A provider that queues a request can sit silent for minutes. The chat
+// provider has its own header timeout so such an attempt fails and is retried
+// instead of holding a worker for the job's whole budget.
+func TestRequestTimeoutSettings(t *testing.T) {
+	doc := func(chat, embed string) []byte {
+		return []byte(`
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  default_embedding: "embed"
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+` + chat + `
+    - id: "embed"
+      provider: "openai-compatible"
+      base_url: "https://embed.example.com/v1"
+      model_name: "embed"
+      api_key: "k"
+      dimensions: 768
+` + embed)
+	}
+
+	t.Run("default", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("", "")))
+		if got := cfg.Models.Providers[0].RequestTimeoutOrDefault(); got != DefaultRequestTimeout {
+			t.Errorf("request timeout = %s, want %s", got, DefaultRequestTimeout)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("      request_timeout: \"90s\"\n", "")))
+		if got := cfg.Models.Providers[0].RequestTimeoutOrDefault(); got != 90*time.Second {
+			t.Errorf("request timeout = %s, want 90s", got)
+		}
+	})
+
+	t.Run("invalid duration", func(t *testing.T) {
+		if _, err := Parse(doc("      request_timeout: \"soon\"\n", ""), "test.yaml"); err == nil ||
+			!strings.Contains(err.Error(), "request_timeout") {
+			t.Errorf("Parse = %v, want it to name request_timeout", err)
+		}
+	})
+
+	t.Run("embedding provider", func(t *testing.T) {
+		// The key is for a chat provider; an embedding provider has
+		// embedding_timeout for its calls.
+		if _, err := Parse(doc("", "      request_timeout: \"90s\"\n"), "test.yaml"); err == nil ||
+			!strings.Contains(err.Error(), "request_timeout") {
+			t.Errorf("Parse = %v, want the embedding provider's request_timeout refused", err)
+		}
+	})
+}

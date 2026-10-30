@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
@@ -134,13 +136,13 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 		top += "snapshot:\n  enabled: false\n"
 	}
 
-	thinkingLevel := ""
+	chatSettings := ""
 	if opts.thinkingLevel != "" {
-		thinkingLevel = fmt.Sprintf("      thinking_level: %q\n", opts.thinkingLevel)
+		chatSettings += fmt.Sprintf("      thinking_level: %q\n", opts.thinkingLevel)
 	}
 
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
-		llm.URL()+"/v1", llm.URL()+"/v1", thinkingLevel, llm.URL()+"/v1")
+		llm.URL()+"/v1", llm.URL()+"/v1", chatSettings, llm.URL()+"/v1")
 
 	cfg, err := config.Parse([]byte(doc), "engine_test.yaml")
 	if err != nil {
@@ -747,6 +749,42 @@ func TestASecondTurnWithoutTheReviewStillFails(t *testing.T) {
 	}
 	if got := llm.Count(); got != 2 {
 		t.Errorf("model requests = %d, want the turn and one nudge", got)
+	}
+}
+
+// A provider that never sends its response headers would otherwise hold the
+// review until the job timeout. The provider client ends the attempt at the
+// configured budget; a started stream is not cut, because only the wait before
+// the headers is bounded.
+func TestBoundedHTTPClientStopsWaitingForResponseHeaders(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+
+	client := boundedHTTPClient(50 * time.Millisecond)
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.ResponseHeaderTimeout != 50*time.Millisecond {
+		t.Fatalf("transport = %#v, want a 50ms response-header timeout", client.Transport)
+	}
+
+	start := time.Now()
+	response, err := client.Get(server.URL)
+	elapsed := time.Since(start)
+	if err == nil {
+		_ = response.Body.Close()
+		t.Fatal("the request answered, want the header timeout to stop it")
+	}
+	if !strings.Contains(err.Error(), "timeout awaiting response headers") {
+		t.Errorf("error = %v, want it to name the header timeout", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("request took %s, want it bounded near 50ms", elapsed)
 	}
 }
 
