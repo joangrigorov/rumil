@@ -73,6 +73,7 @@ models:
       model_name: "text-embedding-3-small"
       api_key: "${OPENAI_API_KEY}"
       dimensions: 1536            # A provider with dimensions is an embedding provider. The width is the model's own: memory is stored and searched at it, and Rumil sizes memories.embedding to it on boot. 1536 for text-embedding-3-small, 768 for a local EmbeddingGemma
+      embedding_timeout: "30s"    # Bounds one embeddings call. Raise it when a local backend needs longer, for example on its first call after the model loads
 
 database:                         # Required from v0.0.3
   dsn: "${DATABASE_URL}"          # postgres://user:pass@db:5432/rumil?sslmode=disable
