@@ -313,11 +313,149 @@ func (a App) TurnsUnlimited() bool { return a.MaxTurns() == 0 }
 // centralized Rumil App: app_id, installation_id, and a private key are all
 // required (project_plan.md §3).
 type GitHub struct {
-	AppID          int64  `yaml:"app_id"`
-	InstallationID int64  `yaml:"installation_id"`
-	PrivateKeyPath string `yaml:"private_key_path"`
-	PrivateKeyPEM  string `yaml:"private_key"`
-	WebhookSecret  string `yaml:"webhook_secret"`
+	AppID int64 `yaml:"app_id"`
+	// InstallationID is the single-installation form. When Installations is
+	// empty, it is the one installation Rumil serves; when both are set, it is
+	// an extra unnamed installation kept for a configuration written before
+	// multiple installations existed.
+	InstallationID int64 `yaml:"installation_id"`
+	// Installations are the other installations of the same App this instance
+	// serves, with their own optional settings.
+	Installations  []Installation `yaml:"installations"`
+	PrivateKeyPath string         `yaml:"private_key_path"`
+	PrivateKeyPEM  string         `yaml:"private_key"`
+	WebhookSecret  string         `yaml:"webhook_secret"`
+}
+
+// Installation is one installation of the configured App. The name identifies
+// it in logs; the optional settings apply to its reviews.
+type Installation struct {
+	ID   int64  `yaml:"id"`
+	Name string `yaml:"name"`
+	// ChatProvider is a models.providers id this installation's reviews run on
+	// unless the repository's own settings choose another one.
+	ChatProvider string `yaml:"chat_provider"`
+	// WorkerConcurrency is how many jobs this installation's worker pool
+	// claims at once. Zero uses worker.concurrency, so one busy account cannot
+	// take another's workers.
+	WorkerConcurrency int `yaml:"worker_concurrency"`
+	// MaxTotalTokens and MaxCostUSD override review.max_total_tokens and
+	// review.max_cost_usd for this installation. Zero inherits.
+	MaxTotalTokens int64   `yaml:"max_total_tokens"`
+	MaxCostUSD     float64 `yaml:"max_cost_usd"`
+}
+
+// maxInstallations bounds the worker pools one process starts. An App installed
+// on more accounts than this is a fleet, not a deployment.
+const maxInstallations = 50
+
+// installationName is what a name may contain: it is rendered in logs and on
+// the deck, so it is a plain handle rather than free text.
+var installationName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// InstallationIDs is the effective set this instance serves, the legacy single
+// installation first. It is never empty for a validated configuration.
+func (g GitHub) InstallationIDs() []int64 {
+	ids := make([]int64, 0, len(g.Installations)+1)
+	if g.InstallationID > 0 {
+		ids = append(ids, g.InstallationID)
+	}
+	for _, installation := range g.Installations {
+		if installation.ID > 0 {
+			ids = append(ids, installation.ID)
+		}
+	}
+	return ids
+}
+
+// PrimaryInstallationID is the installation the command line and the surfaces
+// that are not per-tenant use: the legacy id when it is set, otherwise the
+// first listed installation.
+func (g GitHub) PrimaryInstallationID() int64 {
+	ids := g.InstallationIDs()
+	if len(ids) == 0 {
+		return 0
+	}
+	return ids[0]
+}
+
+// HasInstallation reports whether id is in the configured set.
+func (g GitHub) HasInstallation(id int64) bool {
+	for _, configured := range g.InstallationIDs() {
+		if configured == id {
+			return true
+		}
+	}
+	return false
+}
+
+// InstallationByID returns the listed settings for id, or nil for the legacy
+// single installation, which has none.
+func (g GitHub) InstallationByID(id int64) *Installation {
+	for i := range g.Installations {
+		if g.Installations[i].ID == id {
+			return &g.Installations[i]
+		}
+	}
+	return nil
+}
+
+// validateInstallations checks the multi-installation form and keeps the single
+// form working. A configuration with neither is refused: there would be no
+// installation to mint a token for.
+func (g GitHub) validateInstallations() error {
+	if g.InstallationID <= 0 && len(g.Installations) == 0 {
+		return errors.New("github.installation_id or github.installations is required")
+	}
+	count := len(g.Installations)
+	if g.InstallationID > 0 {
+		count++
+	}
+	if count > maxInstallations {
+		return fmt.Errorf("github serves %d installations, want at most %d", count, maxInstallations)
+	}
+
+	seenIDs := map[int64]bool{}
+	seenNames := map[string]bool{}
+	if g.InstallationID > 0 {
+		seenIDs[g.InstallationID] = true
+	}
+	for i, installation := range g.Installations {
+		if installation.ID <= 0 {
+			return fmt.Errorf("github.installations[%d].id must be a positive installation id, got %d", i, installation.ID)
+		}
+		if seenIDs[installation.ID] {
+			return fmt.Errorf("github.installations[%d] repeats installation %d", i, installation.ID)
+		}
+		seenIDs[installation.ID] = true
+
+		name := strings.TrimSpace(installation.Name)
+		if name == "" {
+			return fmt.Errorf("github.installations[%d].name is required, so a log line can say which account it is", i)
+		}
+		if !installationName.MatchString(name) {
+			return fmt.Errorf("github.installations[%d].name must be 1-64 letters, digits, '.', '_' or '-', starting with a letter or digit, got %q",
+				i, installation.Name)
+		}
+		if seenNames[name] {
+			return fmt.Errorf("github.installations has two installations named %q", name)
+		}
+		seenNames[name] = true
+
+		if installation.WorkerConcurrency < 0 {
+			return fmt.Errorf("github.installations[%d].worker_concurrency must be zero to inherit worker.concurrency or positive, got %d",
+				i, installation.WorkerConcurrency)
+		}
+		if installation.MaxTotalTokens < 0 {
+			return fmt.Errorf("github.installations[%d].max_total_tokens must be zero to inherit or positive, got %d",
+				i, installation.MaxTotalTokens)
+		}
+		if math.IsNaN(installation.MaxCostUSD) || installation.MaxCostUSD < 0 {
+			return fmt.Errorf("github.installations[%d].max_cost_usd must be zero to inherit or positive, got %v",
+				i, installation.MaxCostUSD)
+		}
+	}
+	return nil
 }
 
 // Models is the BYOK model registry plus the default selectors.
@@ -835,15 +973,26 @@ func (c *Config) Validate() error {
 	if err := c.GitHub.validate(); err != nil {
 		return err
 	}
-	return c.Models.validate()
+	if err := c.Models.validate(); err != nil {
+		return err
+	}
+	for i, installation := range c.GitHub.Installations {
+		if installation.ChatProvider == "" {
+			continue
+		}
+		if _, err := c.Models.ChatProviderByID(installation.ChatProvider); err != nil {
+			return fmt.Errorf("github.installations[%d].chat_provider: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func (g GitHub) validate() error {
 	if g.AppID <= 0 {
 		return fmt.Errorf("github.app_id must be a positive integer, got %d", g.AppID)
 	}
-	if g.InstallationID <= 0 {
-		return fmt.Errorf("github.installation_id must be a positive integer, got %d", g.InstallationID)
+	if err := g.validateInstallations(); err != nil {
+		return err
 	}
 	if g.PrivateKeyPath == "" && g.PrivateKeyPEM == "" && os.Getenv("GITHUB_PRIVATE_KEY") == "" {
 		return errors.New("github.private_key_path, github.private_key, or the GITHUB_PRIVATE_KEY environment variable is required")

@@ -85,17 +85,30 @@ func (d *DB) Enqueue(ctx context.Context, job Job) error {
 // The inner SELECT holds the row lock with SKIP LOCKED, so concurrent workers
 // never claim the same job.
 func (d *DB) ClaimJob(ctx context.Context, workerID string) (*Job, error) {
+	return d.ClaimJobFor(ctx, workerID, nil)
+}
+
+// ClaimJobFor takes the oldest queued job for one of installationIDs. An empty
+// list claims any installation, which is how a single-installation deployment
+// behaves. The inner SELECT holds the row lock with SKIP LOCKED, so concurrent
+// workers never claim the same job.
+func (d *DB) ClaimJobFor(ctx context.Context, workerID string, installationIDs []int64) (*Job, error) {
+	if installationIDs == nil {
+		installationIDs = []int64{}
+	}
+
 	rows, err := d.pool.Query(ctx, `
 		UPDATE webhook_jobs SET status = 'RUNNING', attempts = attempts + 1,
 		    worker_id = nullif($1, ''), updated_at = now()
 		WHERE id = (
 			SELECT id FROM webhook_jobs
 			WHERE status = 'QUEUED'
+			  AND (cardinality($2::bigint[]) = 0 OR installation_id = ANY($2::bigint[]))
 			ORDER BY created_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
-		RETURNING `+jobColumns, workerID)
+		RETURNING `+jobColumns, workerID, installationIDs)
 	if err != nil {
 		return nil, fmt.Errorf("claiming a job: %w", err)
 	}

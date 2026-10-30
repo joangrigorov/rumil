@@ -41,9 +41,8 @@ const (
 // rules closest to the pull request at hand, put in front of the session before
 // the first turn.
 type memory struct {
-	store          *store.DB
-	embedder       mcpservers.Embedder
-	installationID int64
+	store    *store.DB
+	embedder mcpservers.Embedder
 	// repoScopeBoost is the weight a repository's own rule gets over an
 	// organization rule when the candidates are ranked (project_plan.md §6
 	// Phase 6). It is a configuration value, so a team that wants organization
@@ -76,7 +75,6 @@ func newMemory(cfg *config.Config, db *store.DB, logger *slog.Logger) (*memory, 
 	return &memory{
 		store:          db,
 		embedder:       client,
-		installationID: cfg.GitHub.InstallationID,
 		repoScopeBoost: cfg.Memory.RepoScopeWeight(),
 		logger:         logger,
 	}, nil
@@ -96,7 +94,7 @@ func (m *memory) retrieve(ctx context.Context, req Request, meta *ghapp.PRMetada
 	}
 
 	matches, err := m.store.SearchMemories(ctx, store.MemoryQuery{
-		InstallationID: m.installationID,
+		InstallationID: req.InstallationID,
 		OrgName:        req.Owner,
 		RepoName:       req.Repo,
 		Embedding:      embedding,
@@ -128,7 +126,7 @@ func memoryIDs(matches []store.MemoryMatch) []string {
 // comes from the session, never from the model.
 func (m *memory) tools(req Request) []mcpservers.Spec {
 	session := mcpservers.MemorySession{
-		InstallationID: m.installationID,
+		InstallationID: req.InstallationID,
 		OrgName:        req.Owner,
 		RepoName:       req.Repo,
 		PRNumber:       req.Number,

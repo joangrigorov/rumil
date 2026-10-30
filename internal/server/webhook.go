@@ -69,6 +69,7 @@ type Webhook struct {
 	jobs           *store.DB
 	botLogin       string
 	installationID int64
+	installations  map[int64]bool
 	logger         *slog.Logger
 	meter          *metrics.Metrics
 }
@@ -81,20 +82,48 @@ func WithWebhookMetrics(meter *metrics.Metrics) WebhookOption {
 	return func(w *Webhook) { w.meter = meter }
 }
 
+// WithInstallations is the set of installations this instance serves. Empty
+// keeps the single installation from the constructor, and a delivery for any
+// other account is ignored before it reaches the queue.
+func WithInstallations(ids []int64) WebhookOption {
+	return func(w *Webhook) {
+		w.installations = make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			w.installations[id] = true
+		}
+	}
+}
+
+// allows reports whether this instance serves an installation. A webhook built
+// without an installation id serves any, which is only the case in a test that
+// does not care about tenancy.
+func (w *Webhook) allows(installationID int64) bool {
+	if len(w.installations) == 0 {
+		return w.installationID <= 0 || installationID == w.installationID
+	}
+	return w.installations[installationID]
+}
+
 // NewWebhook takes the configured webhook secret and bot handle, so it can
 // tell a review request aimed at Rumil from one aimed at a person, and the
-// installation Rumil serves. An App's webhook secret is account-wide, so a
-// delivery signed with it can belong to any installation of the App; only the
-// configured one has an installation token the engine can use.
+// primary installation Rumil serves. An App's webhook secret is account-wide,
+// so a delivery signed with it can belong to any installation of the App; only
+// a configured one has an installation token the engine can use. WithInstallations
+// replaces the constructor's single id with the whole set.
 func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, logger *slog.Logger, opts ...WebhookOption) *Webhook {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
+	}
+	installations := map[int64]bool{}
+	if installationID > 0 {
+		installations[installationID] = true
 	}
 	webhook := &Webhook{
 		secret:         []byte(secret),
 		jobs:           jobs,
 		botLogin:       ghapp.NormalizeLogin(botHandle),
 		installationID: installationID,
+		installations:  installations,
 		logger:         logger,
 	}
 	for _, opt := range opts {
@@ -225,7 +254,7 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 // GitHub retries a non-2xx and the finding is not more important than the
 // webhook staying healthy.
 func (w *Webhook) recordFindingFeedback(ctx context.Context, eventType string, d payload) {
-	if w.installationID > 0 && d.Installation.ID != w.installationID {
+	if !w.allows(d.Installation.ID) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -281,11 +310,11 @@ func (w *Webhook) validSignature(header string, body []byte) bool {
 // Reviewing is never automatic: the only pull request action that counts is a
 // review request aimed at Rumil itself.
 func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
-	if w.installationID > 0 && d.Installation.ID != w.installationID {
+	if !w.allows(d.Installation.ID) {
 		// Dropped before anything is written: a job for an installation Rumil
 		// cannot authenticate as would fail after the fact, and a remember
 		// command would leave a row behind while it did.
-		return store.Job{}, fmt.Sprintf("the delivery is for installation %d, and Rumil serves %d", d.Installation.ID, w.installationID)
+		return store.Job{}, fmt.Sprintf("the delivery is for installation %d, which this Rumil does not serve", d.Installation.ID)
 	}
 
 	switch eventType {

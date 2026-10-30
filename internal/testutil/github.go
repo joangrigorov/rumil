@@ -401,6 +401,12 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleMint(w)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/app/installations/"):
 		f.handleApp(w)
+	case r.Method == http.MethodGet && r.URL.Path == f.repoPath():
+		// The repository read is how a multi-installation deployment picks the
+		// installation that can serve a CLI request.
+		f.writeJSON(w, http.StatusOK, map[string]any{
+			"name": f.Repo, "full_name": f.Owner + "/" + f.Repo, "private": false,
+		})
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath():
 		f.handlePull(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/files":
