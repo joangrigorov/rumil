@@ -275,7 +275,19 @@ func (c *Client) diffLocked(ctx context.Context) (*Diff, error) {
 
 	raw, _, err := c.gh.PullRequests.GetRaw(ctx, c.owner, c.repo, c.number, github.RawOptions{Type: github.Diff})
 	if err != nil {
-		return nil, fmt.Errorf("fetching diff for %s/%s#%d: %w", c.owner, c.repo, c.number, err)
+		if !diffTooLarge(err) {
+			return nil, fmt.Errorf("fetching diff for %s/%s#%d: %w", c.owner, c.repo, c.number, err)
+		}
+		// GitHub refuses a diff over 300 files with 406. The files endpoint
+		// carries the same per-file patches one page at a time, so the review
+		// can still read the change and still place its inline comments.
+		parsed, fallbackErr := c.filesDiffLocked(ctx)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("fetching diff for %s/%s#%d: %w (the files API fallback failed: %v)",
+				c.owner, c.repo, c.number, err, fallbackErr)
+		}
+		c.diff = parsed
+		return c.diff, nil
 	}
 
 	parsed, err := ParseUnifiedDiff(raw)
@@ -284,6 +296,72 @@ func (c *Client) diffLocked(ctx context.Context) (*Diff, error) {
 	}
 	c.diff = parsed
 	return c.diff, nil
+}
+
+// diffTooLarge reports the 406 GitHub answers for a pull request over its
+// 300-file diff limit.
+func diffTooLarge(err error) bool {
+	var response *github.ErrorResponse
+	return errors.As(err, &response) && response.Response != nil &&
+		response.Response.StatusCode == http.StatusNotAcceptable
+}
+
+// filesDiffLocked builds the diff from the pull request files endpoint. Each
+// entry carries the hunks without the file headers, so they are synthesized in
+// the format ParseUnifiedDiff reads. GitHub omits the patch of a binary file
+// and of a file whose diff is too large to inline; such a file stays named in
+// the diff with no lines, and a comment on it moves into the summary.
+func (c *Client) filesDiffLocked(ctx context.Context) (*Diff, error) {
+	var raw strings.Builder
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		files, response, err := c.gh.PullRequests.ListFiles(ctx, c.owner, c.repo, c.number, opts)
+		if err != nil {
+			return nil, fmt.Errorf("listing files of %s/%s#%d: %w", c.owner, c.repo, c.number, err)
+		}
+		for _, file := range files {
+			writeFileDiff(&raw, file)
+		}
+		if response == nil || response.NextPage == 0 {
+			break
+		}
+		opts.Page = response.NextPage
+	}
+
+	parsed, err := ParseUnifiedDiff(raw.String())
+	if err != nil {
+		return nil, fmt.Errorf("parsing the files of %s/%s#%d: %w", c.owner, c.repo, c.number, err)
+	}
+	return parsed, nil
+}
+
+// writeFileDiff writes one files-endpoint entry as a unified diff section.
+func writeFileDiff(b *strings.Builder, file *github.CommitFile) {
+	path := file.GetFilename()
+	oldPath := file.GetPreviousFilename()
+	if oldPath == "" {
+		oldPath = path
+	}
+
+	oldHeader, newHeader := "a/"+oldPath, "b/"+path
+	switch file.GetStatus() {
+	case "added":
+		oldHeader = "/dev/null"
+	case "removed":
+		newHeader = "/dev/null"
+	}
+	fmt.Fprintf(b, "diff --git a/%s b/%s\n--- %s\n+++ %s\n", oldPath, path, oldHeader, newHeader)
+
+	if patch := file.GetPatch(); patch != "" {
+		b.WriteString(patch)
+		if !strings.HasSuffix(patch, "\n") {
+			b.WriteString("\n")
+		}
+		return
+	}
+	if file.GetStatus() != "renamed" && file.GetAdditions() == 0 && file.GetDeletions() == 0 {
+		fmt.Fprintf(b, "Binary files a/%s and b/%s differ\n", oldPath, path)
+	}
 }
 
 // ReviewGuidelines fetches the repository's review guidelines, GuidelinesPath

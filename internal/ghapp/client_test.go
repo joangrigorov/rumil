@@ -230,6 +230,68 @@ func TestClientDiffIsMemoized(t *testing.T) {
 	}
 }
 
+// GitHub refuses a diff over 300 files with 406. The files endpoint carries
+// the same per-file patches one page at a time, so the review and its inline
+// comments still work on a pull request of that size.
+func TestClientDiffFallsBackToTheFilesAPIForALargePullRequest(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.DiffStatus = http.StatusNotAcceptable
+	gh.Files = []testutil.FileEntry{
+		{
+			Filename:  "main.go",
+			Additions: 1,
+			Status:    "modified",
+			Patch: "@@ -10,3 +10,4 @@ func main() {\n" +
+				" \tif err != nil {\n" +
+				" \t\tlog.Fatal(err)\n" +
+				" \t}\n" +
+				"+\tsettle(ctx)\n",
+		},
+		{
+			Filename:         "old.go",
+			PreviousFilename: "legacy.go",
+			Additions:        1,
+			Status:           "renamed",
+			Patch:            "@@ -1,1 +1,1 @@\n package legacy\n",
+		},
+		{
+			Filename: "asset.bin",
+			Status:   "modified",
+		},
+	}
+	client := newTestClient(t, gh)
+
+	diff, err := client.Diff(context.Background())
+	if err != nil {
+		t.Fatalf("Diff returned error: %v", err)
+	}
+	if !diff.HasNewLine("main.go", 13) {
+		t.Errorf("the fallback diff does not carry main.go:13:\n%s", diff.Annotate("main.go"))
+	}
+	if file := diff.File("old.go"); file == nil || file.OldPath != "legacy.go" {
+		t.Errorf("renamed file = %+v, want the new path over the old one", file)
+	}
+	if file := diff.File("asset.bin"); file == nil || !file.Binary {
+		t.Errorf("file without a patch = %+v, want it marked binary", file)
+	}
+	if requests := strings.Join(gh.RequestLog(), "\n"); !strings.Contains(requests, "/files") {
+		t.Errorf("the files endpoint was not read:\n%s", requests)
+	}
+}
+
+func TestClientDiffKeepsTheFilesAPIOutOfOtherFailures(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.DiffStatus = http.StatusInternalServerError
+	client := newTestClient(t, gh)
+
+	if _, err := client.Diff(context.Background()); err == nil {
+		t.Fatal("Diff returned no error for a 500 from the diff endpoint")
+	}
+	if requests := strings.Join(gh.RequestLog(), "\n"); strings.Contains(requests, "/files") {
+		t.Errorf("the files endpoint was read after an unrelated failure:\n%s", requests)
+	}
+}
+
 func TestClientFileContents(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	gh.Contents["big.go"] = strings.Repeat("line\n", 600)

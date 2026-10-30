@@ -30,10 +30,13 @@ import (
 
 // FileEntry is one entry in the fake pull request file list.
 type FileEntry struct {
-	Filename  string `json:"filename"`
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Status    string `json:"status"`
+	Filename         string `json:"filename"`
+	PreviousFilename string `json:"previous_filename,omitempty"`
+	Additions        int    `json:"additions"`
+	Deletions        int    `json:"deletions"`
+	Status           string `json:"status"`
+	// Patch is the hunk text the files endpoint carries for a changed file.
+	Patch string `json:"patch,omitempty"`
 }
 
 // CommentEntry is one existing review comment.
@@ -135,9 +138,12 @@ type FakeGitHub struct {
 	BaseSHA  string
 	HeadSHA  string
 
-	Diff     string
-	Files    []FileEntry
-	Contents map[string]string
+	Diff string
+	// DiffStatus, when non-zero, is returned by the diff endpoint instead of
+	// the diff, so a test can drive the files-API fallback.
+	DiffStatus int
+	Files      []FileEntry
+	Contents   map[string]string
 	// ContentsByRef overrides Contents for a specific ref, so a test can serve
 	// different text on the base SHA and the head SHA.
 	ContentsByRef map[string]map[string]string
@@ -470,8 +476,16 @@ func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
 
 func (f *FakeGitHub) handlePull(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(r.Header.Get("Accept"), "diff") {
+		f.mu.Lock()
+		status := f.DiffStatus
+		diff := f.Diff
+		f.mu.Unlock()
+		if status != 0 {
+			http.Error(w, `{"message":"Sorry, the diff exceeded the maximum number of files (300). Consider using 'List pull requests files' API or locally cloning the repository instead."}`, status)
+			return
+		}
 		w.Header().Set("Content-Type", "application/vnd.github.v3.diff")
-		_, _ = w.Write([]byte(f.Diff))
+		_, _ = w.Write([]byte(diff))
 		return
 	}
 	f.writeJSON(w, http.StatusOK, map[string]any{
