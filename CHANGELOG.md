@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.23](https://github.com/joangrigorov/rumil/compare/v0.0.22...v0.0.23) (2026-10-30)
+
+
+### Bug Fixes
+
+* **build:** build the from-source image with Go 1.27.3 ([#102](https://github.com/joangrigorov/rumil/issues/102)) ([4fc7828](https://github.com/joangrigorov/rumil/commit/4fc7828fa38e7065b07b6eea58dfba63ba44e929))
+
 ## [0.0.22](https://github.com/joangrigorov/rumil/compare/v0.0.21...v0.0.22) (2026-10-30)
 
 
