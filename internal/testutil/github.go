@@ -243,7 +243,32 @@ type FakeGitHub struct {
 func NewFakeGitHub(t *testing.T) *FakeGitHub {
 	t.Helper()
 
-	f := &FakeGitHub{
+	f := defaultFakeGitHub()
+	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
+	t.Cleanup(f.Server.Close)
+	f.Tarball = TarGz(t, f.Contents)
+	return f
+}
+
+// NewFakeGitHubServer starts the fake for a caller that is not a test, such as
+// the eval harness. The caller closes Server.
+func NewFakeGitHubServer() *FakeGitHub {
+	f := defaultFakeGitHub()
+	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
+	archive, err := tarGz(f.Contents)
+	if err != nil {
+		// The archive is built from in-memory strings; a failure is a bug in
+		// this package rather than an input problem.
+		panic(fmt.Sprintf("building the fake repository archive: %v", err))
+	}
+	f.Tarball = archive
+	return f
+}
+
+// defaultFakeGitHub is the pull request every test and the eval harness start
+// from, without a server.
+func defaultFakeGitHub() *FakeGitHub {
+	return &FakeGitHub{
 		Owner:          "acme",
 		Repo:           "payments",
 		Number:         42,
@@ -288,17 +313,20 @@ func NewFakeGitHub(t *testing.T) *FakeGitHub {
 			"service.go": "package main\n\nfunc settle(ctx context.Context) error {\n\treturn nil\n}\n",
 		},
 	}
-
-	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
-	t.Cleanup(f.Server.Close)
-	f.Tarball = TarGz(t, f.Contents)
-	return f
 }
 
 // TarGz builds the repository archive a GitHub tarball endpoint serves: one
 // gzipped tar with a single top directory.
 func TarGz(t *testing.T, files map[string]string) []byte {
 	t.Helper()
+	archive, err := tarGz(files)
+	if err != nil {
+		t.Fatalf("building the test archive: %v", err)
+	}
+	return archive
+}
+
+func tarGz(files map[string]string) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -317,19 +345,19 @@ func TarGz(t *testing.T, files map[string]string) []byte {
 			Typeflag: tar.TypeReg,
 		}
 		if err := tw.WriteHeader(header); err != nil {
-			t.Fatalf("writing the test archive header: %v", err)
+			return nil, fmt.Errorf("writing the archive header for %s: %w", name, err)
 		}
 		if _, err := tw.Write(body); err != nil {
-			t.Fatalf("writing the test archive body: %v", err)
+			return nil, fmt.Errorf("writing the archive body for %s: %w", name, err)
 		}
 	}
 	if err := tw.Close(); err != nil {
-		t.Fatalf("closing the test archive: %v", err)
+		return nil, fmt.Errorf("closing the archive: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		t.Fatalf("closing the test archive: %v", err)
+		return nil, fmt.Errorf("closing the archive compression: %w", err)
 	}
-	return buf.Bytes()
+	return buf.Bytes(), nil
 }
 
 // URL is the API root, suitable for both go-github and ghinstallation.

@@ -1,0 +1,50 @@
+name: unbounded-retry
+description: >-
+  settle now retries forever. The loop has no attempt cap, no backoff, and no
+  way for the caller to give up, so one failing dependency parks a worker.
+owner: acme
+repo: payments
+number: 42
+title: Retry the settlement call
+body: Keeps trying the settlement call until it succeeds.
+diff: |
+  diff --git a/worker.go b/worker.go
+  --- a/worker.go
+  +++ b/worker.go
+  @@ -5,3 +5,11 @@
+   func settle(ctx context.Context) error {
+  -	return nil
+  +	for {
+  +		if err := call(ctx); err == nil {
+  +			return nil
+  +		}
+  +	}
+  +}
+  +
+  +func call(ctx context.Context) error {
+  +	return nil
+   }
+files:
+  worker.go: |
+    package worker
+
+    import "context"
+
+    func settle(ctx context.Context) error {
+    	for {
+    		if err := call(ctx); err == nil {
+    			return nil
+    		}
+    	}
+    }
+
+    func call(ctx context.Context) error {
+    	return nil
+    }
+expected:
+  - path: worker.go
+    line: 6
+false_positives:
+  - path: worker.go
+    line: 13
+    match: unused

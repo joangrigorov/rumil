@@ -19,6 +19,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 | `rumil serve` | Run the webhook server and the queue that reviews on request. |
 | `rumil sessions` | Continue a failed review session so it does not start from the beginning. |
 | `rumil findings` | Report what happened to the findings Rumil posted, grouped by model. |
+| `rumil eval` | Run the reviewer against a local fixture set and score the findings. |
 | `rumil mod` | List the recorded rules, and approve or reject them. |
 
 ## Contents
@@ -546,6 +547,39 @@ rumil findings --repo acme/payments --days 30
 `--json` prints the same rows for a script, and `--days 0` reads every finding on record. A finding with no signal is not a failure; it is a finding nobody has looked at yet.
 
 The feedback arrives by webhook: replies with *Pull request review comment*, dismissals with *Pull request review*, reactions with *Reaction*, and pushes with *Pull request*. Subscribe to the first three to fill the report in; the push signal is already part of the required set.
+
+### Running the reviewer against a fixture set
+
+`rumil findings` measures reviews that happened. `rumil eval` measures the reviewer itself: it runs the configured model against a set of local pull requests and scores the findings against what each one should produce.
+
+```bash
+rumil eval --fixtures fixtures
+```
+
+GitHub is replaced by an in-process fake, so nothing is posted and no repository is read. The chat provider is real, so the command spends tokens. A fixture is a YAML file:
+
+```yaml
+name: unbounded-retry
+title: Retry the settlement call
+diff: |
+  diff --git a/worker.go b/worker.go
+  ...
+files:
+  worker.go: |
+    package worker
+    ...
+expected:                 # a good review finds these
+  - path: worker.go
+    line: 6
+false_positives:          # a review may say these, and they are wrong
+  - path: worker.go
+    line: 13
+    match: unused
+```
+
+A finding matches an expectation when the path is equal, the line is within two, and the comment body contains `match`, case-insensitively; an empty `match` accepts any body on that line. Each finding counts once, so repeating an expectation cannot inflate the score. The report prints per fixture and in total: expected, matched, missed, known false positives, unexpected findings, and recall. `--json` prints the same data for a script that compares two runs.
+
+The repository ships `fixtures/` as a starter set. `--fixture NAME` runs one, `--model ID` reviews with another configured chat provider, and `--timeout` bounds one fixture (the default is `worker.job_timeout`). The run disables the snapshot and operator MCP servers: the comparison is about the prompt and the model, not the tools around them.
 
 ## Troubleshooting
 
