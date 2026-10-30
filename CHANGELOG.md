@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.0.21](https://github.com/joangrigorov/rumil/compare/v0.0.20...v0.0.21) (2026-10-30)
+
+
+### Features
+
+* **doctor:** check the configuration against every dependency ([#92](https://github.com/joangrigorov/rumil/issues/92)) ([9769041](https://github.com/joangrigorov/rumil/commit/9769041ba720bdecbaba4df40432302e2a40aedb))
+* **reviewer:** answer questions in a review thread ([#88](https://github.com/joangrigorov/rumil/issues/88)) ([8189b4d](https://github.com/joangrigorov/rumil/commit/8189b4d6301f5c7aceb4f6dbfd55b5b3a065ecf1))
+* **reviewer:** fall back to a secondary chat provider ([#91](https://github.com/joangrigorov/rumil/issues/91)) ([573f2d7](https://github.com/joangrigorov/rumil/commit/573f2d73a283c7581227e2b030fbff0e8f251a73))
+* **reviewer:** read per-repository review settings from the base branch ([#90](https://github.com/joangrigorov/rumil/issues/90)) ([bb08ea8](https://github.com/joangrigorov/rumil/commit/bb08ea846e638a867772ca6ce6ed8e13fda01ce1))
+* **server:** expose Prometheus metrics ([#93](https://github.com/joangrigorov/rumil/issues/93)) ([99c7601](https://github.com/joangrigorov/rumil/commit/99c76015dd2c88e1d2644c0c170ae77e49e06d4f))
+* **server:** name admin credentials and record who used them ([#94](https://github.com/joangrigorov/rumil/issues/94)) ([b9a757f](https://github.com/joangrigorov/rumil/commit/b9a757fc53dc4ddb7b9b04b2cbbf020a174a9430))
+* **server:** serve several App installations in one process ([#96](https://github.com/joangrigorov/rumil/issues/96)) ([91d89ba](https://github.com/joangrigorov/rumil/commit/91d89ba6ef3560b7bb8826a0655b5b65e1a30a30)), closes [#79](https://github.com/joangrigorov/rumil/issues/79)
+
+
+### Bug Fixes
+
+* **doctor:** accept named admin credentials ([#95](https://github.com/joangrigorov/rumil/issues/95)) ([0ac78ff](https://github.com/joangrigorov/rumil/commit/0ac78ff58e57d84699507387caaf651a7edf394f)), closes [#77](https://github.com/joangrigorov/rumil/issues/77)
+
 ## [0.0.20](https://github.com/joangrigorov/rumil/compare/v0.0.19...v0.0.20) (2026-10-30)
 
 
