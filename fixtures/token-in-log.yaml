@@ -1,0 +1,35 @@
+name: token-in-log
+description: >-
+  The login line now writes the session token to the process log, where it
+  outlives the request and reaches anyone who can read the log.
+owner: acme
+repo: payments
+number: 44
+title: Log a successful login
+body: Adds a line to the login path.
+diff: |
+  diff --git a/auth.go b/auth.go
+  --- a/auth.go
+  +++ b/auth.go
+  @@ -5,3 +5,3 @@
+   func login(token string) {
+  -	log.Println("login")
+  +	log.Printf("login with token %s", token)
+   }
+files:
+  auth.go: |
+    package auth
+
+    import "log"
+
+    func login(token string) {
+    	log.Printf("login with token %s", token)
+    }
+expected:
+  - path: auth.go
+    line: 6
+    match: token
+false_positives:
+  - path: auth.go
+    line: 6
+    match: Printf

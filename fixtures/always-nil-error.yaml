@@ -1,0 +1,37 @@
+name: always-nil-error
+description: >-
+  load declares an error variable, never assigns it, and returns it. Every
+  caller reads a successful load.
+owner: acme
+repo: payments
+number: 43
+title: Return the load error
+body: Reports a failed read instead of nil.
+diff: |
+  diff --git a/handler.go b/handler.go
+  --- a/handler.go
+  +++ b/handler.go
+  @@ -1,5 +1,6 @@
+   package handler
+
+   func load() error {
+  -	return nil
+  +	var err error
+  +	return err
+   }
+files:
+  handler.go: |
+    package handler
+
+    func load() error {
+    	var err error
+    	return err
+    }
+expected:
+  - path: handler.go
+    line: 5
+    match: nil
+false_positives:
+  - path: handler.go
+    line: 4
+    match: unused
