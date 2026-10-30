@@ -91,6 +91,8 @@ type harnessOpts struct {
 	// snapshot replaces the snapshot block. Empty disables the working tree in
 	// tests that do not exercise it, so they do not download an archive.
 	snapshot string
+	// publicURL sets server.public_url, which is what a check run links to.
+	publicURL string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -127,6 +129,9 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 	if opts.embedding {
 		defaultChat += "  default_embedding: \"embed\"\n"
+	}
+	if opts.publicURL != "" {
+		top += fmt.Sprintf("server:\n  public_url: %q\n", opts.publicURL)
 	}
 	top += opts.memory
 	top += opts.compaction

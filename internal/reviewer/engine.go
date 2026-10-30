@@ -57,6 +57,10 @@ type Request struct {
 	// the command, for example "focus on migration consistency". It narrows
 	// where the effort goes; it does not replace the review.
 	Focus string
+	// SessionID is the recorded session, when one exists. It is what the check
+	// run links to, so a reviewer can open the transcript from the pull
+	// request.
+	SessionID string
 	// Observer, when set, receives the session's progress for the observation
 	// deck. It travels with the request rather than the engine because workers
 	// share one engine and run sessions concurrently.
@@ -190,7 +194,7 @@ func (e *Engine) ModelName() string {
 
 // Review runs the review. The installation is verified before the session is
 // created, so a missing GitHub App installation fails fast and cheap.
-func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
+func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err error) {
 	observer := req.Observer
 	if err := e.auth.Verify(ctx); err != nil {
 		return nil, err
@@ -216,6 +220,14 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	if observer != nil {
 		observer.Observe(ctx, sessionMetadataEvent(meta.Title, meta.HeadSHA, meta.BaseSHA, len(meta.ChangedFiles)))
 	}
+
+	// The check run is the progress a reviewer sees without reading a comment
+	// per turn. It is best effort: a missing Checks permission leaves the
+	// review itself unchanged.
+	checkID := e.startReviewCheck(ctx, req, meta.HeadSHA)
+	defer func() {
+		e.finishReviewCheck(ctx, req, checkID, final, err)
+	}()
 
 	// A continuation gets its own budget, which is what makes it a second
 	// attempt rather than the same run resumed at zero.

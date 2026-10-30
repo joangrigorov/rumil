@@ -1314,3 +1314,49 @@ models:
 		}
 	})
 }
+
+// server.public_url is optional. When it is set it has to be an address a
+// browser on github.com can follow, so the check run never links to a bare
+// listener.
+func TestServerPublicURL(t *testing.T) {
+	base := `
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+`
+
+	configured := mustParse(t, base+"server:\n  public_url: \"https://rumil.example.com/\"\n")
+	if configured.Server.PublicURL != "https://rumil.example.com" {
+		t.Errorf("public_url = %q, want the trailing slash removed", configured.Server.PublicURL)
+	}
+
+	unset := mustParse(t, base)
+	if unset.Server.PublicURL != "" {
+		t.Errorf("public_url = %q, want empty by default", unset.Server.PublicURL)
+	}
+
+	for name, value := range map[string]string{
+		"a relative path": "/ui/sessions",
+		"no host":         "https://",
+		"another scheme":  "ftp://rumil.example.com",
+		"not a URL":       "rumil.example.com",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte(base+"server:\n  public_url: \""+value+"\"\n"), "test.yaml")
+			if err == nil {
+				t.Fatalf("Parse accepted public_url %q", value)
+			}
+			if !strings.Contains(err.Error(), "public_url") {
+				t.Errorf("Parse = %v, want the error to name public_url", err)
+			}
+		})
+	}
+}

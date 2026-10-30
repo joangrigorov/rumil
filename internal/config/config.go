@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -219,6 +220,9 @@ func (w Worker) Timeout() time.Duration {
 // Server holds the HTTP surface settings of `rumil serve`.
 type Server struct {
 	Listen string `yaml:"listen"`
+	// PublicURL is the address a reviewer reaches the deck on. It is what a
+	// GitHub check run links to; empty leaves the check without a details link.
+	PublicURL string `yaml:"public_url"`
 }
 
 // App holds process-wide behavior switches.
@@ -438,6 +442,7 @@ func (c *Config) applyDefaults() {
 	if c.Server.Listen == "" {
 		c.Server.Listen = DefaultListen
 	}
+	c.Server.PublicURL = strings.TrimRight(c.Server.PublicURL, "/")
 	if c.Compaction.TriggerTokens == 0 {
 		c.Compaction.TriggerTokens = DefaultCompactionTriggerTokens
 	}
@@ -462,6 +467,13 @@ func (c *Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("app.log_level must be one of debug, info, warn, error, got %q", c.App.LogLevel)
+	}
+
+	if c.Server.PublicURL != "" {
+		parsed, err := url.Parse(c.Server.PublicURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("server.public_url must be an absolute http or https URL, got %q", c.Server.PublicURL)
+		}
 	}
 
 	switch c.Review.GuidelinesRef {

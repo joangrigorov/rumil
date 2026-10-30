@@ -232,12 +232,18 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		}
 	}
 
+	sessionID := ""
+	if recorded != nil {
+		sessionID = recorded.sessionID
+	}
+
 	result, err := p.engine.Review(reviewCtx, reviewer.Request{
-		Owner:    job.OrgName,
-		Repo:     job.RepoName,
-		Number:   job.PRNumber,
-		Focus:    focus,
-		Observer: observer,
+		Owner:     job.OrgName,
+		Repo:      job.RepoName,
+		Number:    job.PRNumber,
+		Focus:     focus,
+		SessionID: sessionID,
+		Observer:  observer,
 	})
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -326,11 +332,17 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		}
 	}
 
+	sessionID := ""
+	if recorded != nil {
+		sessionID = recorded.sessionID
+	}
+
 	result, reviewErr := p.engine.Review(continuationCtx, reviewer.Request{
-		Owner:    parent.OrgName,
-		Repo:     parent.RepoName,
-		Number:   parent.PRNumber,
-		Observer: observer,
+		Owner:     parent.OrgName,
+		Repo:      parent.RepoName,
+		Number:    parent.PRNumber,
+		SessionID: sessionID,
+		Observer:  observer,
 		Continuation: &reviewer.Continuation{
 			ParentSessionID: parent.ID,
 			HeadSHA:         parent.HeadSHA,

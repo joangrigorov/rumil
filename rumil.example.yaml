@@ -54,6 +54,7 @@ worker:
 
 server:
   listen: ":8080"                 # HTTP address for the webhook endpoint, overridden by --listen
+  # public_url: "https://rumil.example.com" # Address reviewers reach the deck on; links the review's GitHub check run to its session
 
 models:
   default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider
