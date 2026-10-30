@@ -3,6 +3,7 @@ package reviewer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	kit "github.com/mark3labs/kit/pkg/kit"
@@ -78,6 +79,26 @@ func TestObserveKitEventMapsTheSession(t *testing.T) {
 
 	if got := observer.events[6].Payload["error"]; got != "the provider closed the stream" {
 		t.Errorf("turn_end error = %v", got)
+	}
+}
+
+// A provider failure carries its class and whether the response headers timed
+// out, which is what the metrics surface counts without reading the text.
+func TestObserveKitEventDescribesAProviderFailure(t *testing.T) {
+	engine := &Engine{}
+	observer := &captureObserver{}
+	err := fmt.Errorf("%w: %w", kit.ErrRateLimit, context.DeadlineExceeded)
+
+	engine.observeKitEvent(context.Background(), observer, kit.ErrorEvent{Error: err})
+	if len(observer.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(observer.events))
+	}
+	payload := observer.events[0].Payload
+	if payload["class"] != "rate_limit" {
+		t.Errorf("class = %v, want rate_limit", payload["class"])
+	}
+	if payload["header_timeout"] != true {
+		t.Errorf("header_timeout = %v, want true", payload["header_timeout"])
 	}
 }
 

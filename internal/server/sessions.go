@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joangrigorov/rumil/internal/continuation"
+	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
@@ -23,26 +24,40 @@ type SessionsUI struct {
 	db     *store.DB
 	auth   *adminAuth
 	broker *broker
+	meter  *metrics.Metrics
 	logger *slog.Logger
+}
+
+// SessionsOption tunes the deck at construction.
+type SessionsOption func(*SessionsUI)
+
+// WithSessionsMetrics records provider, snapshot and memory events from the
+// session transcript.
+func WithSessionsMetrics(meter *metrics.Metrics) SessionsOption {
+	return func(s *SessionsUI) { s.meter = meter }
 }
 
 // NewSessionsUI builds the deck. The broker is owned here so the recorder the
 // worker pool uses and the streams the browser reads are the same fan-out.
-func NewSessionsUI(db *store.DB, token string, logger *slog.Logger) *SessionsUI {
+func NewSessionsUI(db *store.DB, token string, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &SessionsUI{
+	ui := &SessionsUI{
 		db:     db,
 		auth:   newAdminAuth(token, "rumil sessions", logger),
 		broker: newBroker(),
 		logger: logger,
 	}
+	for _, opt := range opts {
+		opt(ui)
+	}
+	return ui
 }
 
 // Recorder returns the worker-side half of the deck.
 func (s *SessionsUI) Recorder() *SessionRecorder {
-	return NewSessionRecorder(s.db, s.broker, s.logger)
+	return NewSessionRecorder(s.db, s.broker, s.logger, s.meter)
 }
 
 // Routes mounts the deck.

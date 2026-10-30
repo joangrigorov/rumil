@@ -13,6 +13,7 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/continuation"
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -29,9 +30,16 @@ type Pool struct {
 	interval time.Duration
 	timeout  time.Duration
 	recorder *SessionRecorder
+	meter    *metrics.Metrics
 	logger   *slog.Logger
 
 	wg sync.WaitGroup
+}
+
+// WithMetrics records job outcomes, review duration, token usage and the
+// sessions that ended without a review.
+func WithMetrics(meter *metrics.Metrics) PoolOption {
+	return func(p *Pool) { p.meter = meter }
 }
 
 // SetSessionRecorder attaches the observation deck's worker half. It is set
@@ -248,6 +256,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		sessionID = recorded.sessionID
 	}
 
+	started := time.Now()
 	result, err := p.engine.Review(reviewCtx, reviewer.Request{
 		Owner:     job.OrgName,
 		Repo:      job.RepoName,
@@ -257,6 +266,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		Observer:  observer,
 		Cancelled: watcher.Stopped,
 	})
+	p.observeReview(result, err, started)
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, err))
@@ -366,6 +376,7 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		sessionID = recorded.sessionID
 	}
 
+	started := time.Now()
 	result, reviewErr := p.engine.Review(continuationCtx, reviewer.Request{
 		Owner:     parent.OrgName,
 		Repo:      parent.RepoName,
@@ -381,6 +392,7 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 			Turns:           request.Turns,
 		},
 	})
+	p.observeReview(result, reviewErr, started)
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, reviewErr))
@@ -707,11 +719,47 @@ func (p *Pool) finish(ctx context.Context, logger *slog.Logger, job *store.Job, 
 
 	var err error
 	if ok {
+		p.meter.Job(metricEvent(job.EventType), "completed")
 		err = p.jobs.CompleteJob(finishCtx, job.ID)
 	} else {
+		p.meter.Job(metricEvent(job.EventType), "failed")
 		err = p.jobs.FailJob(finishCtx, job.ID, cause)
 	}
 	if err != nil {
 		logger.Error("recording the job outcome failed", "error", err)
+	}
+}
+
+// observeReview records what one review attempt cost and how it ended. An
+// interrupted attempt is not an outcome: it returns to the queue on the next
+// start, so counting it would report a failure that did not happen.
+func (p *Pool) observeReview(result *reviewer.Result, err error, started time.Time) {
+	if p.meter == nil || (err != nil && classifyFailure(err) == jobRetry) {
+		return
+	}
+
+	outcome := "submitted"
+	submitted := err == nil && result != nil && result.ReviewSubmitted
+	switch {
+	case submitted:
+	case errors.Is(err, reviewer.ErrReviewCancelled):
+		outcome = "cancelled"
+	case result != nil && result.TurnLimitReached:
+		outcome = "turn_limit"
+	case result != nil && result.OutputLimitReached:
+		outcome = "output_limit"
+	case errors.Is(err, reviewer.ErrNoReviewSubmitted):
+		outcome = "no_submission"
+	default:
+		outcome = "failed"
+	}
+
+	p.meter.ReviewDuration(outcome, time.Since(started))
+	if !submitted {
+		p.meter.ReviewWithoutSubmission(outcome)
+	}
+	if result != nil && result.Usage != nil {
+		p.meter.Usage(result.Usage.InputTokens, result.Usage.OutputTokens,
+			result.Usage.CacheReadTokens, result.Usage.CacheCreationTokens, result.Usage.CostUSD)
 	}
 }
