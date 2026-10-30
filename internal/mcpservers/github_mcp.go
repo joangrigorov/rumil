@@ -52,6 +52,9 @@ type GithubTools struct {
 	// OnReviewSubmitted is called once a review reaches GitHub, so the caller
 	// can record the outcome of the session.
 	OnReviewSubmitted func(outcome ghapp.ReviewOutcome)
+	// OnThreadResolved is called with the root comment id of a thread the
+	// session closed, so the caller can record that its finding is gone.
+	OnThreadResolved func(commentID int64)
 
 	// reviews is the session's view of the review list: the baseline the
 	// history view and the resolution guard read.

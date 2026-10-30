@@ -18,6 +18,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 | `rumil review` | Review one pull request and exit. No server, no queue. |
 | `rumil serve` | Run the webhook server and the queue that reviews on request. |
 | `rumil sessions` | Continue a failed review session so it does not start from the beginning. |
+| `rumil findings` | Report what happened to the findings Rumil posted, grouped by model. |
 | `rumil mod` | List the recorded rules, and approve or reject them. |
 
 ## Contents
@@ -29,6 +30,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Run the webhook server](#run-the-webhook-server)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
+- [Measuring review quality](#measuring-review-quality)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -279,7 +281,7 @@ In the App's settings:
 
 1. **Webhook URL**: `https://<your-rumil-host>/webhooks/github`
 2. **Webhook secret**: a long random string, and the same value as `github.webhook_secret`
-3. **Subscribe to events**: *Pull request*, *Issue comment* and *Pull request review comment*
+3. **Subscribe to events**: *Pull request*, *Issue comment* and *Pull request review comment*. Add *Pull request review* and *Reaction* if you want the finding-quality report to fill in
 
 ### Docker Compose
 
@@ -445,6 +447,18 @@ rumil mod approve 3df15f48 --scope REPO --authority directive --moderator alice
 ```
 
 `--authority context` puts a promoted rule back to recorded context.
+
+## Measuring review quality
+
+Every inline comment Rumil posts is recorded with the GitHub comment id it was created as. Later deliveries attach what happened to it: a reply in the thread, a thread Rumil closed after verifying the finding is gone, a reaction on the comment, a dismissed review, or a push after the round. The report groups the counts by the model that produced the review:
+
+```bash
+rumil findings --repo acme/payments --days 30
+```
+
+`--json` prints the same rows for a script, and `--days 0` reads every finding on record. A finding with no signal is not a failure; it is a finding nobody has looked at yet.
+
+The feedback arrives by webhook: replies with *Pull request review comment*, dismissals with *Pull request review*, reactions with *Reaction*, and pushes with *Pull request*. Subscribe to the first three to fill the report in; the push signal is already part of the required set.
 
 ## Troubleshooting
 

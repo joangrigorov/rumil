@@ -115,6 +115,15 @@ type ReviewRequest struct {
 	Comments    []ReviewComment
 }
 
+// SubmittedFinding is one inline comment GitHub accepted, with the id later
+// feedback arrives on.
+type SubmittedFinding struct {
+	CommentID int64
+	Path      string
+	Line      int
+	Body      string
+}
+
 // ReviewOutcome reports what GitHub actually accepted.
 type ReviewOutcome struct {
 	// Event is the event GitHub recorded.
@@ -129,6 +138,13 @@ type ReviewOutcome struct {
 	// SkippedDuplicates holds comments that already exist on the pull request,
 	// rendered as "[path:line] body".
 	SkippedDuplicates []string
+	// ReviewID is the review GitHub created, which later dismissal events name.
+	ReviewID int64
+	// Findings are the inline comments GitHub accepted, with their comment ids.
+	Findings []SubmittedFinding
+	// FindingsError reports a review that submitted but whose comment ids could
+	// not be read back. The review is valid; only outcome tracking is missing.
+	FindingsError string
 }
 
 // Metadata returns the pull request header and changed files, fetching them
@@ -623,7 +639,58 @@ func (c *Client) SubmitReview(ctx context.Context, diff *Diff, req ReviewRequest
 	if created != nil && reviewStateToEvent(created.GetState()) != "" {
 		outcome.Event = reviewStateToEvent(created.GetState())
 	}
+	outcome.ReviewID = created.GetID()
+
+	// The review is already on the pull request, so a failure to read back the
+	// comment ids is reported, not returned: the review succeeded.
+	findings, findingsErr := c.reviewFindings(ctx, outcome.ReviewID, len(inline))
+	outcome.Findings = findings
+	if findingsErr != nil {
+		outcome.FindingsError = findingsErr.Error()
+	}
 	return outcome, nil
+}
+
+// maxFindingPages bounds the read-back that maps a just-created review onto its
+// comment ids. A review with more comments than this is recorded in part.
+const maxFindingPages = 10
+
+// reviewFindings lists the comments the review just created, newest first, and
+// stops once it has the expected number. The list endpoint filters by pull
+// request rather than by review, so the review id is matched here.
+func (c *Client) reviewFindings(ctx context.Context, reviewID int64, expected int) ([]SubmittedFinding, error) {
+	if reviewID == 0 || expected == 0 {
+		return nil, nil
+	}
+
+	findings := make([]SubmittedFinding, 0, expected)
+	options := &github.PullRequestListCommentsOptions{
+		Sort:        "created",
+		Direction:   "desc",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	for page := 0; page < maxFindingPages && len(findings) < expected; page++ {
+		comments, response, err := c.gh.PullRequests.ListComments(ctx, c.owner, c.repo, c.number, options)
+		if err != nil {
+			return findings, fmt.Errorf("listing the review's comments on %s/%s#%d: %w", c.owner, c.repo, c.number, err)
+		}
+		for _, comment := range comments {
+			if comment.GetPullRequestReviewID() != reviewID {
+				continue
+			}
+			findings = append(findings, SubmittedFinding{
+				CommentID: comment.GetID(),
+				Path:      comment.GetPath(),
+				Line:      comment.GetLine(),
+				Body:      comment.GetBody(),
+			})
+		}
+		if response == nil || response.NextPage == 0 {
+			break
+		}
+		options.Page = response.NextPage
+	}
+	return findings, nil
 }
 
 // reviewStateToEvent maps the state of a created review back onto the event

@@ -29,6 +29,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newReviewCmd(&configPath))
 	root.AddCommand(newServeCmd(&configPath))
 	root.AddCommand(newSessionsCmd(&configPath))
+	root.AddCommand(newFindingsCmd(&configPath))
 	root.AddCommand(newModCmd(&configPath))
 	root.AddCommand(newInitCmd(&configPath))
 

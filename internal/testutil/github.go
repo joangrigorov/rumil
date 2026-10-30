@@ -51,6 +51,9 @@ type CommentEntry struct {
 	} `json:"user"`
 	// InReplyToID is zero for a comment that opened a thread.
 	InReplyToID int64 `json:"in_reply_to_id"`
+	// PullRequestReviewID is the review a submitted inline comment belongs to,
+	// which is how the client maps a created review back onto its comments.
+	PullRequestReviewID int64 `json:"pull_request_review_id,omitempty"`
 	// CreatedAt is when the comment was written, which is how threads are
 	// ordered newest first.
 	CreatedAt time.Time `json:"created_at"`
@@ -616,8 +619,18 @@ func (f *FakeGitHub) handleReview(w http.ResponseWriter, r *http.Request) {
 		status = f.ReviewStatus
 		f.reviewFailures++
 	}
+	reviewID := int64(len(f.Reviews)) + 1
 	if status == 0 {
 		f.Reviews = append(f.Reviews, review)
+		// GitHub serves the inline comments of a created review on the next
+		// listing, each carrying the review id that created it.
+		for i, comment := range review.Comments {
+			entry := ReviewComment(3000+int64(len(f.Comments))+int64(i), 0, f.botLogin(), comment.Body)
+			entry.Path = comment.Path
+			entry.Line = comment.Line
+			entry.PullRequestReviewID = reviewID
+			f.Comments = append(f.Comments, entry)
+		}
 	}
 	f.mu.Unlock()
 
@@ -626,7 +639,7 @@ func (f *FakeGitHub) handleReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.writeJSON(w, http.StatusOK, map[string]any{
-		"id":    len(f.SubmittedReviews()),
+		"id":    reviewID,
 		"state": reviewState(review.Event),
 		"body":  review.Body,
 	})

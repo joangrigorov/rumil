@@ -96,6 +96,12 @@ type Result struct {
 	OutputLimitReached bool
 	// Summary is the closing text from the session.
 	Summary string
+	// ReviewID is the review GitHub created, which a dismissal event names.
+	ReviewID int64
+	// Findings are the inline comments GitHub accepted, with their comment ids.
+	Findings []ghapp.SubmittedFinding
+	// ResolvedFindings are the root comment ids of threads this session closed.
+	ResolvedFindings []int64
 }
 
 // Engine reviews one pull request at a time.
@@ -312,7 +318,14 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		result.Fallback = outcome.Fallback
 		result.MovedToSummary = len(outcome.MovedToSummary)
 		result.SkippedDuplicates = len(outcome.SkippedDuplicates)
+		result.ReviewID = outcome.ReviewID
+		result.Findings = outcome.Findings
 		mu.Unlock()
+
+		if outcome.FindingsError != "" {
+			e.logger.Warn("reading the submitted review's comments failed, finding outcomes will be incomplete",
+				"error", outcome.FindingsError)
+		}
 
 		if observer != nil {
 			observer.Observe(ctx, Event{Type: "review_submitted", At: time.Now(), Payload: map[string]any{
@@ -322,6 +335,11 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 				"skipped_duplicates": len(outcome.SkippedDuplicates),
 			}})
 		}
+	}
+	githubTools.OnThreadResolved = func(commentID int64) {
+		mu.Lock()
+		result.ResolvedFindings = append(result.ResolvedFindings, commentID)
+		mu.Unlock()
 	}
 
 	specs := githubTools.Specs()

@@ -248,6 +248,8 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, err))
+		p.recordFindings(finishCtx, logger, recorded.sessionID, job.InstallationID,
+			job.OrgName, job.RepoName, job.PRNumber, result)
 		finishCancel()
 	}
 	if err != nil {
@@ -354,6 +356,8 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, reviewErr))
+		p.recordFindings(finishCtx, logger, recorded.sessionID, parent.InstallationID,
+			parent.OrgName, parent.RepoName, parent.PRNumber, result)
 		finishCancel()
 	}
 	if reviewErr != nil {
@@ -389,6 +393,41 @@ func newReviewSession(job *store.Job, model string) store.NewReviewSession {
 		RepoName:       job.RepoName,
 		PRNumber:       job.PRNumber,
 		Model:          model,
+	}
+}
+
+// recordFindings stores the inline comments a submitted review posted, which is
+// what later feedback is attached to. It is best effort: a row that cannot be
+// written leaves the review unchanged and only the report incomplete.
+func (p *Pool) recordFindings(ctx context.Context, logger *slog.Logger, sessionID string, installationID int64,
+	orgName, repoName string, number int, result *reviewer.Result) {
+	if sessionID == "" || result == nil {
+		return
+	}
+	if len(result.Findings) > 0 {
+		findings := make([]store.Finding, 0, len(result.Findings))
+		for _, finding := range result.Findings {
+			findings = append(findings, store.Finding{
+				SessionID:      sessionID,
+				InstallationID: installationID,
+				OrgName:        orgName,
+				RepoName:       repoName,
+				PRNumber:       number,
+				ReviewID:       result.ReviewID,
+				CommentID:      finding.CommentID,
+				Path:           finding.Path,
+				Line:           finding.Line,
+				Body:           finding.Body,
+			})
+		}
+		if err := p.jobs.RecordFindings(ctx, findings); err != nil {
+			logger.Warn("recording the review's findings failed, outcome tracking will be incomplete", "error", err)
+		}
+	}
+	if len(result.ResolvedFindings) > 0 {
+		if err := p.jobs.MarkFindingsResolved(ctx, result.ResolvedFindings); err != nil {
+			logger.Warn("recording the resolved findings failed, outcome tracking will be incomplete", "error", err)
+		}
 	}
 }
 
