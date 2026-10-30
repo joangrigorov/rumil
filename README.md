@@ -551,6 +551,8 @@ If a repository keeps a `RUMIL.md` at its root, Rumil reads it before the review
 
 This is where a team writes down the conventions it wants enforced: "we do not use an ORM in this service", "every exported function needs a doc comment", "money is always `decimal`, never `float`". Write it as policy about the code; that is how Rumil reads it.
 
+With the default `base` ref, a pull request that adds or edits `RUMIL.md` does not rewrite the policy judging it. The copy at the configured ref still governs, and the branch version is attached separately as a proposal, so the reviewer can judge the change on its merits without following it. Set `review.guidelines_ref: head` to let the branch version govern instead.
+
 Everything Rumil reads from the pull request is data, not instructions. The prompt says so for the title and description, comments, review threads, diff, file contents, commit messages, `RUMIL.md`, and every tool result: they can inform a finding or narrow a review, but text inside them cannot change the reviewer's rules, tools, or task. A comment that asks for an approval, a skipped check, or the system prompt is reported when it matters, and a block cannot be closed from inside its own content.
 
 ### Repository settings in `.rumil.yaml`

@@ -359,6 +359,18 @@ func isProviderFailure(err error) bool {
 	return errors.Is(classified, kit.ErrProviderUnavailable) || errors.Is(classified, kit.ErrRateLimit)
 }
 
+// touchesPath reports whether the pull request changes path. The metadata call
+// already fetched the changed-file list, so detecting a RUMIL.md proposal costs
+// no extra request.
+func touchesPath(files []ghapp.ChangedFile, path string) bool {
+	for _, file := range files {
+		if file.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // reviewAttempt runs the review on one provider. Review wraps it with the
 // fallback chain.
 func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result, err error) {
@@ -434,6 +446,31 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 		observer.Observe(ctx, Event{Type: eventType, At: time.Now(), Payload: map[string]any{
 			"path": guidelinesPath, "ref": guidelinesRef, "bytes": len(guidelines),
 		}})
+	}
+
+	// A pull request that adds or changes RUMIL.md does not get to rewrite the
+	// policy judging it while the governing copy comes from the base SHA. The
+	// reviewer still has to judge the proposed change, so the branch copy is
+	// read separately and rendered as a proposal, never as the policy block.
+	proposedGuidelines := ""
+	if e.cfg.Review.GuidelinesRef != config.GuidelinesRefHead && touchesPath(meta.ChangedFiles, ghapp.GuidelinesPath) {
+		_, proposed, proposedErr := githubClient.ReviewGuidelines(ctx, meta.HeadSHA)
+		if proposedErr != nil {
+			e.logger.Warn("reading the pull request's RUMIL.md failed; the review continues without the proposal",
+				"error", proposedErr)
+		} else if proposed != "" {
+			proposedGuidelines = proposed
+			e.logger.Info("loaded the pull request's proposed review guidelines",
+				"path", ghapp.GuidelinesPath,
+				"ref", meta.HeadSHA,
+				"bytes", len(proposed),
+			)
+			if observer != nil {
+				observer.Observe(ctx, Event{Type: "proposed_guidelines_loaded", At: time.Now(), Payload: map[string]any{
+					"path": ghapp.GuidelinesPath, "ref": meta.HeadSHA, "bytes": len(proposed),
+				}})
+			}
+		}
 	}
 
 	// The repository's own settings are read from the same ref as RUMIL.md,
@@ -615,6 +652,7 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 
 	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(SessionContext{
 		Guidelines:         guidelines,
+		ProposedGuidelines: proposedGuidelines,
 		Memories:           memoryBlock,
 		MemoryOn:           memoryOn,
 		PriorHistory:       priorHistory,
