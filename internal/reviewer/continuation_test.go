@@ -83,12 +83,12 @@ func TestSystemPromptCarriesThePreviousAttempt(t *testing.T) {
 	}
 
 	numbers := ruleNumbers(t, prompt)
-	if len(numbers) != 9 {
-		t.Fatalf("the prompt lists %d rules, want nine with the continuation rule", len(numbers))
+	if len(numbers) != 10 {
+		t.Fatalf("the prompt lists %d rules, want ten with the continuation rule", len(numbers))
 	}
 	for i, number := range numbers {
 		if number != i+1 {
-			t.Errorf("rule numbers are %v, want 1..9 with no gap", numbers)
+			t.Errorf("rule numbers are %v, want 1..10 with no gap", numbers)
 			break
 		}
 	}

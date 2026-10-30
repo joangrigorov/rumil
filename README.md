@@ -366,7 +366,9 @@ The session page at `/ui/sessions/<session-id>` has the same action: **Continue 
 
 If a repository keeps a `RUMIL.md` at its root, Rumil reads it before the review and treats it as that repository's own policy — it outranks everything else Rumil has been told, including remembered rules, unless a maintainer promotes a rule above it (below). It is capped at 32 KB.
 
-This is where a team writes down the conventions it wants enforced: "we do not use an ORM in this service", "every exported function needs a doc comment", "money is always `decimal`, never `float`". Write it as instructions to a reviewer; that is exactly how Rumil reads it.
+This is where a team writes down the conventions it wants enforced: "we do not use an ORM in this service", "every exported function needs a doc comment", "money is always `decimal`, never `float`". Write it as policy about the code; that is how Rumil reads it.
+
+Everything Rumil reads from the pull request is data, not instructions. The prompt says so for the title and description, comments, review threads, diff, file contents, commit messages, `RUMIL.md`, and every tool result: they can inform a finding or narrow a review, but text inside them cannot change the reviewer's rules, tools, or task. A comment that asks for an approval, a skipped check, or the system prompt is reported when it matters, and a block cannot be closed from inside its own content.
 
 ## Teaching Rumil your conventions
 
