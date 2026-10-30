@@ -515,7 +515,7 @@ func TestT010_05_ShutdownStopsAcceptingAndRequeues(t *testing.T) {
 
 	// Claim the job and leave it RUNNING, which is what a SIGKILL mid-review
 	// looks like to the next process.
-	job, err := h.db.ClaimJob(context.Background())
+	job, err := h.db.ClaimJob(context.Background(), "test-worker")
 	if err != nil || job == nil {
 		t.Fatalf("ClaimJob returned (%v, %v), want a job", job, err)
 	}

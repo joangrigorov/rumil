@@ -1,0 +1,39 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow">rumil / queue</p>
+    <h1>Queue</h1>
+    <p class="lede">Deliveries waiting for a worker and reviews running now. The page refreshes while there is work; cancelling a review stops it before its next model request.</p>
+  </div>
+  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}job{{else}}jobs{{end}}{{if .Running}} · <strong>{{.Running}}</strong> running{{end}}{{if .Queued}} · <strong>{{.Queued}}</strong> queued{{end}}</p>
+</header>
+
+{{if .Entries}}
+<ol class="sessions">
+  {{range .Entries}}
+  <li>
+    <div class="session-row">
+      <div class="session-row-top">
+        <span class="pill status-{{lower .Status}}">{{if .CancelRequested}}cancelling…{{else}}{{.Status}}{{end}}</span>
+        <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+        <span class="session-when">{{age .CreatedAt}} ago</span>
+      </div>
+      <div class="session-meta">
+        <span>{{.EventType}}</span>
+        <span>delivery <code>{{short .DeliveryID}}</code></span>
+        {{if .WorkerID}}<span>worker <code>{{.WorkerID}}</code></span>{{end}}
+        {{if .SessionID}}<span><a href="/ui/sessions/{{.SessionID}}">open session</a></span>{{end}}
+        <span><a href="/ui/queue/{{.ID}}/cancel">Cancel…</a></span>
+      </div>
+    </div>
+  </li>
+  {{end}}
+</ol>
+{{else}}
+<div class="empty">
+  <p class="empty-title">Nothing is waiting.</p>
+  <p>A delivery appears here between the webhook and a worker. A review that is running stays until it finishes or is cancelled.</p>
+  <a class="btn btn-quiet" href="/ui/sessions">Review sessions</a>
+</div>
+{{end}}
+{{end}}

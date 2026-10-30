@@ -92,3 +92,17 @@ func TestSessionOutcomeFailsAnUnsubmittedReview(t *testing.T) {
 		t.Errorf("tool calls = %d, want %d", outcome.ToolCalls, result.ToolCalls)
 	}
 }
+
+// A cancelled session is CANCELLED, not FAILED; a review that already reached
+// GitHub stays a success whatever arrived after it.
+func TestSessionOutcomeRecordsCancellation(t *testing.T) {
+	outcome := sessionOutcome(&reviewer.Result{}, reviewer.ErrReviewCancelled)
+	if outcome.Status != store.ReviewCancelled {
+		t.Errorf("status = %q, want %q", outcome.Status, store.ReviewCancelled)
+	}
+
+	submitted := sessionOutcome(&reviewer.Result{ReviewSubmitted: true, Event: "COMMENT"}, reviewer.ErrReviewCancelled)
+	if submitted.Status != store.ReviewSucceeded {
+		t.Errorf("status = %q, want the posted review to stand", submitted.Status)
+	}
+}

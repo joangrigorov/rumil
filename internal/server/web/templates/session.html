@@ -34,6 +34,13 @@
 </form>
 {{end}}
 
+{{if .CancelJobID}}
+<form class="continue-form" method="get" action="/ui/queue/{{.CancelJobID}}/cancel">
+  <button class="btn btn-quiet" type="submit">Cancel review…</button>
+  <span class="continue-hint">Stops the worker before its next model request. A review already posted is kept.</span>
+</form>
+{{end}}
+
 {{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
 
 <section class="console-window" aria-label="Session transcript">

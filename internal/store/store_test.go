@@ -136,7 +136,7 @@ func TestEnqueueAndClaim(t *testing.T) {
 		t.Errorf("queued jobs = %d, want 1", status)
 	}
 
-	job, err := db.ClaimJob(ctx)
+	job, err := db.ClaimJob(ctx, "test-worker")
 	if err != nil {
 		t.Fatalf("ClaimJob returned error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestEnqueueAndClaim(t *testing.T) {
 		t.Errorf("claimed job lost its coordinates: %+v", job)
 	}
 
-	again, err := db.ClaimJob(ctx)
+	again, err := db.ClaimJob(ctx, "test-worker")
 	if err != nil {
 		t.Fatalf("second ClaimJob returned error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestFailJobRecordsTheError(t *testing.T) {
 	if err := db.Enqueue(ctx, sampleJob("delivery-1")); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	job, err := db.ClaimJob(ctx)
+	job, err := db.ClaimJob(ctx, "test-worker")
 	if err != nil || job == nil {
 		t.Fatalf("ClaimJob returned (%v, %v), want a job", job, err)
 	}
@@ -228,7 +228,7 @@ func TestResetRunningJobs(t *testing.T) {
 	if err := db.Enqueue(ctx, sampleJob("delivery-1")); err != nil {
 		t.Fatalf("Enqueue returned error: %v", err)
 	}
-	if _, err := db.ClaimJob(ctx); err != nil {
+	if _, err := db.ClaimJob(ctx, "test-worker"); err != nil {
 		t.Fatalf("ClaimJob returned error: %v", err)
 	}
 

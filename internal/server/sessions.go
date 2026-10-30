@@ -50,6 +50,9 @@ func (s *SessionsUI) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/sessions", s.auth.authorize(s.list))
 	mux.HandleFunc("GET /ui/sessions/{id}", s.auth.authorize(s.detail))
 	mux.HandleFunc("POST /ui/sessions/{id}/continue", s.auth.authorize(s.auth.sameSite(s.continueSession)))
+	mux.HandleFunc("GET /ui/queue", s.auth.authorize(s.queue))
+	mux.HandleFunc("GET /ui/queue/{id}/cancel", s.auth.authorize(s.cancelConfirm))
+	mux.HandleFunc("POST /ui/queue/{id}/cancel", s.auth.authorize(s.auth.sameSite(s.cancelJob)))
 	mux.HandleFunc("GET /api/sessions/{id}/events", s.auth.authorize(s.events))
 	mux.HandleFunc("GET /api/sessions/{id}/events.json", s.auth.authorize(s.eventsJSON))
 }
@@ -90,6 +93,9 @@ type reviewSessionPage struct {
 	// that has not produced a session yet.
 	ContinuationQueued bool
 	ContinuationFailed bool
+	// CancelJobID is the job a running session belongs to, which is what the
+	// cancel action stops.
+	CancelJobID string
 }
 
 func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +171,9 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		Fixed:   true,
 		Session: session,
 		Live:    session.Status == store.ReviewRunning,
+	}
+	if session.Status == store.ReviewRunning && session.JobID != "" {
+		page.CancelJobID = session.JobID
 	}
 
 	if session.ParentSessionID != "" {

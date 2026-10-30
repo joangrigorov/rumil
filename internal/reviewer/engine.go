@@ -69,6 +69,10 @@ type Request struct {
 	// turn limit. It carries what the earlier attempt learned and this
 	// attempt's own step budget.
 	Continuation *Continuation
+	// Cancelled reports that an operator asked the session to stop. The engine
+	// checks it between steps and before a tool call; nil means nothing will
+	// cancel this session.
+	Cancelled func() bool
 }
 
 // Result reports what the review produced.
@@ -149,6 +153,11 @@ var ErrHandleMismatch = errors.New("app.bot_handle is not this App's slug")
 // A review that produced no review is a failure, not a successful run with a
 // warning: nothing was said about the pull request.
 var ErrNoReviewSubmitted = errors.New("review session ended without submitting a review")
+
+// ErrReviewCancelled reports that an operator stopped a session. A review that
+// already reached GitHub is not cancelled: once it is posted, there is nothing
+// left to stop.
+var ErrReviewCancelled = errors.New("the review session was cancelled")
 
 // ErrHeadMoved reports that a continuation's pull request is no longer at the
 // commit the earlier attempt reviewed. Continuing would judge code whose diff
@@ -452,6 +461,36 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		result.Usage = &usage
 		mu.Unlock()
 	}()
+
+	// A cancellation stops the session between steps and keeps its tools from
+	// running in the meantime. A review that already reached GitHub is not
+	// cancelled: the operator asked to stop work that is still going, and
+	// taking back a posted review is not this path.
+	cancelled := func() bool {
+		if req.Cancelled == nil || !req.Cancelled() {
+			return false
+		}
+		mu.Lock()
+		submitted := result.ReviewSubmitted
+		mu.Unlock()
+		return !submitted
+	}
+	if req.Cancelled != nil {
+		stopCancelStep := session.OnPrepareStep(kit.HookPriorityNormal, func(kit.PrepareStepHook) *kit.PrepareStepResult {
+			if !cancelled() {
+				return nil
+			}
+			return &kit.PrepareStepResult{Error: ErrReviewCancelled}
+		})
+		defer stopCancelStep()
+		stopCancelTool := session.OnBeforeToolCall(kit.HookPriorityHigh, func(kit.BeforeToolCallHook) *kit.BeforeToolCallResult {
+			if !cancelled() {
+				return nil
+			}
+			return &kit.BeforeToolCallResult{Block: true, Reason: "the review was cancelled"}
+		})
+		defer stopCancelTool()
+	}
 
 	stopCompaction := e.watchContext(ctx, session)
 	defer stopCompaction()
