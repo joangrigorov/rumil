@@ -125,7 +125,7 @@ func truncateJobs(t *testing.T, dsn string) {
 	}
 	defer pool.Close()
 
-	if _, err := pool.Exec(ctx, `TRUNCATE review_events, review_sessions, webhook_jobs, memories`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE review_findings, review_events, review_sessions, webhook_jobs, memories`); err != nil {
 		t.Fatalf("truncating the test tables: %v", err)
 	}
 }

@@ -304,6 +304,9 @@ func (t *GithubTools) resolveThread(ctx context.Context, args map[string]any) (s
 		return "", fmt.Errorf("resolve_review_thread failed: %w", err)
 	}
 	closed := t.countResolution()
+	if t.OnThreadResolved != nil {
+		t.OnThreadResolved(root.ID)
+	}
 
 	t.logger.Info("resolved a review thread",
 		"thread_id", threadID, "path", thread.Path, "line", thread.Line, "closed_this_review", closed,

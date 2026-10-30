@@ -220,6 +220,8 @@ func TestListConversationFiltersByPathAndResolution(t *testing.T) {
 func TestT020_08_ResolveReviewThreadClosesRumilsOwnThread(t *testing.T) {
 	gh := historyFixture(t)
 	tools := newGithubTools(t, gh, "@rumil")
+	var resolvedComment int64
+	tools.OnThreadResolved = func(commentID int64) { resolvedComment = commentID }
 
 	out := decode[map[string]any](t, mustCall(t, tools.Specs(), "resolve_review_thread", map[string]any{
 		"thread_id": "PRRT_open",
@@ -240,6 +242,9 @@ func TestT020_08_ResolveReviewThreadClosesRumilsOwnThread(t *testing.T) {
 	}
 	if posted[0].InReplyTo != 1 || !strings.Contains(posted[0].Body, "retry loop now bounds") {
 		t.Errorf("the reason landed as %+v, want a reply on the thread's root", posted[0])
+	}
+	if resolvedComment != 1 {
+		t.Errorf("OnThreadResolved got %d, want the root comment id 1", resolvedComment)
 	}
 	if cap, _ := out["cap"].(float64); cap != 20 {
 		t.Errorf("the result reports cap %v, want 20", out["cap"])

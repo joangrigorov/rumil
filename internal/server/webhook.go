@@ -30,6 +30,12 @@ const (
 	// the diff hunk the comment hangs on, which the issue comment payload does
 	// not have.
 	eventReviewComment = "pull_request_review_comment"
+	// eventReaction is a reaction on a review comment, which is the cheapest
+	// signal that a finding landed.
+	eventReaction = "reaction"
+	// eventPullRequestReview carries a dismissed review, which says its
+	// findings were not accepted.
+	eventPullRequestReview = "pull_request_review"
 )
 
 // The two commands the conversation supports.
@@ -160,6 +166,11 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Feedback on an earlier finding is recorded before the delivery is
+	// classified: a reply that is not a command, a reaction and a dismissal are
+	// all dropped as jobs, and their outcome is the whole point of reading them.
+	w.recordFindingFeedback(r.Context(), eventType, delivery)
+
 	job, ignore := w.classify(eventType, delivery)
 	if ignore != "" {
 		w.logger.Info("ignored a delivery", "delivery_id", deliveryID, "event_type", eventType, "reason", ignore)
@@ -184,6 +195,42 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 	default:
 		w.logger.Error("queueing a delivery failed", "delivery_id", deliveryID, "error", err)
 		writeJSON(writer, http.StatusInternalServerError, map[string]string{"status": "enqueue failed"})
+	}
+}
+
+// recordFindingFeedback attaches what later deliveries say about a finding. It
+// is best effort: a delivery that cannot be recorded is still answered, because
+// GitHub retries a non-2xx and the finding is not more important than the
+// webhook staying healthy.
+func (w *Webhook) recordFindingFeedback(ctx context.Context, eventType string, d payload) {
+	if w.installationID > 0 && d.Installation.ID != w.installationID {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var err error
+	switch eventType {
+	case eventReviewComment:
+		if d.Action == "created" && d.Comment != nil {
+			err = w.jobs.MarkFindingReplied(ctx, d.Comment.InReplyToID)
+		}
+	case eventReaction:
+		if d.Comment != nil && d.Reaction != nil {
+			err = w.jobs.MarkFindingReaction(ctx, d.Comment.ID, d.Reaction.Content)
+		}
+	case eventPullRequestReview:
+		if d.Action == "dismissed" && d.Review != nil {
+			err = w.jobs.MarkReviewFindingsDismissed(ctx, d.Review.ID)
+		}
+	case eventPullRequest:
+		if d.Action == "synchronize" && d.PullRequest != nil {
+			err = w.jobs.MarkPRFindingsHeadMoved(ctx, d.Repository.Owner.Login, d.Repository.Name, d.PullRequest.Number)
+		}
+	}
+	if err != nil {
+		w.logger.Warn("recording finding feedback failed",
+			"event_type", eventType, "action", d.Action, "error", err)
 	}
 }
 
@@ -342,6 +389,16 @@ type payload struct {
 	RequestedReviewer *requestedReviewer `json:"requested_reviewer"`
 	Issue             *issue             `json:"issue"`
 	Comment           *comment           `json:"comment"`
+	Reaction          *reaction          `json:"reaction"`
+	Review            *review            `json:"review"`
+}
+
+type reaction struct {
+	Content string `json:"content"`
+}
+
+type review struct {
+	ID int64 `json:"id"`
 }
 
 // comment is the comment a command arrives on, which is a review-thread reply
