@@ -271,8 +271,8 @@ func snapshotCheck(ctx context.Context, cfg *config.Config, baseURL, repo string
 }
 
 // serverCheck reports the credentials `rumil serve` needs. A missing webhook
-// secret stops the server from starting; a missing admin token only leaves the
-// moderation surface closed.
+// secret stops the server from starting; no admin credential only leaves the
+// operator surfaces closed.
 func serverCheck(cfg *config.Config, red *redactor) Check {
 	const name = "server"
 	if cfg.Database.DSN == "" {
@@ -281,10 +281,10 @@ func serverCheck(cfg *config.Config, red *redactor) Check {
 	if cfg.GitHub.WebhookSecret == "" {
 		return fail(name, "github.webhook_secret is required to run `rumil serve`")
 	}
-	if cfg.Moderation.AdminToken == "" {
-		return warn(name, "the webhook secret is set, but moderation.admin_token is not: /ui/moderation and the moderation API refuse every request")
+	if len(cfg.Moderation.AdminCredentials()) == 0 {
+		return warn(name, "the webhook secret is set, but no admin credential is: /ui/moderation, the deck and /metrics refuse every request. Set moderation.admin_token or add a moderation.admin_tokens entry")
 	}
-	return pass(name, "webhook secret and admin token are set")
+	return pass(name, "webhook secret and admin credential are set")
 }
 
 // chatUsage is what a provider says the completion cost.

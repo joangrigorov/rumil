@@ -27,6 +27,56 @@ func chatConfig(baseURL, apiKey string) *config.Config {
 	}
 }
 
+// The server check accepts either form of admin credential: the legacy single
+// token and the named list are the same authorization, and a deployment that
+// rotated to named credentials is not warned about a missing token.
+func TestServerCheckAcceptsNamedAdminCredentials(t *testing.T) {
+	base := func() *config.Config {
+		return &config.Config{
+			Database: config.Database{DSN: "postgres://rumil@localhost/rumil"},
+			GitHub:   config.GitHub{WebhookSecret: "webhook-secret-value"},
+		}
+	}
+
+	t.Run("the legacy token passes", func(t *testing.T) {
+		cfg := base()
+		cfg.Moderation.AdminToken = "legacy-token"
+		check := serverCheck(cfg, newRedactor(cfg))
+		if check.Status != Pass {
+			t.Fatalf("status = %s (%s), want pass", check.Status, check.Detail)
+		}
+	})
+
+	t.Run("a named credential passes", func(t *testing.T) {
+		cfg := base()
+		cfg.Moderation.AdminTokens = []config.AdminCredential{{Name: "ana", Token: "named-token"}}
+		check := serverCheck(cfg, newRedactor(cfg))
+		if check.Status != Pass {
+			t.Fatalf("status = %s (%s), want pass", check.Status, check.Detail)
+		}
+	})
+
+	t.Run("no credential warns", func(t *testing.T) {
+		cfg := base()
+		check := serverCheck(cfg, newRedactor(cfg))
+		if check.Status != Warn {
+			t.Fatalf("status = %s (%s), want warn", check.Status, check.Detail)
+		}
+		if !strings.Contains(check.Detail, "admin credential") {
+			t.Errorf("detail = %q, want it to name the missing credential", check.Detail)
+		}
+	})
+
+	t.Run("a missing webhook secret fails", func(t *testing.T) {
+		cfg := base()
+		cfg.GitHub.WebhookSecret = ""
+		check := serverCheck(cfg, newRedactor(cfg))
+		if check.Status != Fail {
+			t.Fatalf("status = %s (%s), want fail", check.Status, check.Detail)
+		}
+	})
+}
+
 // A configured secret must never reach the report, whatever text an error
 // carried it in. The secrets come from the configuration, because a provider
 // key has no shape doctor could recognize.
