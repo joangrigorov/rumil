@@ -701,6 +701,55 @@ func TestOutputLimitTwiceNamesTheCause(t *testing.T) {
 	}
 }
 
+// A provider that stalls can hand a turn back with text and no tool call. One
+// more prompt turns that dead end into the review instead of failing with
+// everything the session had learned.
+func TestATurnWithoutTheReviewIsAskedToContinue(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueText("The diff API rejects this pull request's size, so I'll compare base and head contents directly.")
+	llm.QueueToolCall("submit_pr_review", map[string]any{"event": "COMMENT", "summary_body": "The migration chain is consistent."})
+	llm.QueueText("Review submitted.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v", err)
+	}
+	if !res.ReviewSubmitted {
+		t.Fatal("ReviewSubmitted = false, want the nudge to reach submit_pr_review")
+	}
+	requests := llm.Requests()
+	if len(requests) != 3 {
+		t.Fatalf("model requests = %d, want the turn, the nudge and the closing text", len(requests))
+	}
+	if !strings.Contains(requests[1].UserPrompt, "ended without calling submit_pr_review") {
+		t.Errorf("the nudge is missing from the second request:\n%s", requests[1].UserPrompt)
+	}
+	if !strings.Contains(h.logs.String(), "ended its turn without submitting a review") {
+		t.Errorf("logs do not record the empty turn:\n%s", h.logs.String())
+	}
+}
+
+// The nudge is spent once: a second turn that ends the same way is the
+// session's failure, not a loop.
+func TestASecondTurnWithoutTheReviewStillFails(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueText("I'll compare base and head contents directly.")
+	llm.QueueText("I'll compare base and head contents directly.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	if _, err := h.review(t); !errors.Is(err, ErrNoReviewSubmitted) {
+		t.Fatalf("Review error = %v, want ErrNoReviewSubmitted", err)
+	}
+	if got := llm.Count(); got != 2 {
+		t.Errorf("model requests = %d, want the turn and one nudge", got)
+	}
+}
+
 // max_agent_turns: 0 removes the cap, so a session that needs more steps than
 // the old default keeps going.
 func TestUnlimitedAgentTurnsRunsPastTheDefaultCap(t *testing.T) {
