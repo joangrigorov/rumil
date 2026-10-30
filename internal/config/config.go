@@ -319,6 +319,11 @@ type Models struct {
 	DefaultChat      string     `yaml:"default_chat"`
 	DefaultEmbedding string     `yaml:"default_embedding"`
 	Providers        []Provider `yaml:"providers"`
+	// Fallback is the ordered list of chat providers a review tries after the
+	// selected provider fails on transport errors, 5xx, repeated 429 or a
+	// response-header timeout. It is chat only: an embedding failure degrades
+	// memory without failing the review.
+	Fallback []string `yaml:"fallback"`
 }
 
 // Provider is one OpenAI-compatible endpoint. A provider with dimensions set
@@ -869,11 +874,29 @@ func (m Models) validate() error {
 		return err
 	}
 
+	if len(m.Fallback) > maxFallbackProviders {
+		return fmt.Errorf("models.fallback holds %d providers, at most %d are allowed", len(m.Fallback), maxFallbackProviders)
+	}
+	seenFallback := make(map[string]struct{}, len(m.Fallback))
+	for i, id := range m.Fallback {
+		if _, err := m.ChatProviderByID(id); err != nil {
+			return fmt.Errorf("models.fallback[%d]: %w", i, err)
+		}
+		if _, dup := seenFallback[id]; dup {
+			return fmt.Errorf("models.fallback[%d] %q is duplicated", i, id)
+		}
+		seenFallback[id] = struct{}{}
+	}
+
 	if _, err := m.EmbeddingProvider(); err != nil {
 		return err
 	}
 	return nil
 }
+
+// maxFallbackProviders bounds the ordered fallback list. Every entry is one
+// more attempt a single review may spend, so the list is a budget.
+const maxFallbackProviders = 5
 
 // EmbeddingProvider resolves the provider named by models.default_embedding. It
 // returns nil, nil when that selector is unset, because memory is opt-in: an

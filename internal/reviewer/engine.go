@@ -74,6 +74,10 @@ type Request struct {
 	// checks it between steps and before a tool call; nil means nothing will
 	// cancel this session.
 	Cancelled func() bool
+	// ProviderID, when set, names the chat provider this attempt runs on. It is
+	// how a fallback attempt selects the next provider instead of the one the
+	// operator or the repository chose.
+	ProviderID string
 }
 
 // Result reports what the review produced.
@@ -110,6 +114,15 @@ type Result struct {
 	// Usage is the tokens the session used, nil when the provider reported no
 	// usage.
 	Usage *Usage
+	// ProviderID is the chat provider this attempt ran on.
+	ProviderID string
+
+	// headSHA is the commit this attempt reviewed, which a fallback carries so
+	// the next attempt judges the same code.
+	headSHA string
+	// transcript is the compact tool history a fallback carries into its
+	// continuation block.
+	transcript []store.ReviewEvent
 }
 
 // Engine reviews one pull request at a time.
@@ -211,9 +224,82 @@ func (e *Engine) ModelName() string {
 	return provider.ModelName
 }
 
-// Review runs the review. The installation is verified before the session is
-// created, so a missing GitHub App installation fails fast and cheap.
-func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err error) {
+// Review runs the review, falling back to the next configured provider when
+// the selected one fails before a review is submitted. The attempts share the
+// same pull request, the same commit and the tool transcript the earlier
+// attempt gathered, so a fallback finishes the review instead of starting it
+// again. A review that already reached GitHub is never followed by another
+// attempt.
+func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
+	used := map[string]bool{}
+	for {
+		result, err := e.reviewAttempt(ctx, req)
+		if err == nil || result == nil {
+			return result, err
+		}
+		used[result.ProviderID] = true
+		if result.ReviewSubmitted || !isProviderFailure(err) {
+			return result, err
+		}
+		nextID, nextModel := e.nextFallbackProvider(used)
+		if nextID == "" {
+			return result, err
+		}
+
+		e.logger.Warn("falling back to the next chat provider",
+			"from", result.ProviderID,
+			"to", nextID,
+			"error", err,
+		)
+		if req.Observer != nil {
+			req.Observer.Observe(ctx, Event{Type: "provider_fallback", At: time.Now(), Payload: map[string]any{
+				"from":  result.ProviderID,
+				"to":    nextID,
+				"model": nextModel,
+				"error": err.Error(),
+			}})
+		}
+
+		req.ProviderID = nextID
+		req.Continuation = &Continuation{
+			ParentSessionID: req.SessionID,
+			HeadSHA:         result.headSHA,
+			Summary:         result.Summary,
+			Events:          result.transcript,
+			Reason:          ContinuationProvider,
+		}
+	}
+}
+
+// nextFallbackProvider returns the first configured fallback this review has
+// not run on, in order.
+func (e *Engine) nextFallbackProvider(used map[string]bool) (id, model string) {
+	for _, candidate := range e.cfg.Models.Fallback {
+		if used[candidate] {
+			continue
+		}
+		provider, err := e.cfg.Models.ChatProviderByID(candidate)
+		if err != nil {
+			// Configuration validation refuses this at load time; a provider
+			// removed since is skipped rather than stopping the review.
+			continue
+		}
+		return candidate, provider.ModelName
+	}
+	return "", ""
+}
+
+// isProviderFailure reports whether an attempt failed in a way another provider
+// may survive. Auth and invalid-request failures are not: every provider would
+// answer the same request the same way.
+func isProviderFailure(err error) bool {
+	classified := kit.ClassifyProviderError(err)
+	return errors.Is(classified, kit.ErrProviderUnavailable) || errors.Is(classified, kit.ErrRateLimit)
+}
+
+// reviewAttempt runs the review on one provider. Review wraps it with the
+// fallback chain.
+func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result, err error) {
 	observer := req.Observer
 	if err := e.auth.Verify(ctx); err != nil {
 		return nil, err
@@ -299,8 +385,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 
 	// The provider is selected after the repository's settings are known: a
 	// repository may name a cheaper model, and only the operator's configured
-	// providers are candidates.
-	provider, err := e.cfg.Models.ChatProviderByID(effective.ChatProviderID)
+	// providers are candidates. A fallback attempt names its provider
+	// explicitly, which is how the chain advances.
+	providerID := effective.ChatProviderID
+	if req.ProviderID != "" {
+		providerID = req.ProviderID
+	}
+	provider, err := e.cfg.Models.ChatProviderByID(providerID)
 	if err != nil {
 		return nil, fmt.Errorf("selecting the chat provider: %w", err)
 	}
@@ -324,6 +415,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		mu     sync.Mutex
 		result Result
 	)
+	result.ProviderID = provider.ID
+	result.headSHA = meta.HeadSHA
+	// The transcript is what a fallback attempt inherits. It is captured even
+	// when no fallback is configured, because the provider may fail on the
+	// first attempt and the list is small.
+	capture := newTranscriptCapture()
+	defer func() { result.transcript = capture.events() }()
 
 	// The history is read once, before the session can submit anything: the
 	// block in the prompt and the baseline the session measures its own
@@ -542,6 +640,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	unsubscribe := session.Subscribe(func(event kit.Event) {
 		issues.note(event)
 		tracker.noteEvent(event)
+		capture.note(event)
 		if observer != nil {
 			e.observeKitEvent(ctx, observer, event)
 		}

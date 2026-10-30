@@ -99,6 +99,12 @@ type harnessOpts struct {
 	reviewLimits string
 	// chatPrices appends price lines to the first chat provider.
 	chatPrices string
+	// fallback sets models.fallback, the ordered provider list a review tries
+	// after the selected provider fails.
+	fallback []string
+	// chatBURL overrides the base URL of the second chat provider, so a test
+	// can serve the fallback from a second fake endpoint.
+	chatBURL string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -116,6 +122,13 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	defaultChat := ""
 	if opts.defaultChat != "" {
 		defaultChat = fmt.Sprintf("  default_chat: %q\n", opts.defaultChat)
+	}
+	if len(opts.fallback) > 0 {
+		quoted := make([]string, 0, len(opts.fallback))
+		for _, id := range opts.fallback {
+			quoted = append(quoted, fmt.Sprintf("%q", id))
+		}
+		defaultChat += "  fallback: [" + strings.Join(quoted, ", ") + "]\n"
 	}
 
 	reviewFields := ""
@@ -155,8 +168,12 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 	chatSettings += opts.chatPrices
 
+	chatBURL := llm.URL()
+	if opts.chatBURL != "" {
+		chatBURL = opts.chatBURL
+	}
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
-		llm.URL()+"/v1", llm.URL()+"/v1", chatSettings, llm.URL()+"/v1")
+		llm.URL()+"/v1", llm.URL()+"/v1", chatSettings, chatBURL+"/v1")
 
 	cfg, err := config.Parse([]byte(doc), "engine_test.yaml")
 	if err != nil {
