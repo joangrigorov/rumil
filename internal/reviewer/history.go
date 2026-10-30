@@ -68,7 +68,8 @@ func renderHistory(reviews []ghapp.Review, threads []ghapp.ReviewThread, botLogi
 		if ghapp.SameLogin(author, botLogin) {
 			author += " (you)"
 		}
-		fmt.Fprintf(&b, "- %s (%s, commit %s): %s\n", author, review.State, shortCommit(review.CommitID), firstLine(review.Body, historyLineCap))
+		fmt.Fprintf(&b, "- %s (%s, commit %s): %s\n", author, review.State, shortCommit(review.CommitID),
+			neuterTag(firstLine(review.Body, historyLineCap), "prior_reviews"))
 		lines++
 	}
 
@@ -87,7 +88,8 @@ func renderHistory(reviews []ghapp.Review, threads []ghapp.ReviewThread, botLogi
 		if ok {
 			body = firstLine(root.Body, historyLineCap)
 		}
-		fmt.Fprintf(&b, "- %s on %s:%d: %s\n", thread.ID, thread.Path, thread.Line, body)
+		fmt.Fprintf(&b, "- %s on %s:%d: %s\n", thread.ID, neuterTag(thread.Path, "prior_reviews"), thread.Line,
+			neuterTag(body, "prior_reviews"))
 		open++
 	}
 	if resolved > 0 {
