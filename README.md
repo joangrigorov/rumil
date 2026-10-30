@@ -30,6 +30,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Run the webhook server](#run-the-webhook-server)
 - [Custom MCP servers](#custom-mcp-servers)
 - [Token usage and cost](#token-usage-and-cost)
+- [The queue and cancelling a review](#the-queue-and-cancelling-a-review)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Measuring review quality](#measuring-review-quality)
@@ -445,6 +446,14 @@ review:
 ```
 
 Rumil checks the budget between steps, after a step's usage is reported and before the next model request. A session over its budget stops with an error naming the limit, is recorded FAILED, and does not post a review it had not already submitted. Spending exactly the limit is allowed; the next token is over it.
+
+## The queue and cancelling a review
+
+`/ui/queue` shows the deliveries that have not finished: what is waiting for a worker and what is running now, with the delivery ID, repository, pull request, event type, age, the worker that claimed a running job, and a link to its session. The page refreshes every five seconds while there is work.
+
+Each row links to a confirmation page. Cancelling a **queued** job moves it to `CANCELLED` before a worker claims it, so nothing runs. Cancelling a **running review** sets a flag the worker polls; the engine checks it between steps and before a tool call, stops the session, records it as `CANCELLED`, and completes the GitHub check run as cancelled. A review that already reached GitHub before the flag was read stays posted and the session is recorded as a success: the cancel stops work that is still going, and does not retract a review.
+
+The same action appears on a running session's page. It needs `moderation.admin_token`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
 
 ## Repository guidelines
 

@@ -19,6 +19,7 @@ func TestCheckConclusion(t *testing.T) {
 		summary    string
 	}{
 		{"a cancelled review", nil, context.Canceled, "cancelled", "cancelled"},
+		{"a review an operator stopped", nil, ErrReviewCancelled, "cancelled", "cancelled"},
 		{"a failed review", nil, errors.New("the provider is down"), "failure", "the provider is down"},
 		{"a review that never submitted", &Result{}, nil, "failure", "without submitting"},
 		{"an approval", &Result{ReviewSubmitted: true, Event: ghapp.EventApprove, ToolCalls: 4}, nil, "success", "Approved"},

@@ -16,6 +16,10 @@ const (
 	ReviewRunning   = "RUNNING"
 	ReviewSucceeded = "SUCCEEDED"
 	ReviewFailed    = "FAILED"
+	// ReviewCancelled is a session an operator stopped. It is terminal and it
+	// is neither a success nor a failure: nothing was said about the pull
+	// request, and nothing went wrong.
+	ReviewCancelled = "CANCELLED"
 )
 
 // Bounds on the observation deck's reads. A session list is a page, and a

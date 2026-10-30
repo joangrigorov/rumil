@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -80,11 +81,16 @@ func NewPool(jobs *store.DB, engine *reviewer.Engine, botHandle string, concurre
 // Start launches the workers. Cancelling ctx stops them claiming new jobs;
 // Wait then blocks until the running reviews have stopped.
 func (p *Pool) Start(ctx context.Context) {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "rumil"
+	}
 	for i := 0; i < p.workers; i++ {
+		workerID := fmt.Sprintf("%s-%d", hostname, i+1)
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			p.work(ctx)
+			p.work(ctx, workerID)
 		}()
 	}
 }
@@ -95,13 +101,13 @@ func (p *Pool) Wait() {
 }
 
 // work claims and processes jobs until ctx is cancelled.
-func (p *Pool) work(ctx context.Context) {
+func (p *Pool) work(ctx context.Context, workerID string) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 
-		job, err := p.jobs.ClaimJob(ctx)
+		job, err := p.jobs.ClaimJob(ctx, workerID)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
@@ -218,6 +224,9 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 	reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
 	defer cancel()
 
+	watcher := newCancelWatcher(reviewCtx, p.jobs, job.ID, logger)
+	defer watcher.Close()
+
 	// The session is the trace of this run. A database that cannot take one
 	// does not stop the review: observation is best effort.
 	var recorded *sessionObserver
@@ -244,6 +253,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		Focus:     focus,
 		SessionID: sessionID,
 		Observer:  observer,
+		Cancelled: watcher.Stopped,
 	})
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -251,6 +261,18 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		p.recordFindings(finishCtx, logger, recorded.sessionID, job.InstallationID,
 			job.OrgName, job.RepoName, job.PRNumber, result)
 		finishCancel()
+	}
+	if errors.Is(err, reviewer.ErrReviewCancelled) {
+		if result != nil && result.ReviewSubmitted {
+			// The review reached GitHub before the flag was read. Taking it
+			// back is not a cancellation; the run is a success.
+			logger.Info("the cancellation arrived after the review was submitted, the review stands")
+			p.finish(ctx, logger, job, true, nil)
+			return
+		}
+		logger.Info("review cancelled by an operator")
+		p.cancel(ctx, logger, job)
+		return
 	}
 	if err != nil {
 		if classifyFailure(err) == jobRetry {
@@ -312,6 +334,9 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 	continuationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
 	defer cancel()
 
+	watcher := newCancelWatcher(continuationCtx, p.jobs, job.ID, logger)
+	defer watcher.Close()
+
 	var recorded *sessionObserver
 	var observer reviewer.Observer
 	if p.recorder != nil {
@@ -345,6 +370,7 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		Number:    parent.PRNumber,
 		SessionID: sessionID,
 		Observer:  observer,
+		Cancelled: watcher.Stopped,
 		Continuation: &reviewer.Continuation{
 			ParentSessionID: parent.ID,
 			HeadSHA:         parent.HeadSHA,
@@ -359,6 +385,17 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		p.recordFindings(finishCtx, logger, recorded.sessionID, parent.InstallationID,
 			parent.OrgName, parent.RepoName, parent.PRNumber, result)
 		finishCancel()
+	}
+	if errors.Is(reviewErr, reviewer.ErrReviewCancelled) {
+		if result != nil && result.ReviewSubmitted {
+			logger.Info("the cancellation arrived after the review was submitted, the review stands",
+				"session_id", parent.ID)
+			p.finish(ctx, logger, job, true, nil)
+			return
+		}
+		logger.Info("continuation cancelled by an operator", "session_id", parent.ID)
+		p.cancel(ctx, logger, job)
+		return
 	}
 	if reviewErr != nil {
 		if classifyFailure(reviewErr) == jobRetry {
@@ -448,8 +485,17 @@ func sessionOutcome(result *reviewer.Result, err error) store.ReviewOutcome {
 		outcome.Usage = usageOutcome(result.Usage)
 	}
 	if err != nil {
-		outcome.Status = store.ReviewFailed
 		outcome.Error = err.Error()
+		switch {
+		case result != nil && result.ReviewSubmitted:
+			// A review that reached GitHub stands whatever arrived after it.
+			// The cancellation race is decided here rather than at each caller.
+			outcome.Status = store.ReviewSucceeded
+		case errors.Is(err, reviewer.ErrReviewCancelled):
+			outcome.Status = store.ReviewCancelled
+		default:
+			outcome.Status = store.ReviewFailed
+		}
 	}
 	return outcome
 }
@@ -466,6 +512,16 @@ func usageOutcome(usage *reviewer.Usage) *store.TokenUsage {
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
 		CostUSD:             usage.CostUSD,
+	}
+}
+
+// cancel records a running job an operator stopped. The session row was
+// already written CANCELLED by sessionOutcome.
+func (p *Pool) cancel(ctx context.Context, logger *slog.Logger, job *store.Job) {
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := p.jobs.CancelJob(finishCtx, job.ID, "the review was cancelled by an operator"); err != nil {
+		logger.Error("recording the cancellation failed", "error", err)
 	}
 }
 

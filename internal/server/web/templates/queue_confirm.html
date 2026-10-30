@@ -1,0 +1,27 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow"><a href="/ui/queue">Queue</a> / cancel</p>
+    <h1>{{if eq .Job.Status "RUNNING"}}Stop this review?{{else}}Cancel this queued job?{{end}}</h1>
+    <p class="lede">{{.Job.OrgName}}/{{.Job.RepoName}}#{{.Job.PRNumber}} · {{.Job.EventType}}</p>
+  </div>
+</header>
+
+<div class="session-facts">
+  <span>status <code>{{.Job.Status}}</code></span>
+  <span>delivery <code>{{short .Job.DeliveryID}}</code></span>
+  {{if .Job.WorkerID}}<span>worker <code>{{.Job.WorkerID}}</code></span>{{end}}
+  <span>age {{age .Job.CreatedAt}}</span>
+</div>
+
+{{if eq .Job.Status "RUNNING"}}
+<p>The worker stops before its next model request, and the session is recorded <code>CANCELLED</code>. A review that has already reached GitHub is kept; a review that has not cannot be finished once the session stops.</p>
+{{else}}
+<p>The job leaves the queue without a worker running it. GitHub has already been answered; nothing is posted for it.</p>
+{{end}}
+
+<form class="continue-form" method="post" action="/ui/queue/{{.Job.ID}}/cancel">
+  <button class="btn btn-primary" type="submit">{{if eq .Job.Status "RUNNING"}}Stop the review{{else}}Cancel the job{{end}}</button>
+  <a class="btn btn-quiet" href="/ui/queue">Keep it</a>
+</form>
+{{end}}

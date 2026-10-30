@@ -2,8 +2,10 @@ package server_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -684,5 +686,91 @@ func TestObservationDeckShowsUsage(t *testing.T) {
 		if !strings.Contains(listBody, want) {
 			t.Errorf("the session list lost %q:\n%s", want, listBody)
 		}
+	}
+}
+
+// The queue view lists waiting and running jobs, and a cancel POST needs the
+// header and the same-site check.
+func TestObservationDeckQueueListsAndCancels(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	ctx := context.Background()
+
+	for _, delivery := range []string{"delivery-1", "delivery-2"} {
+		if err := h.db.Enqueue(ctx, store.Job{
+			DeliveryID: delivery, InstallationID: h.cfg.GitHub.InstallationID,
+			EventType: "issue_comment", OrgName: "acme", RepoName: "payments",
+			PRNumber: 42, Payload: []byte(`{}`),
+		}); err != nil {
+			t.Fatalf("enqueueing %s: %v", delivery, err)
+		}
+	}
+	running, err := h.db.ClaimJob(ctx, "worker-a")
+	if err != nil || running == nil {
+		t.Fatalf("ClaimJob returned (%v, %v), want a job", running, err)
+	}
+	handler, _ := sessionsHandler(t, h)
+
+	page := moderatedRequest(t, handler, http.MethodGet, "/ui/queue", adminToken, nil, "text/html")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	for _, want := range []string{"acme/payments#42", "RUNNING", "QUEUED", "worker-a", "issue_comment"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the queue lost %q:\n%s", want, body)
+		}
+	}
+
+	confirm := moderatedRequest(t, handler, http.MethodGet, "/ui/queue/"+running.ID+"/cancel", adminToken, nil, "text/html")
+	if confirm.Code != http.StatusOK || !strings.Contains(confirm.Body.String(), "Stop this review?") {
+		t.Fatalf("confirm page = %d %q, want the running-review question", confirm.Code, confirm.Body.String())
+	}
+
+	// A cookie cannot drive the cancel; the POST needs the header.
+	cookieOnly := httptest.NewRequest(http.MethodPost, "/ui/queue/"+running.ID+"/cancel", nil)
+	cookieOnly.AddCookie(&http.Cookie{
+		Name:  "rumil_admin",
+		Value: base64.RawURLEncoding.EncodeToString([]byte(adminToken)),
+	})
+	cookieOnly.Header.Set("Accept", "text/html")
+	cookieRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(cookieRecorder, cookieOnly)
+	if cookieRecorder.Code != http.StatusUnauthorized {
+		t.Errorf("cookie-only cancel = %d, want 401", cookieRecorder.Code)
+	}
+
+	// A form on another site is refused even with the token.
+	crossSite := moderatedRequestWith(t, handler, http.MethodPost, "/ui/queue/"+running.ID+"/cancel",
+		adminToken, nil, "text/html", map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if crossSite.Code != http.StatusForbidden {
+		t.Errorf("cross-site cancel = %d, want 403", crossSite.Code)
+	}
+
+	posted := moderatedRequestWith(t, handler, http.MethodPost, "/ui/queue/"+running.ID+"/cancel",
+		adminToken, nil, "text/html", map[string]string{"Sec-Fetch-Site": "same-origin"})
+	if posted.Code != http.StatusSeeOther {
+		t.Fatalf("cancel = %d, want a redirect (body: %s)", posted.Code, posted.Body.String())
+	}
+	if flag, err := h.db.JobCancelRequested(ctx, running.ID); err != nil || !flag {
+		t.Errorf("cancel flag = %v, %v, want the request recorded", flag, err)
+	}
+
+	queued, err := h.db.JobByDelivery(ctx, "delivery-2")
+	if err != nil || queued == nil {
+		t.Fatalf("JobByDelivery returned (%v, %v)", queued, err)
+	}
+	cancelled := moderatedRequestWith(t, handler, http.MethodPost, "/ui/queue/"+queued.ID+"/cancel",
+		adminToken, url.Values{}, "application/json", nil)
+	if cancelled.Code != http.StatusAccepted {
+		t.Fatalf("queued cancel = %d, want 202 (body: %s)", cancelled.Code, cancelled.Body.String())
+	}
+	stored, err := h.db.JobByID(ctx, queued.ID)
+	if err != nil {
+		t.Fatalf("JobByID returned error: %v", err)
+	}
+	if stored.Status != store.StatusCancelled {
+		t.Errorf("status = %q, want CANCELLED", stored.Status)
 	}
 }

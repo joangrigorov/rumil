@@ -293,7 +293,18 @@ func pageFuncs() template.FuncMap {
 		"sha":      shortSHA,
 		"tokens":   tokenText,
 		"usd":      usdText,
+		"age":      ageText,
 	}
+}
+
+// ageText is how long ago something was created, which is what the queue shows
+// for a waiting job.
+func ageText(created time.Time) string {
+	elapsed := time.Since(created)
+	if elapsed < time.Second {
+		return "<1s"
+	}
+	return elapsed.Round(time.Second).String()
 }
 
 // tokenText groups a token count in thousands, which is how a bill reads.

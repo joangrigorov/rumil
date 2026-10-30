@@ -64,6 +64,8 @@ func (e *Engine) checkDetailsURL(sessionID string) string {
 // closest state to "a person has to act".
 func checkConclusion(result *Result, reviewErr error) (conclusion, summary string) {
 	switch {
+	case errors.Is(reviewErr, ErrReviewCancelled):
+		return "cancelled", "The review was cancelled."
 	case errors.Is(reviewErr, context.Canceled):
 		return "cancelled", "The review was cancelled."
 	case reviewErr != nil:
