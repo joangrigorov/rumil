@@ -228,6 +228,26 @@ func (d *DB) UpdateReviewSessionMetadata(ctx context.Context, id, title, headSHA
 	return nil
 }
 
+// UpdateReviewSessionModel records the model the session actually ran on. The
+// model is written when the session starts, and a repository's .rumil.yaml may
+// choose a different configured provider after that.
+func (d *DB) UpdateReviewSessionModel(ctx context.Context, id, model string) error {
+	if model == "" {
+		return nil
+	}
+	tag, err := d.pool.Exec(ctx, `
+		UPDATE review_sessions
+		SET model = $2
+		WHERE id = $1`, id, model)
+	if err != nil {
+		return fmt.Errorf("updating review session %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReviewSessionNotFound
+	}
+	return nil
+}
+
 // FinishReviewSession records the outcome. It is safe to call once; a second
 // call moves the finish time, which a restart should not do, so the caller
 // owns the one call.

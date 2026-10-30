@@ -20,6 +20,7 @@ import (
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/ghapp"
 	"github.com/joangrigorov/rumil/internal/mcpservers"
+	"github.com/joangrigorov/rumil/internal/repoconfig"
 	"github.com/joangrigorov/rumil/internal/snapshot"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -221,11 +222,6 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		return nil, errors.New("github.installation_id is required to review a pull request")
 	}
 
-	provider, err := e.cfg.Models.ChatProvider()
-	if err != nil {
-		return nil, fmt.Errorf("selecting the chat provider: %w", err)
-	}
-
 	githubClient := ghapp.NewClient(e.auth.Client(), req.Owner, req.Repo, req.Number)
 
 	// Repository guidelines are read before the first turn, from the base SHA
@@ -291,6 +287,39 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		}})
 	}
 
+	// The repository's own settings are read from the same ref as RUMIL.md,
+	// which is the base branch unless the operator opted into the head. They
+	// narrow this review only; an invalid file fails the review with its
+	// problem rather than silently falling back to the operator's settings.
+	repoSettings, repoFileFound, err := readRepositorySettings(ctx, githubClient, guidelinesRef, e.cfg.Models)
+	if err != nil {
+		return nil, err
+	}
+	effective := repoSettings.Apply(e.cfg.Review)
+
+	// The provider is selected after the repository's settings are known: a
+	// repository may name a cheaper model, and only the operator's configured
+	// providers are candidates.
+	provider, err := e.cfg.Models.ChatProviderByID(effective.ChatProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("selecting the chat provider: %w", err)
+	}
+
+	if observer != nil {
+		observer.Observe(ctx, Event{Type: "repository_settings", At: time.Now(), Payload: map[string]any{
+			"file":                repoconfig.FileName,
+			"found":               repoFileFound,
+			"ref":                 guidelinesRef,
+			"resolve_threads":     effective.ResolveThreads,
+			"request_changes":     effective.RequestChanges,
+			"ignore_paths":        effective.IgnorePaths,
+			"default_focus":       effective.DefaultFocus,
+			"max_inline_comments": effective.MaxInlineComments,
+			"chat_provider":       provider.ID,
+			"model":               provider.ModelName,
+		}})
+	}
+
 	var (
 		mu     sync.Mutex
 		result Result
@@ -322,6 +351,10 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		PriorReviews: priorReviews,
 		Snapshot:     snap,
 		HeadSHA:      meta.HeadSHA,
+
+		IgnorePath:             effective.Ignores,
+		MaxInlineComments:      effective.MaxInlineComments,
+		DisallowRequestChanges: !effective.RequestChanges,
 	})
 	githubTools.OnReviewSubmitted = func(outcome ghapp.ReviewOutcome) {
 		mu.Lock()
@@ -387,8 +420,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	}
 
 	// review.resolve_threads off takes the tool away, and the prompt rule that
-	// names it goes with it.
-	resolveThreads := e.cfg.Review.ThreadsResolvable()
+	// names it goes with it. The repository's settings may narrow the operator's
+	// choice further.
+	resolveThreads := effective.ResolveThreads
 	if !resolveThreads {
 		specs = slices.DeleteFunc(specs, func(spec mcpservers.Spec) bool { return spec.Name == "resolve_review_thread" })
 	}
@@ -403,14 +437,15 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	}
 
 	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(SessionContext{
-		Guidelines:     guidelines,
-		Memories:       memoryBlock,
-		MemoryOn:       memoryOn,
-		PriorHistory:   priorHistory,
-		ResolveThreads: resolveThreads,
-		Continuation:   ContinuationBlock(req.Continuation),
-		LocalFiles:     snap != nil,
-		MCPTools:       len(mcpSpecs) > 0,
+		Guidelines:         guidelines,
+		Memories:           memoryBlock,
+		MemoryOn:           memoryOn,
+		PriorHistory:       priorHistory,
+		ResolveThreads:     resolveThreads,
+		Continuation:       ContinuationBlock(req.Continuation),
+		LocalFiles:         snap != nil,
+		MCPTools:           len(mcpSpecs) > 0,
+		RepositorySettings: RepositorySettingsBlock(effective, repoFileFound),
 	}), sessionTools, maxTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
@@ -429,7 +464,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	// between steps, so a session over its limit stops before paying for
 	// another request.
 	tracker := &usageTracker{}
-	budget := e.newUsageBudget()
+	budget := e.newUsageBudget(provider)
 	if budget.enabled() {
 		stopBudget := session.OnPrepareStep(kit.HookPriorityHigh, func(kit.PrepareStepHook) *kit.PrepareStepResult {
 			mu.Lock()
@@ -456,7 +491,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		if !reported {
 			return
 		}
-		usage.CostUSD = e.estimateCost(usage)
+		usage.CostUSD = e.estimateCost(usage, provider)
 		mu.Lock()
 		result.Usage = &usage
 		mu.Unlock()
@@ -513,7 +548,13 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	})
 	defer unsubscribe()
 
-	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number, req.Focus)
+	focus := req.Focus
+	if focus == "" {
+		// A repository may name the focus its reviews should take when the
+		// person asking for one did not.
+		focus = effective.DefaultFocus
+	}
+	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number, focus)
 	if req.Continuation != nil {
 		userPrompt = ContinuationUserPrompt(req.Owner, req.Repo, req.Number)
 	}
