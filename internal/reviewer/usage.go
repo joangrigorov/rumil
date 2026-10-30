@@ -82,14 +82,15 @@ type usageBudget struct {
 	priced    bool
 }
 
-// newUsageBudget reads the limits from the configuration. The chat provider's
-// prices are the ones the session is billed at.
-func (e *Engine) newUsageBudget() usageBudget {
+// newUsageBudget reads the limits from the configuration. provider is the chat
+// provider this session runs on, which is what prices the cost limit when a
+// repository chose a provider of its own.
+func (e *Engine) newUsageBudget(provider *config.Provider) usageBudget {
 	budget := usageBudget{
 		maxTokens: e.cfg.Review.MaxTotalTokens,
 		maxCost:   e.cfg.Review.MaxCostUSD,
 	}
-	if provider, err := e.cfg.Models.ChatProvider(); err == nil {
+	if provider != nil {
 		budget.price = provider.TokenPrice()
 		budget.priced = provider.HasPrice()
 	}
@@ -127,9 +128,8 @@ func (b usageBudget) check(usage Usage) error {
 
 // estimateCost is what the deck records for a finished session, nil when the
 // operator configured no prices.
-func (e *Engine) estimateCost(usage Usage) *float64 {
-	provider, err := e.cfg.Models.ChatProvider()
-	if err != nil || !provider.HasPrice() {
+func (e *Engine) estimateCost(usage Usage, provider *config.Provider) *float64 {
+	if provider == nil || !provider.HasPrice() {
 		return nil
 	}
 	budget := usageBudget{price: provider.TokenPrice(), priced: true}

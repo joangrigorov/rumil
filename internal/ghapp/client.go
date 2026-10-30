@@ -417,6 +417,39 @@ func (c *Client) ReviewGuidelines(ctx context.Context, ref string) (string, stri
 	return GuidelinesPath, truncateGuidelines(text), nil
 }
 
+// RepositoryFile reads one repository file at ref, capped at maxBytes. A path
+// that holds no file at that ref is not an error: it returns ok false, which
+// is how an optional settings file is read.
+func (c *Client) RepositoryFile(ctx context.Context, path, ref string, maxBytes int) (string, bool, error) {
+	if ref == "" {
+		meta, err := c.Metadata(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		ref = meta.BaseSHA
+	}
+
+	file, err := c.fileAt(ctx, path, ref)
+	if err != nil {
+		return "", false, err
+	}
+	if file == nil {
+		return "", false, nil
+	}
+	if size := file.GetSize(); maxBytes > 0 && size > maxBytes {
+		return "", false, fmt.Errorf("%s at %s is %d bytes, larger than the %d byte limit", path, ref, size, maxBytes)
+	}
+
+	text, err := c.fileText(ctx, file, path, ref)
+	if err != nil {
+		return "", false, err
+	}
+	if maxBytes > 0 && len(text) > maxBytes {
+		return "", false, fmt.Errorf("%s at %s is %d bytes, larger than the %d byte limit", path, ref, len(text), maxBytes)
+	}
+	return text, true, nil
+}
+
 // truncateGuidelines caps the guidelines at MaxGuidelinesBytes, cutting on a
 // rune boundary and appending a marker that names the original size.
 func truncateGuidelines(text string) string {

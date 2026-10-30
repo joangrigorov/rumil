@@ -232,3 +232,23 @@ func TestUsageIsRecordedFromAStreamingSession(t *testing.T) {
 		t.Errorf("usage = %+v, want 510 in, 15 out, 90 cached", *result.Usage)
 	}
 }
+
+// A repository may choose a provider other than the configured default, and the
+// budget and the recorded cost have to price the session at that provider.
+func TestUsageBudgetUsesTheSessionsProvider(t *testing.T) {
+	input, output := 1.0, 2.0
+	provider := &config.Provider{ID: "cheap", PriceInputPerMTok: &input, PriceOutputPerMTok: &output}
+	engine := &Engine{cfg: &config.Config{Review: config.Review{MaxCostUSD: 10}}}
+
+	budget := engine.newUsageBudget(provider)
+	usage := Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	if got := budget.cost(usage); math.Abs(got-3) > 1e-9 {
+		t.Errorf("budget cost = %v, want 3 at the session's provider", got)
+	}
+	if cost := engine.estimateCost(usage, provider); cost == nil || math.Abs(*cost-3) > 1e-9 {
+		t.Errorf("estimated cost = %v, want 3 at the session's provider", cost)
+	}
+	if cost := engine.estimateCost(usage, nil); cost != nil {
+		t.Errorf("estimated cost = %v, want nil without a provider", cost)
+	}
+}

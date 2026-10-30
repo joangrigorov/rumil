@@ -66,6 +66,13 @@ type GithubTools struct {
 	// cap holds whatever the model does with the tool.
 	resolutionsMu sync.Mutex
 	resolutions   int
+
+	// Repository settings narrow what a review may post. They are enforced
+	// here as well as described in the prompt, so a model that ignores the
+	// block still produces a review the repository asked for.
+	ignoresPath           func(string) bool
+	maxInlineComments     int
+	disallowRequestChange bool
 }
 
 // GithubToolsOptions carries what one session's tool set is scoped to.
@@ -81,6 +88,15 @@ type GithubToolsOptions struct {
 	Snapshot *snapshot.Snapshot
 	// HeadSHA is the commit under review.
 	HeadSHA string
+	// IgnorePath, when set, reports whether a repository settings file told the
+	// review not to report findings on a path.
+	IgnorePath func(path string) bool
+	// MaxInlineComments caps the inline comments one review may post. Zero is
+	// no repository cap.
+	MaxInlineComments int
+	// DisallowRequestChanges turns a REQUEST_CHANGES the model chose into
+	// COMMENT, for a repository whose settings do not allow requested changes.
+	DisallowRequestChanges bool
 }
 
 // NewGithubTools scopes the tools to one pull request. botHandle is the
@@ -109,6 +125,10 @@ func NewGithubTools(client *ghapp.Client, opts GithubToolsOptions) *GithubTools 
 		reviewsRead:  true,
 		snap:         opts.Snapshot,
 		headSHA:      opts.HeadSHA,
+
+		ignoresPath:           opts.IgnorePath,
+		maxInlineComments:     opts.MaxInlineComments,
+		disallowRequestChange: opts.DisallowRequestChanges,
 	}
 }
 
@@ -452,6 +472,7 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 
 	rawComments, _ := args["comments"].([]any)
 	comments := make([]ghapp.ReviewComment, 0, len(rawComments))
+	ignored := 0
 	for _, raw := range rawComments {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -461,6 +482,12 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 		if path == "" {
 			return "", fmt.Errorf("every comment needs a path")
 		}
+		if t.ignoresPath != nil && t.ignoresPath(path) {
+			// The repository's settings say not to report here. Dropping the
+			// comment is the enforcement; the prompt already said so.
+			ignored++
+			continue
+		}
 		line := intArg(entry, "line")
 		if line < 1 {
 			return "", fmt.Errorf("comment on %s needs a positive line number", path)
@@ -468,6 +495,21 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 		side, _ := entry["side"].(string)
 		body, _ := entry["body"].(string)
 		comments = append(comments, ghapp.ReviewComment{Path: path, Line: line, Side: side, Body: body})
+	}
+
+	omitted := 0
+	if t.maxInlineComments > 0 && len(comments) > t.maxInlineComments {
+		omitted = len(comments) - t.maxInlineComments
+		comments = comments[:t.maxInlineComments]
+		summary = strings.TrimRight(summary, "\n") + fmt.Sprintf(
+			"\n\n%d further finding(s) were omitted by this repository's inline comment limit.", omitted)
+	}
+
+	requestedEvent := event
+	if event == ghapp.EventRequestChanges && t.disallowRequestChange {
+		// The repository does not allow requested changes. The review still
+		// carries its findings, with the event it is allowed to choose.
+		event = ghapp.EventComment
 	}
 
 	diff, err := t.client.Diff(ctx)
@@ -495,15 +537,21 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 		"inline_comments", inline,
 		"moved_to_summary", len(outcome.MovedToSummary),
 		"skipped_duplicates", len(outcome.SkippedDuplicates),
+		"ignored_paths", ignored,
+		"omitted_comments", omitted,
+		"request_changes_downgraded", requestedEvent != event,
 	)
 
 	return marshalJSON(map[string]any{
-		"event":              outcome.Event,
-		"requested_event":    outcome.RequestedEvent,
-		"fallback":           outcome.Fallback,
-		"inline_comments":    inline,
-		"moved_to_summary":   outcome.MovedToSummary,
-		"skipped_duplicates": outcome.SkippedDuplicates,
+		"event":                      outcome.Event,
+		"requested_event":            outcome.RequestedEvent,
+		"fallback":                   outcome.Fallback,
+		"inline_comments":            inline,
+		"moved_to_summary":           outcome.MovedToSummary,
+		"skipped_duplicates":         outcome.SkippedDuplicates,
+		"ignored_paths":              ignored,
+		"omitted_comments":           omitted,
+		"request_changes_downgraded": requestedEvent != event,
 	})
 }
 

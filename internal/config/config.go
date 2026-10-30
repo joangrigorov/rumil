@@ -935,6 +935,23 @@ func (m Models) ChatProvider() (*Provider, error) {
 	return nil, ErrNoChatProvider
 }
 
+// ChatProviderByID resolves one configured chat provider by id. A repository
+// may name a provider in its own settings, so the lookup has to refuse an id
+// the operator did not configure and an embedding provider alike.
+func (m Models) ChatProviderByID(id string) (*Provider, error) {
+	if id == "" {
+		return m.ChatProvider()
+	}
+	p, err := m.providerByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if p.IsEmbedding() {
+		return nil, fmt.Errorf("provider %q is an embedding provider, not a chat provider", id)
+	}
+	return p, nil
+}
+
 func (m Models) providerByID(id string) (*Provider, error) {
 	for i := range m.Providers {
 		if m.Providers[i].ID == id {

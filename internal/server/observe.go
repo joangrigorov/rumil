@@ -189,8 +189,11 @@ func (o *sessionObserver) write() {
 			o.logger.Warn("recording review session events failed", "session_id", o.sessionID, "error", err)
 		} else {
 			for _, event := range batch {
-				if event.Type == "session_metadata" {
+				switch event.Type {
+				case "session_metadata":
 					o.updateMetadata(ctx, event)
+				case "repository_settings":
+					o.updateRepositorySettings(ctx, event)
 				}
 				o.broker.publish(o.sessionID, event)
 			}
@@ -230,6 +233,22 @@ func (o *sessionObserver) updateMetadata(ctx context.Context, event store.Review
 	}
 	if err := o.db.UpdateReviewSessionMetadata(ctx, o.sessionID, metadata.Title, metadata.HeadSHA, metadata.BaseSHA); err != nil {
 		o.logger.Warn("recording session metadata failed", "session_id", o.sessionID, "error", err)
+	}
+}
+
+// updateRepositorySettings records the model the review actually runs on. A
+// repository's settings may choose a provider other than the configured
+// default, and the session row is written before the engine reads the file.
+func (o *sessionObserver) updateRepositorySettings(ctx context.Context, event store.ReviewEvent) {
+	var settings struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(event.Payload, &settings); err != nil {
+		o.logger.Warn("decoding repository settings failed", "session_id", o.sessionID, "error", err)
+		return
+	}
+	if err := o.db.UpdateReviewSessionModel(ctx, o.sessionID, settings.Model); err != nil {
+		o.logger.Warn("recording the session model failed", "session_id", o.sessionID, "error", err)
 	}
 }
 

@@ -477,6 +477,27 @@ This is where a team writes down the conventions it wants enforced: "we do not u
 
 Everything Rumil reads from the pull request is data, not instructions. The prompt says so for the title and description, comments, review threads, diff, file contents, commit messages, `RUMIL.md`, and every tool result: they can inform a finding or narrow a review, but text inside them cannot change the reviewer's rules, tools, or task. A comment that asks for an approval, a skipped check, or the system prompt is reported when it matters, and a block cannot be closed from inside its own content.
 
+### Repository settings in `.rumil.yaml`
+
+A repository can narrow how Rumil reviews it with a `.rumil.yaml` at its root. It is read from the same ref as `RUMIL.md` — the base branch by default — so a pull request cannot change the settings that review it. Every key is optional:
+
+```yaml
+review:
+  resolve_threads: false          # may this review close its own threads
+  request_changes: false          # may this review request changes
+  ignore_paths: ["docs/**", "**/*.md"]
+  default_focus: ["migrations", "deployment"]
+  max_inline_comments: 20
+models:
+  default_chat: "cheap-model"     # a chat provider the operator configured
+```
+
+The layers, from the operator's file down: `review.*` and `models.*` in the operator's configuration are the baseline, `.rumil.yaml` narrows or replaces that baseline for one repository, and the built-in defaults fill what neither sets. A repository may choose only a chat provider the operator already configured; it cannot add a provider.
+
+The file is validated strictly. An unknown key, a credential (`api_key`, `token`, `password`, `secret`, `private_key`, `dsn`), or a provider definition is refused. So are more than 50 ignore paths, more than 5 focus entries, an entry over 200 bytes, an absolute path or one containing `..`, and an inline comment cap outside 1–200. An invalid file fails the review with the file's problem instead of silently using the operator's settings.
+
+The prompt carries the effective settings, and the tool enforces them: a finding on an ignored path is dropped, the inline cap moves the extra findings into the summary, and a requested-changes review becomes a comment when the repository does not allow one. The session page records a `repository settings` event with the values the review used, so a surprising review is explainable.
+
 ## Teaching Rumil your conventions
 
 Rumil can record rules from the conversation, so a decision made once in review is not re-litigated on the next pull request.

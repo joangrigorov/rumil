@@ -202,6 +202,11 @@
         marker("info", "No repository guidelines", "The review runs on the prompt alone.");
         break;
 
+      case "repository_settings":
+        marker("info", payload.found ? "Repository settings applied" : "No repository settings",
+          repositorySettingsDetail(payload));
+        break;
+
       case "memory_retrieved":
         marker("info", "Recorded rules retrieved", count(payload.rules, "rule") + (payload.bytes ? " · " + bytes(payload.bytes) : ""));
         break;
@@ -789,6 +794,32 @@
     }
     if (payload.bytes) {
       parts.push(bytes(payload.bytes));
+    }
+    return parts.join(" · ");
+  }
+
+  function repositorySettingsDetail(payload) {
+    if (!payload.found) {
+      return "The review runs on the operator's settings.";
+    }
+    var parts = [];
+    if (payload.resolve_threads !== undefined) {
+      parts.push("resolve threads " + (payload.resolve_threads ? "on" : "off"));
+    }
+    if (payload.request_changes !== undefined) {
+      parts.push("request changes " + (payload.request_changes ? "allowed" : "off"));
+    }
+    if (payload.max_inline_comments) {
+      parts.push("inline comments ≤ " + payload.max_inline_comments);
+    }
+    if (payload.ignore_paths && payload.ignore_paths.length) {
+      parts.push("ignoring " + payload.ignore_paths.join(", "));
+    }
+    if (payload.default_focus) {
+      parts.push("focus " + payload.default_focus);
+    }
+    if (payload.chat_provider) {
+      parts.push("provider " + payload.chat_provider);
     }
     return parts.join(" · ");
   }
