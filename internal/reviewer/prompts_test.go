@@ -286,6 +286,38 @@ func TestTheUntrustedContentRuleNamesEverySource(t *testing.T) {
 	}
 }
 
+// A session with operator-configured MCP tools is told what they are and that
+// they run outside it; a session without them is not told about tools it does
+// not have.
+func TestSystemPromptDescribesTheOperatorTools(t *testing.T) {
+	withMCP := SystemPrompt(SessionContext{ResolveThreads: true, MCPTools: true})
+	for _, want := range []string{"mcp__<server>__<tool>", "operator-configured MCP server", "untrusted data"} {
+		if !strings.Contains(withMCP, want) {
+			t.Errorf("the prompt does not carry %q:\n%s", want, withMCP)
+		}
+	}
+	if numbers := ruleNumbers(t, withMCP); len(numbers) != 10 {
+		t.Errorf("the prompt lists %d rules, want ten with the MCP rule", len(numbers))
+	}
+
+	withoutMCP := SystemPrompt(SessionContext{ResolveThreads: true})
+	if strings.Contains(withoutMCP, "mcp__<server>__<tool>") {
+		t.Errorf("a session without MCP tools is told about them:\n%s", withoutMCP)
+	}
+}
+
+// The read-only rule describes the built-in tools: an operator's MCP server can
+// run commands, so the prompt must not claim the session cannot.
+func TestTheReadOnlyRuleCoversOnlyTheBuiltInTools(t *testing.T) {
+	prompt := SystemPrompt(SessionContext{ResolveThreads: true, MCPTools: true})
+	if !strings.Contains(prompt, "Your built-in tools cannot edit files") {
+		t.Errorf("the read-only rule does not scope itself to the built-in tools:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "you cannot run commands") {
+		t.Errorf("the read-only rule forbids what the MCP tools do:\n%s", prompt)
+	}
+}
+
 // A block's own tag inside its content must not end the block.
 func TestPromptContentCannotCloseItsBlock(t *testing.T) {
 	prompt := SystemPrompt(SessionContext{

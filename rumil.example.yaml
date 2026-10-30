@@ -47,6 +47,29 @@ snapshot:
 memory:                           # Used from v0.0.6
   repo_scope_boost: 0.05          # added to a repository rule's similarity when ranking, so a project exception outranks a general organization rule; 0 ranks by similarity alone
 
+# Operator-provided MCP servers whose tools a review may call. tools.allow is
+# the trust boundary: a server runs with this process's privileges, outside any
+# sandbox, so expose only the tools you trust. A stdio server also receives
+# RUMIL_REPO, RUMIL_PR, RUMIL_HEAD_SHA, RUMIL_SESSION_ID and RUMIL_WORKSPACE.
+# mcp_servers:
+#   - name: "workspace"           # lowercase handle: letters, digits, - and _
+#     transport: "stdio"          # stdio (default) or http
+#     command: "rumil-workspace"
+#     args: ["--root", "/srv/checkout"]
+#     env:
+#       WORKSPACE_TOKEN: "${WORKSPACE_TOKEN}"
+#     timeout: "60s"              # one connect, list or call
+#     max_output_bytes: 65536     # one tool result, cut with a marker; 1 MiB at most
+#     tools:
+#       allow: ["run_tests"]      # an empty list exposes no tools
+#   - name: "docs"
+#     transport: "http"
+#     url: "https://mcp.example.com/mcp"
+#     headers:
+#       Authorization: "Bearer ${DOCS_TOKEN}"
+#     tools:
+#       allow: ["search_docs"]
+
 # `rumil serve` drains this queue.
 worker:
   concurrency: 4                  # reviews processed in parallel; an idle worker polls the queue every 250ms

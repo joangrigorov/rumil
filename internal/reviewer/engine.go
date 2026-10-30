@@ -343,6 +343,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	}
 
 	specs := githubTools.Specs()
+	mcpSpecs, closeMCP := e.mcpTools(ctx, req, meta.HeadSHA, snap)
+	defer closeMCP()
+	specs = append(specs, mcpSpecs...)
 	memoryBlock := ""
 	memoryOn := e.memory != nil
 	if e.memory != nil {
@@ -395,6 +398,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		ResolveThreads: resolveThreads,
 		Continuation:   ContinuationBlock(req.Continuation),
 		LocalFiles:     snap != nil,
+		MCPTools:       len(mcpSpecs) > 0,
 	}), sessionTools, maxTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
