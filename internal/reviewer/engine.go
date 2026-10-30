@@ -53,6 +53,10 @@ type Request struct {
 	Owner  string
 	Repo   string
 	Number int
+	// Focus is the guidance the person who asked for the review wrote after
+	// the command, for example "focus on migration consistency". It narrows
+	// where the effort goes; it does not replace the review.
+	Focus string
 	// Observer, when set, receives the session's progress for the observation
 	// deck. It travels with the request rather than the engine because workers
 	// share one engine and run sessions concurrently.
@@ -394,7 +398,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 	})
 	defer unsubscribe()
 
-	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number)
+	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number, req.Focus)
 	if req.Continuation != nil {
 		userPrompt = ContinuationUserPrompt(req.Owner, req.Repo, req.Number)
 	}

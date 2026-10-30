@@ -152,7 +152,7 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 		p.acknowledgeReview(ctx, logger, reviewer.Request{
 			Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
 		})
-		p.review(ctx, logger, job)
+		p.review(ctx, logger, job, "")
 	case eventIssueComment, eventReviewComment:
 		p.command(ctx, logger, job)
 	case continuation.EventType:
@@ -182,7 +182,8 @@ func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job)
 
 	switch command.Verb {
 	case commandReview:
-		p.review(ctx, logger, job)
+		// The words after the verb are the focus the person asked for.
+		p.review(ctx, logger, job, command.Instruction)
 	case commandRemember:
 		p.remember(ctx, logger, job, delivery, command)
 	default:
@@ -209,8 +210,9 @@ func (p *Pool) acknowledgeCommand(ctx context.Context, logger *slog.Logger, req 
 	}
 }
 
-// review runs one review request.
-func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) {
+// review runs one review request. focus is the guidance a review command
+// carried, and empty for a review requested as a reviewer.
+func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, focus string) {
 	// The review runs on its own bounded context so a shutdown stops new work
 	// without cutting off the review already in flight.
 	reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
@@ -234,6 +236,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job) 
 		Owner:    job.OrgName,
 		Repo:     job.RepoName,
 		Number:   job.PRNumber,
+		Focus:    focus,
 		Observer: observer,
 	})
 	if recorded != nil {

@@ -682,6 +682,34 @@ func TestAReviewCommandQueuesAndAcknowledges(t *testing.T) {
 	}
 }
 
+// The words after the verb are the focus: they reach the task message, so the
+// reviewer spends its effort where the person asked.
+func TestAReviewCommandCarriesItsFocusIntoThePrompt(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	scriptReview(llm)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	body := issueCommentPayload("created", "octocat", "User",
+		"@rumil review. Focus on migration consistency and deployment instructions", 9002)
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	response := h.deliver(t, handler, "issue_comment", "delivery-review-focus", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202\nbody: %s", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "delivery-review-focus"))
+
+	requests := llm.Requests()
+	if len(requests) == 0 {
+		t.Fatal("the model received no requests")
+	}
+	if !strings.Contains(requests[0].UserPrompt, "<focus>\nFocus on migration consistency and deployment instructions\n</focus>") {
+		t.Errorf("the focus did not reach the task message:\n%s", requests[0].UserPrompt)
+	}
+}
+
 // A review request has no comment to answer, so its acknowledgement goes on the
 // pull request.
 func TestAReviewRequestIsAcknowledged(t *testing.T) {

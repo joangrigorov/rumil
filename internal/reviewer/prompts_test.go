@@ -203,6 +203,35 @@ func TestSystemPromptAppendsTheBlocks(t *testing.T) {
 	}
 }
 
+// The task message carries the guidance the person wrote after the command,
+// delimited, and still asks for the review itself.
+func TestReviewUserPromptCarriesTheFocus(t *testing.T) {
+	prompt := ReviewUserPrompt("acme", "payments", 42, "Focus on migration consistency and deployment instructions")
+
+	if !strings.Contains(prompt, "Review pull request acme/payments#42.") {
+		t.Errorf("the task message lost the pull request:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<focus>\nFocus on migration consistency and deployment instructions\n</focus>") {
+		t.Errorf("the focus is not delimited in the task message:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "submit_pr_review") {
+		t.Errorf("the focus replaced the review instruction:\n%s", prompt)
+	}
+}
+
+// A review requested as a reviewer carries no focus, so the task message is
+// the plain one.
+func TestReviewUserPromptWithoutFocus(t *testing.T) {
+	prompt := ReviewUserPrompt("acme", "payments", 42, "")
+
+	if strings.Contains(prompt, "<focus>") {
+		t.Errorf("an empty focus produced a block:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "submit_pr_review") {
+		t.Errorf("the plain task message lost the review instruction:\n%s", prompt)
+	}
+}
+
 // A session with a working tree is told to locate paths instead of guessing
 // them; a session without one is not told about tools it does not have.
 func TestSystemPromptLocatesPathsWhenItHasTheTree(t *testing.T) {
