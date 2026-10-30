@@ -1188,3 +1188,70 @@ func TestPrivateKeyResolution(t *testing.T) {
 		}
 	})
 }
+
+// The embeddings call has its own budget: a local backend can spend a long
+// time on its first request while it loads the model, and that must not be
+// conflated with the chat provider's settings.
+func TestEmbeddingTimeoutSettings(t *testing.T) {
+	doc := func(chat, embed string) []byte {
+		return []byte(`
+github:
+  app_id: 1
+  installation_id: 2
+  private_key: "key"
+models:
+  default_embedding: "embed"
+  providers:
+    - id: "chat"
+      provider: "openai-compatible"
+      base_url: "https://chat.example.com/v1"
+      model_name: "chat"
+      api_key: "k"
+` + chat + `
+    - id: "embed"
+      provider: "openai-compatible"
+      base_url: "https://embed.example.com/v1"
+      model_name: "embed"
+      api_key: "k"
+      dimensions: 768
+` + embed)
+	}
+
+	t.Run("default", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("", "")))
+		provider, err := cfg.Models.EmbeddingProvider()
+		if err != nil {
+			t.Fatalf("EmbeddingProvider: %v", err)
+		}
+		if got := provider.EmbeddingTimeoutOrDefault(); got != DefaultEmbeddingTimeout {
+			t.Errorf("embedding timeout = %s, want %s", got, DefaultEmbeddingTimeout)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		cfg := mustParse(t, string(doc("", "      embedding_timeout: \"90s\"\n")))
+		provider, err := cfg.Models.EmbeddingProvider()
+		if err != nil {
+			t.Fatalf("EmbeddingProvider: %v", err)
+		}
+		if got := provider.EmbeddingTimeoutOrDefault(); got != 90*time.Second {
+			t.Errorf("embedding timeout = %s, want 90s", got)
+		}
+	})
+
+	t.Run("invalid duration", func(t *testing.T) {
+		if _, err := Parse(doc("", "      embedding_timeout: \"soon\"\n"), "test.yaml"); err == nil ||
+			!strings.Contains(err.Error(), "embedding_timeout") {
+			t.Errorf("Parse = %v, want it to name embedding_timeout", err)
+		}
+	})
+
+	t.Run("chat provider", func(t *testing.T) {
+		// The same key on the provider without dimensions is refused, because
+		// there is no embeddings call for it to bound.
+		if _, err := Parse(doc("      embedding_timeout: \"90s\"\n", ""), "test.yaml"); err == nil ||
+			!strings.Contains(err.Error(), "embedding_timeout") {
+			t.Errorf("Parse = %v, want the chat provider's embedding_timeout refused", err)
+		}
+	})
+}

@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/joangrigorov/rumil/internal/config"
@@ -30,9 +29,6 @@ const maxErrorBytes = 4 << 10
 // maxResponseBytes bounds a successful response. A wide vector, 1536
 // dimensions or more, is tens of KB of JSON.
 const maxResponseBytes = 1 << 20
-
-// requestTimeout bounds one embeddings call.
-const requestTimeout = 30 * time.Second
 
 // Client embeds text through one provider.
 type Client struct {
@@ -58,7 +54,7 @@ func New(provider *config.Provider) (*Client, error) {
 		return nil, fmt.Errorf("embedder: provider %q needs base_url and model_name", provider.ID)
 	}
 	return &Client{
-		http:      &http.Client{Timeout: requestTimeout},
+		http:      &http.Client{Timeout: provider.EmbeddingTimeoutOrDefault()},
 		id:        provider.ID,
 		baseURL:   strings.TrimRight(provider.BaseURL, "/"),
 		model:     provider.ModelName,

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joangrigorov/rumil/internal/config"
 )
@@ -204,6 +205,61 @@ func TestEmbedTruncatesAnOversizedInput(t *testing.T) {
 	}
 	if received != maxInputBytes {
 		t.Errorf("input length = %d, want it capped at %d", received, maxInputBytes)
+	}
+}
+
+// A local backend can spend a long time on its first call while it loads the
+// model, so the budget belongs to the provider and must reach the HTTP client.
+func TestNewUsesTheProvidersEmbeddingTimeout(t *testing.T) {
+	provider := newProvider(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeEmbedding(t, w, vector(testDimensions))
+	})
+	if client, err := New(provider); err != nil {
+		t.Fatalf("New: %v", err)
+	} else if client.http.Timeout != config.DefaultEmbeddingTimeout {
+		t.Errorf("timeout = %s, want the %s default", client.http.Timeout, config.DefaultEmbeddingTimeout)
+	}
+
+	provider.EmbeddingTimeout = "90s"
+	client, err := New(provider)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if client.http.Timeout != 90*time.Second {
+		t.Errorf("timeout = %s, want 90s", client.http.Timeout)
+	}
+}
+
+func TestEmbedStopsAtTheProvidersEmbeddingTimeout(t *testing.T) {
+	// The handler ignores the client's disconnect, so the test releases it
+	// before the server's own cleanup starts waiting for connections. Cleanups
+	// run last registered first, which is why this one is registered after
+	// newProvider.
+	release := make(chan struct{})
+	provider := newProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	t.Cleanup(func() { close(release) })
+	provider.EmbeddingTimeout = "50ms"
+	client, err := New(provider)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Embed(context.Background(), "hello")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Embed returned no error, want the provider budget to stop the call")
+	}
+	if !strings.Contains(err.Error(), "Client.Timeout") && !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Errorf("Embed = %v, want a timeout", err)
+	}
+	if elapsed > time.Second {
+		t.Errorf("Embed took %s, want it bounded near 50ms", elapsed)
 	}
 }
 

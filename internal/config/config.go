@@ -64,6 +64,11 @@ const (
 	// DefaultSnapshotTimeout bounds the archive download and extraction, so a
 	// slow origin cannot eat the job's own timeout.
 	DefaultSnapshotTimeout = 2 * time.Minute
+
+	// DefaultEmbeddingTimeout bounds one embeddings call. A local backend can
+	// spend longer than this on its first request while it loads or compiles
+	// the model, which is what models.providers[].embedding_timeout raises.
+	DefaultEmbeddingTimeout = 30 * time.Second
 )
 
 // GuidelinesRef values accepted by review.guidelines_ref.
@@ -261,6 +266,10 @@ type Provider struct {
 	Temperature *float64 `yaml:"temperature"`
 	MaxTokens   int      `yaml:"max_tokens"`
 	Dimensions  int      `yaml:"dimensions"`
+	// EmbeddingTimeout bounds one embeddings call, as a Go duration string
+	// such as "90s". It applies to an embedding provider; empty uses
+	// DefaultEmbeddingTimeout.
+	EmbeddingTimeout string `yaml:"embedding_timeout"`
 	// ThinkingLevel is the reasoning effort sent to a chat model. Empty leaves
 	// the provider default in place.
 	ThinkingLevel string `yaml:"thinking_level"`
@@ -268,6 +277,19 @@ type Provider struct {
 
 // IsEmbedding reports whether the provider produces embeddings.
 func (p Provider) IsEmbedding() bool { return p.Dimensions > 0 }
+
+// EmbeddingTimeoutOrDefault is the budget of one embeddings call, defaulted
+// when the operator left it out.
+func (p Provider) EmbeddingTimeoutOrDefault() time.Duration {
+	if p.EmbeddingTimeout == "" {
+		return DefaultEmbeddingTimeout
+	}
+	timeout, err := time.ParseDuration(p.EmbeddingTimeout)
+	if err != nil {
+		return DefaultEmbeddingTimeout
+	}
+	return timeout
+}
 
 // Review tunes the repository guidelines injected into the review prompt and
 // the reviewer's own write actions.
@@ -555,6 +577,20 @@ func (m Models) validate() error {
 		if !validThinkingLevel(p.ThinkingLevel) {
 			return fmt.Errorf("models.providers[%d].thinking_level must be one of %s, got %q",
 				i, strings.Join(ThinkingLevels, ", "), p.ThinkingLevel)
+		}
+		if p.EmbeddingTimeout != "" {
+			if !p.IsEmbedding() {
+				return fmt.Errorf("models.providers[%d].embedding_timeout applies to an embedding provider, but %q declares no dimensions",
+					i, p.ID)
+			}
+			timeout, err := time.ParseDuration(p.EmbeddingTimeout)
+			if err != nil {
+				return fmt.Errorf("models.providers[%d].embedding_timeout must be a duration such as \"90s\" or \"2m\", got %q: %w",
+					i, p.EmbeddingTimeout, err)
+			}
+			if timeout <= 0 {
+				return fmt.Errorf("models.providers[%d].embedding_timeout must be positive, got %q", i, p.EmbeddingTimeout)
+			}
 		}
 	}
 
