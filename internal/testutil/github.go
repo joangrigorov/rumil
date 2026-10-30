@@ -122,6 +122,18 @@ type Reaction struct {
 	Content string
 }
 
+// CheckRunEntry is one check run the fake received: the state a reviewer would
+// see in the pull request's checks tab.
+type CheckRunEntry struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	HeadSHA    string `json:"head_sha"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	DetailsURL string `json:"details_url"`
+	Summary    string `json:"summary"`
+}
+
 // FakeGitHub is an httptest-backed stand-in for the GitHub REST API surface
 // that Rumil uses.
 type FakeGitHub struct {
@@ -210,6 +222,12 @@ type FakeGitHub struct {
 	MintStatus int
 	// ReviewStatus, when non-zero, is returned by the first review POST.
 	ReviewStatus int
+	// CheckRuns are the check runs the fake has opened or updated, oldest
+	// first.
+	CheckRuns []CheckRunEntry
+	// CheckStatus, when non-zero, is returned by the check-run endpoints, so a
+	// test can drive an App without the Checks permission.
+	CheckStatus int
 
 	mu             sync.Mutex
 	Mints          int
@@ -328,6 +346,13 @@ func (f *FakeGitHub) RequestLog() []string {
 	return append([]string(nil), f.Requests...)
 }
 
+// CheckRunSnapshot returns a copy of the check runs the fake has seen.
+func (f *FakeGitHub) CheckRunSnapshot() []CheckRunEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]CheckRunEntry(nil), f.CheckRuns...)
+}
+
 // MintCount returns how many installation tokens were minted.
 func (f *FakeGitHub) MintCount() int {
 	f.mu.Lock()
@@ -351,6 +376,13 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusOK, f.Files)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/reviews":
 		f.writeJSON(w, http.StatusOK, f.reviewsJSON())
+	case r.Method == http.MethodPost && r.URL.Path == f.repoPath()+"/check-runs":
+		f.handleCheckRunCreate(w, r)
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, f.repoPath()+"/check-runs/"):
+		f.handleCheckRunUpdate(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/commits/") &&
+		strings.HasSuffix(r.URL.Path, "/check-runs"):
+		f.handleCheckRunList(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
 		f.handleGraphQL(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, f.repoPath()+"/compare/"):
@@ -865,6 +897,120 @@ func (f *FakeGitHub) handleTree(w http.ResponseWriter, r *http.Request) {
 	f.writeJSON(w, http.StatusOK, map[string]any{
 		"sha": sha, "truncated": false, "tree": tree,
 	})
+}
+
+// checkRunRequest is the part of the create and update bodies the fake reads.
+type checkRunRequest struct {
+	Name       string `json:"name"`
+	HeadSHA    string `json:"head_sha"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	DetailsURL string `json:"details_url"`
+	Output     *struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	} `json:"output"`
+}
+
+func (f *FakeGitHub) handleCheckRunCreate(w http.ResponseWriter, r *http.Request) {
+	if f.refuseCheckRun(w) {
+		return
+	}
+	var request checkRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	f.mu.Lock()
+	entry := CheckRunEntry{
+		ID:         int64(len(f.CheckRuns)) + 1,
+		Name:       request.Name,
+		HeadSHA:    request.HeadSHA,
+		Status:     request.Status,
+		Conclusion: request.Conclusion,
+		DetailsURL: request.DetailsURL,
+		Summary:    checkRunSummary(request.Output),
+	}
+	f.CheckRuns = append(f.CheckRuns, entry)
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusCreated, entry)
+}
+
+func (f *FakeGitHub) handleCheckRunUpdate(w http.ResponseWriter, r *http.Request) {
+	if f.refuseCheckRun(w) {
+		return
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, f.repoPath()+"/check-runs/"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad check run id", http.StatusBadRequest)
+		return
+	}
+	var request checkRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	f.mu.Lock()
+	for i := range f.CheckRuns {
+		if f.CheckRuns[i].ID != id {
+			continue
+		}
+		f.CheckRuns[i].Status = request.Status
+		f.CheckRuns[i].Conclusion = request.Conclusion
+		if request.DetailsURL != "" {
+			f.CheckRuns[i].DetailsURL = request.DetailsURL
+		}
+		if summary := checkRunSummary(request.Output); summary != "" {
+			f.CheckRuns[i].Summary = summary
+		}
+		entry := f.CheckRuns[i]
+		f.mu.Unlock()
+		f.writeJSON(w, http.StatusOK, entry)
+		return
+	}
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+}
+
+func (f *FakeGitHub) handleCheckRunList(w http.ResponseWriter, r *http.Request) {
+	if f.refuseCheckRun(w) {
+		return
+	}
+	ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, f.repoPath()+"/commits/"), "/check-runs")
+	name := r.URL.Query().Get("check_name")
+
+	f.mu.Lock()
+	runs := make([]CheckRunEntry, 0, len(f.CheckRuns))
+	for _, entry := range f.CheckRuns {
+		if entry.HeadSHA == ref && (name == "" || entry.Name == name) {
+			runs = append(runs, entry)
+		}
+	}
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusOK, map[string]any{"total_count": len(runs), "check_runs": runs})
+}
+
+func (f *FakeGitHub) refuseCheckRun(w http.ResponseWriter) bool {
+	if f.CheckStatus == 0 {
+		return false
+	}
+	f.writeJSON(w, f.CheckStatus, map[string]string{"message": "Resource not accessible by integration"})
+	return true
+}
+
+func checkRunSummary(output *struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+}) string {
+	if output == nil {
+		return ""
+	}
+	return output.Summary
 }
 
 func (f *FakeGitHub) writeJSON(w http.ResponseWriter, status int, body any) {

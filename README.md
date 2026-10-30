@@ -173,6 +173,7 @@ Rumil authenticates as a GitHub App you own. Both ways of running it need the Ap
    | Permission | Access | Why |
    | :--- | :--- | :--- |
    | Contents | Read | Read `RUMIL.md` and the file contents behind a diff hunk. **Read and write** is what GitHub requires before it lets an App installation resolve a review thread, so a read-only App leaves its own threads for a person to close. Raising it on the App is not enough on its own: the installation's owner has to accept the change before the tokens carry it |
+   | Checks | Read and write | Report each review's progress as a check run. Optional: without it the check is skipped and the review still runs |
    | Issues | Read and write | Read the pull request conversation, and post the reply to a remembered rule |
    | Pull requests | Read and write | Read metadata, diffs, reviews and review threads; submit the review, and reply to review comments |
    | Metadata | Read | Always required by GitHub |
@@ -247,6 +248,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `worker.concurrency` | `4` | Reviews processed in parallel |
 | `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
+| `server.public_url` | unset | Public base address of the deck, used as the details link on the review's GitHub check run. Unset leaves the check without a link |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium`, `high` or `max`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `max` is for providers that expose it, such as DeepSeek V4 Flash |
@@ -349,6 +351,8 @@ The focus is capped at 2 KB and cut at a character boundary. It narrows where th
 The comment is the trigger, and the only one. A GitHub App cannot be requested as a reviewer on github.com: `POST /pulls/{n}/requested_reviewers` answers 200 and adds nobody, `gh pr edit --add-reviewer 'slug[bot]'` fails to resolve the login, and the **Reviewers** list offers people, teams and GitHub Copilot, which is special-cased. GitHub's own documentation describes requesting a review from a person, a team or Copilot, and from nothing else. Mentioning the App in a comment reaches it the way a mention reaches any account.
 
 Rumil answers a command with a `+1` reaction on the comment as soon as it has taken it, so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
+
+Each review also opens a **Rumil review** check run on the reviewed commit. It shows as in progress while the session runs and completes as success for an approval, neutral for a comment-only review, and action required for requested changes. A failed session completes it as a failure with the reason. One check run covers a commit, so a continuation updates it rather than adding another. The App needs the Checks permission; without it the check is skipped and the review still posts. Set `server.public_url` to link the check to the session page.
 
 ### Continuing a failed review
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/go-github/v69/github"
@@ -42,7 +43,8 @@ const (
 )
 
 // Client is the read-only GitHub surface for one pull request. It never
-// mutates the repository: the only write it performs is submitting a review.
+// mutates the repository: its writes are the review, the thread reasons it
+// posts, and the check run that reports the review's progress.
 type Client struct {
 	gh     *github.Client
 	owner  string
@@ -650,6 +652,121 @@ func isDuplicate(existing []ExistingComment, comment ReviewComment) bool {
 
 func canFallbackToComment(event string) bool {
 	return event == EventApprove || event == EventRequestChanges
+}
+
+// ReviewCheckName is the check run that reports one review's progress. It is a
+// single entry per commit: a continuation or a webhook redelivery updates it
+// rather than adding another.
+const ReviewCheckName = "Rumil review"
+
+// maxCheckSummaryBytes caps the one-line summary a check run carries, so a
+// provider error cannot fill the check page.
+const maxCheckSummaryBytes = 500
+
+// StartReviewCheck opens the check run for the commit under review, reusing the
+// latest one with the same name. A check run is the only progress a reviewer
+// sees where they already look, and it avoids a progress comment per turn.
+func (c *Client) StartReviewCheck(ctx context.Context, headSHA, detailsURL string, appID int64) (int64, error) {
+	if headSHA == "" {
+		return 0, errors.New("a check run needs the commit under review")
+	}
+
+	output := &github.CheckRunOutput{
+		Title:   github.Ptr(ReviewCheckName),
+		Summary: github.Ptr("Reviewing the pull request."),
+	}
+	existing, err := c.latestReviewCheck(ctx, headSHA, appID)
+	if err != nil {
+		return 0, err
+	}
+	if existing != nil {
+		id := existing.GetID()
+		update := github.UpdateCheckRunOptions{
+			Name:   ReviewCheckName,
+			Status: github.Ptr("in_progress"),
+			Output: output,
+		}
+		if detailsURL != "" {
+			update.DetailsURL = github.Ptr(detailsURL)
+		}
+		if _, _, err := c.gh.Checks.UpdateCheckRun(ctx, c.owner, c.repo, id, update); err != nil {
+			return 0, fmt.Errorf("restarting check run %d for %s/%s@%s: %w", id, c.owner, c.repo, headSHA, err)
+		}
+		return id, nil
+	}
+
+	create := github.CreateCheckRunOptions{
+		Name:    ReviewCheckName,
+		HeadSHA: headSHA,
+		Status:  github.Ptr("in_progress"),
+		Output:  output,
+	}
+	if detailsURL != "" {
+		create.DetailsURL = github.Ptr(detailsURL)
+	}
+	run, _, err := c.gh.Checks.CreateCheckRun(ctx, c.owner, c.repo, create)
+	if err != nil {
+		return 0, fmt.Errorf("creating a check run for %s/%s@%s: %w", c.owner, c.repo, headSHA, err)
+	}
+	return run.GetID(), nil
+}
+
+// FinishReviewCheck completes a check run with a conclusion and one summary
+// line. A zero id is a session that never opened one, which is not an error.
+func (c *Client) FinishReviewCheck(ctx context.Context, id int64, conclusion, summary string) error {
+	if id == 0 {
+		return nil
+	}
+	if conclusion == "" {
+		return errors.New("a completed check run needs a conclusion")
+	}
+	_, _, err := c.gh.Checks.UpdateCheckRun(ctx, c.owner, c.repo, id, github.UpdateCheckRunOptions{
+		Name:        ReviewCheckName,
+		Status:      github.Ptr("completed"),
+		Conclusion:  github.Ptr(conclusion),
+		CompletedAt: &github.Timestamp{Time: time.Now()},
+		Output: &github.CheckRunOutput{
+			Title:   github.Ptr(ReviewCheckName),
+			Summary: github.Ptr(truncateCheckSummary(summary)),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("completing check run %d for %s/%s#%d: %w", id, c.owner, c.repo, c.number, err)
+	}
+	return nil
+}
+
+// latestReviewCheck is the newest check run with the review's name that this
+// App opened on the commit, or nil when it has not opened one. The app id is
+// part of the filter because another App may use the same check name.
+func (c *Client) latestReviewCheck(ctx context.Context, headSHA string, appID int64) (*github.CheckRun, error) {
+	options := &github.ListCheckRunsOptions{
+		CheckName: github.Ptr(ReviewCheckName),
+		Filter:    github.Ptr("latest"),
+	}
+	if appID > 0 {
+		options.AppID = github.Ptr(appID)
+	}
+	runs, _, err := c.gh.Checks.ListCheckRunsForRef(ctx, c.owner, c.repo, headSHA, options)
+	if err != nil {
+		return nil, fmt.Errorf("listing check runs for %s/%s@%s: %w", c.owner, c.repo, headSHA, err)
+	}
+	if runs == nil || len(runs.CheckRuns) == 0 {
+		return nil, nil
+	}
+	return runs.CheckRuns[0], nil
+}
+
+// truncateCheckSummary caps a summary at a rune boundary.
+func truncateCheckSummary(summary string) string {
+	if len(summary) <= maxCheckSummaryBytes {
+		return summary
+	}
+	cut := maxCheckSummaryBytes
+	for cut > 0 && !utf8.RuneStart(summary[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(summary[:cut])
 }
 
 func isClientError(err error) bool {
