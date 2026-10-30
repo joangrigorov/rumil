@@ -91,6 +91,20 @@ func newReviewCmd(configPath *string) *cobra.Command {
 				"skipped_duplicates", result.SkippedDuplicates,
 				"tool_calls", result.ToolCalls,
 			)
+			if result.Usage != nil {
+				var cost any
+				if result.Usage.CostUSD != nil {
+					cost = *result.Usage.CostUSD
+				}
+				logger.Info("review usage",
+					"input_tokens", result.Usage.InputTokens,
+					"output_tokens", result.Usage.OutputTokens,
+					"cache_read_tokens", result.Usage.CacheReadTokens,
+					"cache_creation_tokens", result.Usage.CacheCreationTokens,
+					"total_tokens", result.Usage.TotalTokens(),
+					"estimated_cost_usd", cost,
+				)
+			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "review submitted to %s/%s#%d as %s\n", owner, name, pr, result.Event)
 			return nil
 		},

@@ -30,6 +30,13 @@ type ScriptedTurn struct {
 	// test sets it to move the session's estimated context past a compaction
 	// trigger; zero keeps the default.
 	PromptTokens int
+	// CachedTokens is how many of the prompt tokens the provider served from
+	// its cache. The reply reports prompt_tokens including them, which is what
+	// OpenAI does, so the provider subtracts them from the input count.
+	CachedTokens int
+	// UsageOmitted makes the reply carry no usage report, which is what a
+	// provider that does not measure tokens does.
+	UsageOmitted bool
 }
 
 // Request is a captured model request.
@@ -368,11 +375,6 @@ func messageContentFrom(body map[string]any, role string) string {
 }
 
 func completion(turn ScriptedTurn) map[string]any {
-	promptTokens := turn.PromptTokens
-	if promptTokens == 0 {
-		promptTokens = 10
-	}
-
 	message := map[string]any{"role": "assistant"}
 	finish := "stop"
 
@@ -399,7 +401,7 @@ func completion(turn ScriptedTurn) map[string]any {
 		finish = turn.FinishReason
 	}
 
-	return map[string]any{
+	body := map[string]any{
 		"id":      "chatcmpl-test",
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
@@ -409,8 +411,29 @@ func completion(turn ScriptedTurn) map[string]any {
 			"message":       message,
 			"finish_reason": finish,
 		}},
-		"usage": map[string]int{"prompt_tokens": promptTokens, "completion_tokens": 5, "total_tokens": promptTokens + 5},
 	}
+	if !turn.UsageOmitted {
+		body["usage"] = usageBody(turn)
+	}
+	return body
+}
+
+// usageBody is the usage report. prompt_tokens counts input and cache reads
+// together, as OpenAI reports it.
+func usageBody(turn ScriptedTurn) map[string]any {
+	promptTokens := turn.PromptTokens
+	if promptTokens == 0 {
+		promptTokens = 10
+	}
+	usage := map[string]any{
+		"prompt_tokens":     promptTokens,
+		"completion_tokens": 5,
+		"total_tokens":      promptTokens + 5,
+	}
+	if turn.CachedTokens > 0 {
+		usage["prompt_tokens_details"] = map[string]int{"cached_tokens": turn.CachedTokens}
+	}
+	return usage
 }
 
 // finishOf is the reason a scripted turn reports, which is its own override
@@ -462,6 +485,17 @@ func writeStream(w http.ResponseWriter, turn ScriptedTurn) {
 	} else {
 		send(chunk(map[string]any{"content": turn.Text}, nil))
 		send(chunk(map[string]any{}, finishOf(turn, "stop")))
+	}
+	// include_usage asks for one final chunk with the report and no choices.
+	if !turn.UsageOmitted {
+		send(map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   "test-model",
+			"choices": []map[string]any{},
+			"usage":   usageBody(turn),
+		})
 	}
 	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher != nil {

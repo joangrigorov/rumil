@@ -102,6 +102,9 @@ type Result struct {
 	Findings []ghapp.SubmittedFinding
 	// ResolvedFindings are the root comment ids of threads this session closed.
 	ResolvedFindings []int64
+	// Usage is the tokens the session used, nil when the provider reported no
+	// usage.
+	Usage *Usage
 }
 
 // Engine reviews one pull request at a time.
@@ -412,6 +415,44 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 		return nil
 	})
 	defer stopSteps()
+
+	// The tracker sums what the provider reports per step. The budget reads it
+	// between steps, so a session over its limit stops before paying for
+	// another request.
+	tracker := &usageTracker{}
+	budget := e.newUsageBudget()
+	if budget.enabled() {
+		stopBudget := session.OnPrepareStep(kit.HookPriorityHigh, func(kit.PrepareStepHook) *kit.PrepareStepResult {
+			mu.Lock()
+			submitted := result.ReviewSubmitted
+			mu.Unlock()
+			if submitted {
+				// A review that reached GitHub is finished; the budget has
+				// nothing left to prevent.
+				return nil
+			}
+			usage, reported := tracker.snapshot()
+			if !reported {
+				return nil
+			}
+			if err := budget.check(usage); err != nil {
+				return &kit.PrepareStepResult{Error: err}
+			}
+			return nil
+		})
+		defer stopBudget()
+	}
+	defer func() {
+		usage, reported := tracker.snapshot()
+		if !reported {
+			return
+		}
+		usage.CostUSD = e.estimateCost(usage)
+		mu.Lock()
+		result.Usage = &usage
+		mu.Unlock()
+	}()
+
 	stopCompaction := e.watchContext(ctx, session)
 	defer stopCompaction()
 	defer func() {
@@ -426,6 +467,7 @@ func (e *Engine) Review(ctx context.Context, req Request) (final *Result, err er
 	issues := &providerIssues{}
 	unsubscribe := session.Subscribe(func(event kit.Event) {
 		issues.note(event)
+		tracker.noteEvent(event)
 		if observer != nil {
 			e.observeKitEvent(ctx, observer, event)
 		}

@@ -431,3 +431,87 @@ func TestReviewTranscriptEventsKeepsWhatTheSessionLearned(t *testing.T) {
 		t.Errorf("recent transcript = %+v, want seqs 5 and 6 in order", recent)
 	}
 }
+
+// A finished session keeps what the provider reported; a provider that reported
+// nothing leaves the columns NULL rather than zero.
+func TestReviewSessionUsage(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	create := func(pr int) ReviewSession {
+		t.Helper()
+		session, err := db.CreateReviewSession(ctx, NewReviewSession{
+			InstallationID: 98765432,
+			OrgName:        "acme",
+			RepoName:       "payments",
+			PRNumber:       pr,
+			Model:          "test-model",
+		})
+		if err != nil {
+			t.Fatalf("CreateReviewSession returned error: %v", err)
+		}
+		return session
+	}
+
+	cost := 0.0123
+	priced := create(1)
+	if err := db.FinishReviewSession(ctx, priced.ID, ReviewOutcome{
+		Status: ReviewSucceeded,
+		Usage: &TokenUsage{
+			InputTokens: 1000, OutputTokens: 250, CacheReadTokens: 400,
+			CacheCreationTokens: 50, CostUSD: &cost,
+		},
+	}); err != nil {
+		t.Fatalf("FinishReviewSession returned error: %v", err)
+	}
+
+	stored, err := db.ReviewSessionByID(ctx, priced.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionByID returned error: %v", err)
+	}
+	if stored.Usage == nil {
+		t.Fatal("the stored session lost its usage")
+	}
+	want := TokenUsage{
+		InputTokens: 1000, OutputTokens: 250, CacheReadTokens: 400,
+		CacheCreationTokens: 50,
+	}
+	if stored.Usage.InputTokens != want.InputTokens ||
+		stored.Usage.OutputTokens != want.OutputTokens ||
+		stored.Usage.CacheReadTokens != want.CacheReadTokens ||
+		stored.Usage.CacheCreationTokens != want.CacheCreationTokens {
+		t.Errorf("usage = %+v, want %+v", *stored.Usage, want)
+	}
+	if stored.Usage.CostUSD == nil || *stored.Usage.CostUSD != cost {
+		t.Errorf("cost = %v, want %v", stored.Usage.CostUSD, cost)
+	}
+	if stored.Usage.TotalTokens() != 1700 {
+		t.Errorf("total tokens = %d, want 1700", stored.Usage.TotalTokens())
+	}
+
+	unreported := create(2)
+	if err := db.FinishReviewSession(ctx, unreported.ID, ReviewOutcome{Status: ReviewSucceeded}); err != nil {
+		t.Fatalf("FinishReviewSession returned error: %v", err)
+	}
+	stored, err = db.ReviewSessionByID(ctx, unreported.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionByID returned error: %v", err)
+	}
+	if stored.Usage != nil {
+		t.Errorf("usage = %+v, want nil when nothing was reported", *stored.Usage)
+	}
+
+	totals, err := db.ReviewSessionUsage(ctx, ReviewSessionFilter{OrgName: "acme", RepoName: "payments"})
+	if err != nil {
+		t.Fatalf("ReviewSessionUsage returned error: %v", err)
+	}
+	if totals.Sessions != 2 || totals.Reported != 1 {
+		t.Errorf("sessions/reported = %d/%d, want 2/1", totals.Sessions, totals.Reported)
+	}
+	if totals.TotalTokens() != 1700 {
+		t.Errorf("total tokens = %d, want 1700", totals.TotalTokens())
+	}
+	if totals.CostReported != 1 || totals.CostUSD != cost {
+		t.Errorf("cost = %v over %d sessions, want %v over one", totals.CostUSD, totals.CostReported, cost)
+	}
+}

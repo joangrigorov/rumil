@@ -95,6 +95,10 @@ type harnessOpts struct {
 	publicURL string
 	// mcp is an mcp_servers block to splice into the configuration.
 	mcp string
+	// reviewLimits appends lines to the review block, for example a budget.
+	reviewLimits string
+	// chatPrices appends price lines to the first chat provider.
+	chatPrices string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -121,6 +125,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	if opts.resolveThreads != nil {
 		reviewFields += fmt.Sprintf("  resolve_threads: %t\n", *opts.resolveThreads)
 	}
+	reviewFields += opts.reviewLimits
 
 	top := ""
 	if reviewFields != "" {
@@ -148,6 +153,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	if opts.thinkingLevel != "" {
 		chatSettings += fmt.Sprintf("      thinking_level: %q\n", opts.thinkingLevel)
 	}
+	chatSettings += opts.chatPrices
 
 	doc := fmt.Sprintf(testConfigTemplate, opts.maxTurns, keyPath, top, defaultChat,
 		llm.URL()+"/v1", llm.URL()+"/v1", chatSettings, llm.URL()+"/v1")

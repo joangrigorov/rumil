@@ -18,6 +18,7 @@
 <div class="session-facts">
   {{if .Session.Model}}<span>model <code>{{.Session.Model}}</code></span>{{end}}
   <span id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</span>
+  {{if .Session.Usage}}<span title="input / output / cache read / cache write">{{tokens .Session.Usage.InputTokens}} in · {{tokens .Session.Usage.OutputTokens}} out{{if .Session.Usage.CacheReadTokens}} · {{tokens .Session.Usage.CacheReadTokens}} cache read{{end}}{{if .Session.Usage.CacheCreationTokens}} · {{tokens .Session.Usage.CacheCreationTokens}} cache write{{end}}</span>{{if .Session.Usage.CostUSD}}<span>est. {{usd .Session.Usage.CostUSD}}</span>{{end}}{{else}}<span class="muted">usage not reported</span>{{end}}
   <span>started {{date .Session.StartedAt}}</span>
   {{if .Session.HeadSHA}}<span>head <code>{{sha .Session.HeadSHA}}</code></span>{{end}}
   {{if .Parent}}<span>continued from <a href="/ui/sessions/{{.Parent.ID}}"><code>{{short .Parent.ID}}</code></a></span>{{end}}

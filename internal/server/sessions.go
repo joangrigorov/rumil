@@ -65,6 +65,8 @@ type reviewSessionsPage struct {
 	Status   string
 	Repo     string
 	Live     bool
+	// Usage totals the whole filter, not only the page the list shows.
+	Usage store.UsageTotals
 }
 
 // reviewSessionPage is the transcript's view model. The timeline itself is
@@ -112,6 +114,12 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	usage, err := s.db.ReviewSessionUsage(r.Context(), filter)
+	if err != nil {
+		// The totals are informational; the list still stands without them.
+		s.logger.Warn("aggregating review session usage failed", "error", err)
+	}
+
 	live := false
 	for _, session := range sessions {
 		if session.Status == store.ReviewRunning {
@@ -128,6 +136,7 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 		Status:   filter.Status,
 		Repo:     rawRepo,
 		Live:     live,
+		Usage:    usage,
 	}
 	if live {
 		// The list has no JavaScript of its own: while a review runs, the page

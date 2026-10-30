@@ -629,3 +629,60 @@ func TestWorkerContinuesATurnLimitedSession(t *testing.T) {
 		t.Errorf("continuation job = %+v, want COMPLETED", job)
 	}
 }
+
+// The deck shows what a session spent, and says so plainly when the provider
+// reported nothing rather than showing a free review.
+func TestObservationDeckShowsUsage(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	ctx := context.Background()
+
+	session, err := h.db.CreateReviewSession(ctx, store.NewReviewSession{
+		InstallationID: h.cfg.GitHub.InstallationID,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+		Model:          "test-model",
+	})
+	if err != nil {
+		t.Fatalf("creating a review session: %v", err)
+	}
+	cost := 0.0012
+	if err := h.db.FinishReviewSession(ctx, session.ID, store.ReviewOutcome{
+		Status: store.ReviewSucceeded, ReviewEvent: "COMMENT",
+		Usage: &store.TokenUsage{
+			InputTokens: 1234, OutputTokens: 567, CacheReadTokens: 89,
+			CacheCreationTokens: 10, CostUSD: &cost,
+		},
+	}); err != nil {
+		t.Fatalf("finishing the review session: %v", err)
+	}
+
+	silent := newReviewSession(t, h, "ledger", 7, "Add a retry", "", store.ReviewSucceeded)
+	handler, _ := sessionsHandler(t, h)
+
+	detail := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+session.ID, adminToken, nil, "text/html")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", detail.Code, detail.Body.String())
+	}
+	body := detail.Body.String()
+	for _, want := range []string{"1,234 in", "567 out", "89 cache read", "10 cache write", "est. $0.0012"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the session page lost %q:\n%s", want, body)
+		}
+	}
+
+	unreported := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+silent.ID, adminToken, nil, "text/html")
+	if !strings.Contains(unreported.Body.String(), "usage not reported") {
+		t.Errorf("a session without usage does not say so:\n%s", unreported.Body.String())
+	}
+
+	list := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions", adminToken, nil, "text/html")
+	listBody := list.Body.String()
+	for _, want := range []string{"1,900 tokens", "est. $0.0012"} {
+		if !strings.Contains(listBody, want) {
+			t.Errorf("the session list lost %q:\n%s", want, listBody)
+		}
+	}
+}
