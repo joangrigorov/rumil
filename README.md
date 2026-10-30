@@ -37,6 +37,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Measuring review quality](#measuring-review-quality)
+- [Checking an installation with `rumil doctor`](#checking-an-installation-with-rumil-doctor)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -629,6 +630,30 @@ false_positives:          # a review may say these, and they are wrong
 A finding matches an expectation when the path is equal, the line is within two, and the comment body contains `match`, case-insensitively; an empty `match` accepts any body on that line. Each finding counts once, so repeating an expectation cannot inflate the score. The report prints per fixture and in total: expected, matched, missed, known false positives, unexpected findings, and recall. `--json` prints the same data for a script that compares two runs.
 
 The repository ships `fixtures/` as a starter set. `--fixture NAME` runs one, `--model ID` reviews with another configured chat provider, and `--timeout` bounds one fixture (the default is `worker.job_timeout`). The run disables the snapshot and operator MCP servers: the comparison is about the prompt and the model, not the tools around them.
+
+## Checking an installation with `rumil doctor`
+
+`rumil doctor` tests the configuration against every service it names, so a wrong key or a schema behind the binary is found before the first review:
+
+```bash
+rumil doctor
+rumil doctor --repo acme/payments
+rumil doctor --snapshot acme/payments --json
+```
+
+It prints the effective non-secret settings and one line per check, then exits non-zero when a configured component failed. A warning, such as memory being off, exits zero. Secrets — provider keys, the admin token, the webhook secret, the App's private key and a password in the database URL — are never printed, including in a provider's own error text. The command writes nothing to Postgres and starts no review.
+
+| Check | What it covers | Failure |
+|---|---|---|
+| `config` | The file loaded and validated; the default chat provider, model count and MCP server count | The command stops before the checks |
+| `database` | Postgres answers; the applied schema version matches the migrations embedded in the binary; pgvector is installed when memory is on | A configured database that is unreachable, behind, ahead of the binary, or missing pgvector |
+| `github` | The private key signs an App JWT, the installation token is minted, the installation's own record is read, and with `--repo` the repository is visible | A wrong key, a missing installation, or an unreadable repository |
+| `chat` | One small completion, with its latency and the usage the provider reported | The provider does not answer, or answers without a completion |
+| `embedding` | One call to the embedding provider, and the vector width it returned | The provider is configured and returns another width or no vector |
+| `snapshot` | With `--snapshot owner/name`: the default branch's archive is downloaded, extracted into a temporary directory, and removed | The archive or the extraction fails, or the configured directory is unusable |
+| `server` | `github.webhook_secret` and `moderation.admin_token` are set when `database.dsn` configures `rumil serve` | A missing webhook secret |
+
+`--json` writes the same report as an object with `config_path`, `settings` and `checks` (each with `name`, `status` and `detail`), for a script or a monitoring probe. A provider that answers without reporting usage is a warning: reviews still run, but the token and cost budgets cannot count that provider.
 
 ## Troubleshooting
 

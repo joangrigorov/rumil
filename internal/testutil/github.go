@@ -401,6 +401,8 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.handleMint(w)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/app/installations/"):
 		f.handleApp(w)
+	case r.Method == http.MethodGet && r.URL.Path == f.repoPath():
+		f.handleRepository(w)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath():
 		f.handlePull(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == f.pullPath()+"/files":
@@ -523,6 +525,20 @@ func (f *FakeGitHub) handleMint(w http.ResponseWriter) {
 // handleApp serves the installation's own record, which is the read that answers
 // without an installation token and carries both the App's slug and the
 // permissions the tokens it mints will hold.
+// handleRepository serves the repository itself, which `rumil doctor --repo`
+// and --snapshot read for visibility and for the default branch.
+func (f *FakeGitHub) handleRepository(w http.ResponseWriter) {
+	f.mu.Lock()
+	owner, repo := f.Owner, f.Repo
+	f.mu.Unlock()
+
+	f.writeJSON(w, http.StatusOK, map[string]any{
+		"name":           repo,
+		"full_name":      owner + "/" + repo,
+		"default_branch": "main",
+	})
+}
+
 func (f *FakeGitHub) handleApp(w http.ResponseWriter) {
 	f.mu.Lock()
 	slug, permissions, status := f.AppSlug, f.AppPermissions, f.AppStatus
