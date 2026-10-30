@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -143,6 +144,85 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 	}
 }
 
+// The list is a page: the newest fifty sessions, with links that keep the
+// filters and move through the rest.
+func TestObservationDeckPaginatesSessions(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	for i := 1; i <= store.ReviewListDefault+1; i++ {
+		newReviewSession(t, h, "payments", i, "Fix the flap", "The change is sound.", store.ReviewSucceeded)
+	}
+	handler, _ := sessionsHandler(t, h)
+
+	first := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions", adminToken, nil, "text/html")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first page = %d, want 200 (body: %s)", first.Code, first.Body.String())
+	}
+	body := first.Body.String()
+	if rows := strings.Count(body, `class="session-row"`); rows != store.ReviewListDefault {
+		t.Errorf("the first page has %d session rows, want %d", rows, store.ReviewListDefault)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("<strong>%d</strong> sessions", store.ReviewListDefault+1),
+		"Page 1 of 2",
+		`href="/ui/sessions?page=2" rel="next"`,
+		`aria-disabled="true">← Newer</span>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the first page does not contain %q:\n%s", want, body)
+		}
+	}
+
+	second := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?page=2", adminToken, nil, "text/html")
+	if second.Code != http.StatusOK {
+		t.Fatalf("second page = %d, want 200 (body: %s)", second.Code, second.Body.String())
+	}
+	secondBody := second.Body.String()
+	if rows := strings.Count(secondBody, `class="session-row"`); rows != 1 {
+		t.Errorf("the second page has %d session rows, want 1", rows)
+	}
+	for _, want := range []string{
+		"Page 2 of 2",
+		`href="/ui/sessions" rel="prev"`,
+		`aria-disabled="true">Older →</span>`,
+	} {
+		if !strings.Contains(secondBody, want) {
+			t.Errorf("the second page does not contain %q:\n%s", want, secondBody)
+		}
+	}
+}
+
+func TestObservationDeckRejectsAMalformedPage(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+
+	for _, page := range []string{"0", "-1", "two"} {
+		response := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?page="+page, adminToken, nil, "text/html")
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("page %q = %d, want 400 (body: %s)", page, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestObservationDeckRedirectsAPagePastTheEnd(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	newReviewSession(t, h, "payments", 42, "Fix the flap", "The change is sound.", store.ReviewSucceeded)
+	handler, _ := sessionsHandler(t, h)
+
+	response := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?page=9", adminToken, nil, "text/html")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("page 9 = %d, want 303 (body: %s)", response.Code, response.Body.String())
+	}
+	if location := response.Header().Get("Location"); location != "/ui/sessions" {
+		t.Errorf("Location = %q, want the first page", location)
+	}
+}
+
 func TestObservationDeckShowsOneSession(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
@@ -166,8 +246,11 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		"abcdef1",
 		"https://github.com/acme/payments/pull/42",
 		"/static/sessions.js",
+		"/static/markdown.js",
 		"/static/theme.js",
 		`id="theme-toggle"`,
+		`id="thinking-toggle"`,
+		`aria-pressed="true"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)

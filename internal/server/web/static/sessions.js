@@ -23,6 +23,10 @@
   var activity = document.getElementById("activity");
   var activityLabel = document.getElementById("activity-label");
   var activityTime = document.getElementById("activity-time");
+  var thinkingToggle = document.getElementById("thinking-toggle");
+
+  var THINKING_KEY = "rumil.thinking";
+  var thinkingOn = storedThinking();
 
   var tools = new Map();
   var activeThinking = null;
@@ -33,6 +37,7 @@
   var ended = false;
   var following = true;
   var followQueued = false;
+  var userInteracted = false;
   var activityText = "";
   var activityStartedAt = 0;
 
@@ -45,6 +50,7 @@
     if (!ended && live) {
       setBadge("live");
     }
+    follow();
   };
 
   source.onerror = function () {
@@ -73,11 +79,41 @@
   };
 
   if (scroll) {
+    // The replay appends many events before the first paint. A scroll event
+    // fired by that layout growth must not be mistaken for the reader leaving
+    // the bottom, so only an interaction can unfollow the stream.
+    ["wheel", "touchstart", "pointerdown"].forEach(function (name) {
+      scroll.addEventListener(name, function () {
+        userInteracted = true;
+      }, { passive: true });
+    });
+    window.addEventListener("keydown", function () {
+      userInteracted = true;
+    }, { passive: true });
     scroll.addEventListener("scroll", function () {
+      if (!userInteracted) {
+        return;
+      }
       var distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
       following = distance < 80;
     }, { passive: true });
   }
+
+  if (thinkingToggle) {
+    thinkingToggle.addEventListener("click", function () {
+      thinkingOn = !thinkingOn;
+      try {
+        window.localStorage.setItem(THINKING_KEY, thinkingOn ? "on" : "off");
+      } catch (error) {
+        // A browser that refuses storage still gets the toggle for this page.
+      }
+      applyThinking();
+      if (thinkingOn) {
+        follow();
+      }
+    });
+  }
+  applyThinking();
 
   function render(event) {
     var payload = event.payload || {};
@@ -310,6 +346,13 @@
     }
     source.close();
     follow();
+    // The final layout can settle just after the last event. Scroll once more
+    // unless the reader has moved away from the end.
+    window.setTimeout(function () {
+      if (following && scroll) {
+        scroll.scrollTop = scroll.scrollHeight;
+      }
+    }, 80);
   }
 
   function beginThinking() {
@@ -397,8 +440,17 @@
       block = outputBlock();
     }
     var streamed = block.body.textContent;
+    var value = content || streamed;
     block.body.replaceChildren();
-    block.body.textContent = content || streamed;
+    block.body.classList.add("markdown");
+    if (window.RumilMarkdown) {
+      block.body.innerHTML = window.RumilMarkdown.render(value);
+    } else {
+      block.body.textContent = value;
+    }
+    // The message is final. A later tool content event gets its own block
+    // instead of appending raw text to the rendered one.
+    activeOutput = null;
   }
 
   function toolCard(payload) {
@@ -570,14 +622,36 @@
     }
   }
 
+  function storedThinking() {
+    try {
+      return window.localStorage.getItem(THINKING_KEY) !== "off";
+    } catch (error) {
+      return true;
+    }
+  }
+
+  function applyThinking() {
+    document.body.dataset.thinking = thinkingOn ? "on" : "off";
+    if (!thinkingToggle) {
+      return;
+    }
+    thinkingToggle.setAttribute("aria-pressed", thinkingOn ? "true" : "false");
+    thinkingToggle.title = thinkingOn ? "Hide the model's thinking" : "Show the model's thinking";
+  }
+
   function follow() {
     if (!following || !scroll || followQueued) {
       return;
     }
     followQueued = true;
+    // A second frame lets the browser finish laying out the replayed events
+    // before the scroll target is read; one frame is too early on a large
+    // transcript.
     window.requestAnimationFrame(function () {
-      followQueued = false;
-      scroll.scrollTop = scroll.scrollHeight;
+      window.requestAnimationFrame(function () {
+        followQueued = false;
+        scroll.scrollTop = scroll.scrollHeight;
+      });
     });
   }
 

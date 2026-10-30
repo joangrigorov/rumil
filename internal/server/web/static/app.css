@@ -925,6 +925,25 @@ body.console .sessions {
   list-style: none;
 }
 
+body.console .pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0 0;
+}
+
+body.console .pager-status {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+body.console .pager-disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 body.console .session-row {
   display: block;
   padding: 10px 6px;
@@ -1108,6 +1127,33 @@ body.console .session-clock {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+body.console .thinking-toggle {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+body.console .thinking-toggle:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+body.console .thinking-toggle[aria-pressed="true"] {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+body.console .thinking-toggle .glyph {
+  margin-right: 2px;
 }
 
 body.console .session-facts {
@@ -1315,6 +1361,10 @@ body.console .thinking {
   margin: 2px 0 5px;
 }
 
+body.console[data-thinking="off"] .thinking {
+  display: none;
+}
+
 body.console .thinking > summary {
   display: flex;
   align-items: baseline;
@@ -1381,6 +1431,154 @@ body.console .output-text {
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* The final message is rendered Markdown. The blocks keep the console's
+ * tight rhythm: mono type, accent headings, and code on the well background. */
+body.console .output-text.markdown {
+  white-space: normal;
+}
+
+body.console .output-text.markdown > :first-child {
+  margin-top: 0;
+}
+
+body.console .output-text.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+body.console .output-text.markdown p {
+  margin: 0 0 6px;
+}
+
+body.console .output-text.markdown h1,
+body.console .output-text.markdown h2,
+body.console .output-text.markdown h3,
+body.console .output-text.markdown h4,
+body.console .output-text.markdown h5,
+body.console .output-text.markdown h6 {
+  margin: 10px 0 4px;
+  color: var(--accent);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+body.console .output-text.markdown h1 {
+  font-size: 14px;
+}
+
+body.console .output-text.markdown h2 {
+  font-size: 13.5px;
+}
+
+body.console .output-text.markdown h3,
+body.console .output-text.markdown h4,
+body.console .output-text.markdown h5,
+body.console .output-text.markdown h6 {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+body.console .output-text.markdown strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+body.console .output-text.markdown em {
+  color: var(--muted);
+}
+
+body.console .output-text.markdown del {
+  color: var(--faint);
+}
+
+body.console .output-text.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+body.console .output-text.markdown code {
+  padding: 0 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--well-deep);
+  color: var(--ink);
+  font-size: 11.5px;
+}
+
+body.console .output-text.markdown pre.md-code {
+  margin: 5px 0 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-dim);
+  border-radius: 3px;
+  background: var(--well-deep);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+body.console .output-text.markdown pre.md-code code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+body.console .output-text.markdown ul,
+body.console .output-text.markdown ol {
+  margin: 3px 0 7px;
+  padding-left: 18px;
+}
+
+body.console .output-text.markdown li {
+  margin: 1px 0;
+}
+
+body.console .output-text.markdown li::marker {
+  color: var(--accent-dim);
+}
+
+body.console .output-text.markdown blockquote {
+  margin: 4px 0 7px;
+  padding: 1px 0 1px 9px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--muted);
+}
+
+body.console .output-text.markdown blockquote p {
+  margin: 0 0 4px;
+}
+
+body.console .output-text.markdown hr {
+  margin: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+body.console .output-text.markdown .md-table-wrap {
+  margin: 5px 0 8px;
+  overflow-x: auto;
+}
+
+body.console .output-text.markdown table {
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+body.console .output-text.markdown th,
+body.console .output-text.markdown td {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+body.console .output-text.markdown th {
+  background: var(--well-deep);
+  color: var(--accent);
+  font-weight: 650;
 }
 
 /* ---- tool calls ------------------------------------------------------- */
