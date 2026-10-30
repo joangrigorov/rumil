@@ -93,6 +93,8 @@ type harnessOpts struct {
 	snapshot string
 	// publicURL sets server.public_url, which is what a check run links to.
 	publicURL string
+	// mcp is an mcp_servers block to splice into the configuration.
+	mcp string
 }
 
 func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, opts harnessOpts) *harness {
@@ -135,6 +137,7 @@ func newHarness(t *testing.T, gh *testutil.FakeGitHub, llm *testutil.FakeLLM, op
 	}
 	top += opts.memory
 	top += opts.compaction
+	top += opts.mcp
 	if opts.snapshot != "" {
 		top += opts.snapshot
 	} else {

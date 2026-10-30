@@ -27,6 +27,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Configure](#configure)
 - [Review one pull request from the command line](#review-one-pull-request-from-the-command-line)
 - [Run the webhook server](#run-the-webhook-server)
+- [Custom MCP servers](#custom-mcp-servers)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Troubleshooting](#troubleshooting)
@@ -234,6 +235,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `app.max_agent_turns` | `25` | How many model steps one session may take. `0` removes the cap, so the session runs until the model stops or the job timeout arrives |
 | `app.max_diff_bytes` | `250000` | Larger diffs are paginated instead of handed over in one piece. A pull request above GitHub's 300-file diff limit is read through the files API instead, so it still gets a review and still accepts inline comments |
 | `app.log_level` | `info` | `debug`, `info`, `warn` or `error`. Logs are JSON on stderr |
+| `mcp_servers` | empty | Operator-provided MCP servers whose tools a review may call. Each needs a `name` and either `command` (stdio) or `url` (http), and `tools.allow` names the tools that are exposed. See [Custom MCP servers](#custom-mcp-servers) |
 | `review.guidelines_ref` | `base` | Which revision `RUMIL.md` is read from: `base` (the pull request's base, so a branch cannot rewrite its own rules) or `head` |
 | `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
 | `compaction.enabled` | `true` | Whether a session summarizes its older context once it reaches `compaction.trigger_tokens`. On by default; set it to `false` to let the model's context window fill |
@@ -365,6 +367,48 @@ rumil sessions continue <session-id> --turns 25 --requested-by alice
 `--turns` is the new attempt's own step budget. Without it the attempt uses `app.max_agent_turns`, and a configured `0` still means unlimited. The command queues a job and prints the session it will continue; `rumil serve` runs it. The new attempt starts with the earlier attempt's tool results, partial summary and the same commit, and is recorded as a separate session that points at its parent, with who asked and when. A session that already submitted a review is refused, and so is one whose pull request has moved since the earlier attempt.
 
 The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears for any failed session that has not been continued yet, and uses the configured budget. It shares `moderation.admin_token` with the moderation surface, so the page records the credential as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
+
+## Custom MCP servers
+
+Rumil's own tools read the pull request and the reviewed commit. An [MCP](https://modelcontextprotocol.io) server adds capabilities it does not ship, for example a workspace that checks the commit out and runs its test suite, or an internal documentation search. The reviewer sees the allowed tools next to its own and can call them during a review.
+
+```yaml
+mcp_servers:
+  - name: "workspace"                 # lowercase handle, letters, digits, - and _
+    transport: "stdio"                # stdio (default) or http
+    command: "rumil-workspace"        # stdio: the program Rumil starts
+    args: ["--root", "/srv/checkout"]
+    env:                              # merged over the service's own environment
+      WORKSPACE_TOKEN: "${WORKSPACE_TOKEN}"
+    timeout: "60s"                    # one connect, list or call
+    max_output_bytes: 65536           # one tool result, cut with a marker
+    tools:
+      allow: ["run_tests", "list_checks"]   # the trust boundary; empty exposes none
+
+  - name: "docs"
+    transport: "http"
+    url: "https://mcp.example.com/mcp"
+    headers:
+      Authorization: "Bearer ${DOCS_TOKEN}"
+    tools:
+      allow: ["search_docs"]
+```
+
+**The allow list is the trust boundary.** An MCP server runs with the service account's privileges, outside any sandbox: a tool can run commands, write files, or make network requests. Rumil exposes only the tools named in `tools.allow`, and names each one `mcp__<server>__<tool>` so the prompt can tell it from a built-in tool. Review the server and the tools you allow as you would review any code that runs in production.
+
+A stdio server receives the session as environment variables, in addition to the service's own environment and its configured `env`:
+
+| Variable | Value |
+| :--- | :--- |
+| `RUMIL_REPO` | `owner/name` |
+| `RUMIL_PR` | The pull request number |
+| `RUMIL_HEAD_SHA` | The commit under review |
+| `RUMIL_SESSION_ID` | The recorded session id, when there is one |
+| `RUMIL_WORKSPACE` | The extracted working tree at the reviewed commit, when the snapshot is on |
+
+`RUMIL_WORKSPACE` is what lets a test-runner server act on the same commit the reviewer is reading. It is removed when the session ends.
+
+A server that fails to connect, or a tool that errors, costs that server's tools for that review; the review continues with its own. Tool output is capped at `max_output_bytes` (1 MiB at most) and treated as untrusted data by the reviewer's rules.
 
 ## Repository guidelines
 

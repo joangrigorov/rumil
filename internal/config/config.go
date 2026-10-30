@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -113,17 +114,18 @@ var (
 
 // Config is the whole rumil.yaml document.
 type Config struct {
-	App        App        `yaml:"app"`
-	GitHub     GitHub     `yaml:"github"`
-	Review     Review     `yaml:"review"`
-	Compaction Compaction `yaml:"compaction"`
-	Snapshot   Snapshot   `yaml:"snapshot"`
-	Memory     Memory     `yaml:"memory"`
-	Worker     Worker     `yaml:"worker"`
-	Server     Server     `yaml:"server"`
-	Models     Models     `yaml:"models"`
-	Database   Database   `yaml:"database"`
-	Moderation Moderation `yaml:"moderation"`
+	App        App         `yaml:"app"`
+	GitHub     GitHub      `yaml:"github"`
+	Review     Review      `yaml:"review"`
+	Compaction Compaction  `yaml:"compaction"`
+	Snapshot   Snapshot    `yaml:"snapshot"`
+	Memory     Memory      `yaml:"memory"`
+	Worker     Worker      `yaml:"worker"`
+	Server     Server      `yaml:"server"`
+	MCPServers []MCPServer `yaml:"mcp_servers"`
+	Models     Models      `yaml:"models"`
+	Database   Database    `yaml:"database"`
+	Moderation Moderation  `yaml:"moderation"`
 }
 
 // Compaction controls how a session condenses its older messages when the
@@ -223,6 +225,60 @@ type Server struct {
 	// PublicURL is the address a reviewer reaches the deck on. It is what a
 	// GitHub check run links to; empty leaves the check without a details link.
 	PublicURL string `yaml:"public_url"`
+}
+
+// MCPServer is one operator-provided MCP server whose tools a review may use.
+// The allow list is the trust boundary: tools run with the service account's
+// privileges, outside any sandbox Rumil provides.
+type MCPServer struct {
+	Name      string            `yaml:"name"`
+	Transport string            `yaml:"transport"` // stdio | http
+	Command   string            `yaml:"command"`
+	Args      []string          `yaml:"args"`
+	Env       map[string]string `yaml:"env"`
+	URL       string            `yaml:"url"`
+	Headers   map[string]string `yaml:"headers"`
+	Timeout   string            `yaml:"timeout"`
+	// MaxOutputBytes caps one tool result. A larger result is cut at a rune
+	// boundary with a marker, so one call cannot fill the session's context.
+	MaxOutputBytes int `yaml:"max_output_bytes"`
+	// Tools says which of the server's tools are exposed to the model. An empty
+	// list exposes none: the operator names every tool they trust.
+	Tools MCPToolPolicy `yaml:"tools"`
+}
+
+// MCPToolPolicy is the allow list for one MCP server.
+type MCPToolPolicy struct {
+	Allow []string `yaml:"allow"`
+}
+
+// DefaultMCPTimeout bounds a call to an operator's MCP server.
+const DefaultMCPTimeout = 60 * time.Second
+
+// DefaultMCPMaxOutputBytes caps one MCP tool result.
+const DefaultMCPMaxOutputBytes = 64 << 10
+
+// MaxMCPMaxOutputBytes is the largest result an operator may allow.
+const MaxMCPMaxOutputBytes = 1 << 20
+
+// TimeoutOrDefault is the call timeout, or the default when unset.
+func (m MCPServer) TimeoutOrDefault() time.Duration {
+	if m.Timeout == "" {
+		return DefaultMCPTimeout
+	}
+	timeout, err := time.ParseDuration(m.Timeout)
+	if err != nil {
+		return DefaultMCPTimeout
+	}
+	return timeout
+}
+
+// MaxOutputOrDefault is the result cap, or the default when unset.
+func (m MCPServer) MaxOutputOrDefault() int {
+	if m.MaxOutputBytes <= 0 {
+		return DefaultMCPMaxOutputBytes
+	}
+	return m.MaxOutputBytes
 }
 
 // App holds process-wide behavior switches.
@@ -443,6 +499,11 @@ func (c *Config) applyDefaults() {
 		c.Server.Listen = DefaultListen
 	}
 	c.Server.PublicURL = strings.TrimRight(c.Server.PublicURL, "/")
+	for i := range c.MCPServers {
+		if c.MCPServers[i].Transport == "" {
+			c.MCPServers[i].Transport = "stdio"
+		}
+	}
 	if c.Compaction.TriggerTokens == 0 {
 		c.Compaction.TriggerTokens = DefaultCompactionTriggerTokens
 	}
@@ -452,6 +513,73 @@ func (c *Config) applyDefaults() {
 	if c.Compaction.KeepRecentTokens == 0 {
 		c.Compaction.KeepRecentTokens = DefaultCompactionKeepRecentTokens
 	}
+}
+
+// maxMCPServers bounds the operator-provided tools a session may carry. Every
+// advertised tool schema costs prompt budget on every request.
+const maxMCPServers = 20
+
+// mcpServerNamePattern keeps a server name usable in an advertised tool name.
+var mcpServerNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// validateMCPServers checks the operator's servers. A stdio server needs a
+// command, an http server needs an address, and both need a name that can be
+// prefixed onto a tool the model can call.
+func validateMCPServers(servers []MCPServer) error {
+	if len(servers) > maxMCPServers {
+		return fmt.Errorf("mcp_servers holds %d servers, want at most %d", len(servers), maxMCPServers)
+	}
+	seen := make(map[string]bool, len(servers))
+	for i, server := range servers {
+		name := strings.TrimSpace(server.Name)
+		if !mcpServerNamePattern.MatchString(name) {
+			return fmt.Errorf("mcp_servers[%d].name must be a lowercase handle of letters, digits, - or _, at most 32 characters, got %q", i, server.Name)
+		}
+		if seen[name] {
+			return fmt.Errorf("mcp_servers has two servers named %q", name)
+		}
+		seen[name] = true
+
+		switch server.Transport {
+		case "stdio":
+			if strings.TrimSpace(server.Command) == "" {
+				return fmt.Errorf("mcp_servers[%d] (%s) is stdio and needs a command", i, name)
+			}
+			if server.URL != "" {
+				return fmt.Errorf("mcp_servers[%d] (%s) is stdio and cannot have a url", i, name)
+			}
+		case "http":
+			if strings.TrimSpace(server.URL) == "" {
+				return fmt.Errorf("mcp_servers[%d] (%s) is http and needs a url", i, name)
+			}
+			parsed, err := url.Parse(server.URL)
+			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return fmt.Errorf("mcp_servers[%d] (%s).url must be an absolute http or https URL, got %q", i, name, server.URL)
+			}
+			if server.Command != "" {
+				return fmt.Errorf("mcp_servers[%d] (%s) is http and cannot have a command", i, name)
+			}
+		default:
+			return fmt.Errorf("mcp_servers[%d] (%s).transport must be stdio or http, got %q", i, name, server.Transport)
+		}
+
+		if server.Timeout != "" {
+			timeout, err := time.ParseDuration(server.Timeout)
+			if err != nil || timeout <= 0 {
+				return fmt.Errorf("mcp_servers[%d] (%s).timeout must be a positive duration such as \"60s\", got %q", i, name, server.Timeout)
+			}
+		}
+		if server.MaxOutputBytes < 0 || server.MaxOutputBytes > MaxMCPMaxOutputBytes {
+			return fmt.Errorf("mcp_servers[%d] (%s).max_output_bytes must be between 1 and %d, got %d",
+				i, name, MaxMCPMaxOutputBytes, server.MaxOutputBytes)
+		}
+		for _, tool := range server.Tools.Allow {
+			if strings.TrimSpace(tool) == "" {
+				return fmt.Errorf("mcp_servers[%d] (%s).tools.allow holds an empty tool name", i, name)
+			}
+		}
+	}
+	return nil
 }
 
 // Validate enforces the schema rules that v0.0.1 depends on: app limits, GitHub
@@ -474,6 +602,9 @@ func (c *Config) Validate() error {
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return fmt.Errorf("server.public_url must be an absolute http or https URL, got %q", c.Server.PublicURL)
 		}
+	}
+	if err := validateMCPServers(c.MCPServers); err != nil {
+		return err
 	}
 
 	switch c.Review.GuidelinesRef {

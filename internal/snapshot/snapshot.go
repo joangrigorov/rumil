@@ -260,6 +260,11 @@ func (s *Snapshot) Close() error {
 // Count is the number of files in the tree.
 func (s *Snapshot) Count() int { return len(s.files) }
 
+// Dir is the root of the extracted tree. It is what an operator-provided MCP
+// server receives as RUMIL_WORKSPACE, so a test runner reads the commit Rumil
+// is reviewing rather than its own checkout.
+func (s *Snapshot) Dir() string { return s.dir }
+
 // All returns a copy of the tree.
 func (s *Snapshot) All() []File { return append([]File(nil), s.files...) }
 
