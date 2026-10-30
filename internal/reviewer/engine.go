@@ -42,6 +42,11 @@ const stopReasonLength = "length"
 // that the analysis it already did is enough for the tool call.
 const outputLimitNudge = "Your last response hit the model output token limit before you called submit_pr_review, so no review was submitted. Do not repeat the analysis. Call submit_pr_review now with the findings you already have, and keep the call short."
 
+// continueNudge is the message a session gets when a turn ends with text
+// instead of the submit call. A slow provider can drop a turn back with no
+// tool calls, and the review would otherwise fail with everything it learned.
+const continueNudge = "Your last turn ended without calling submit_pr_review, so no review was posted. Continue from the work you have done: verify anything still open, then call submit_pr_review with your summary and inline comments. Do not end the turn before that call."
+
 // Request identifies the pull request to review.
 type Request struct {
 	Owner  string
@@ -428,6 +433,20 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			"tool_calls", result.ToolCalls,
 		)
 		if _, promptErr = runPrompt(outputLimitNudge); promptErr != nil {
+			return &result, promptErr
+		}
+	}
+
+	// A provider that stalls can hand the turn back with text and no tool
+	// call. One more prompt costs one model request and turns that dead end
+	// into a review; a second one would only spend the budget again, so the
+	// no-review error below stays the final answer.
+	if !result.ReviewSubmitted && !truncated && hasBudget {
+		e.logger.Warn("the model ended its turn without submitting a review; asking it to continue",
+			"steps", result.Steps,
+			"tool_calls", result.ToolCalls,
+		)
+		if _, promptErr = runPrompt(continueNudge); promptErr != nil {
 			return &result, promptErr
 		}
 	}
