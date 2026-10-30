@@ -192,6 +192,8 @@ func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job)
 		p.review(ctx, logger, job, command.Instruction)
 	case commandRemember:
 		p.remember(ctx, logger, job, delivery, command)
+	case commandWhy, commandExplain:
+		p.answer(ctx, logger, job, delivery, command)
 	default:
 		// The webhook refuses a verb it does not know, so this is a job that
 		// outlived the version that queued it.
@@ -569,6 +571,54 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 		"inserted", result.Inserted,
 		"memory", result.Memory.ID,
 		"status", result.Memory.Status,
+		"replied", result.Replied,
+		"requested_by", req.RequestedBy,
+	)
+	p.finish(ctx, logger, job, true, nil)
+}
+
+// answer explains a finding inside the review thread the question was asked
+// in. It is one model call and one reply: the answer session has no tools and
+// cannot open a review.
+func (p *Pool) answer(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
+	line := delivery.Comment.Line
+	if line < 1 {
+		line = delivery.Comment.OriginalLine
+	}
+	req := reviewer.AnswerRequest{
+		Owner:       job.OrgName,
+		Repo:        job.RepoName,
+		Number:      job.PRNumber,
+		CommentID:   delivery.Comment.ID,
+		InReplyToID: delivery.Comment.InReplyToID,
+		Question:    command.Instruction,
+		RequestedBy: delivery.Comment.User.Login,
+		Path:        delivery.Comment.Path,
+		Line:        line,
+		DiffHunk:    delivery.Comment.DiffHunk,
+	}
+
+	answerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	defer cancel()
+
+	result, err := p.engine.Answer(answerCtx, req)
+	if err != nil {
+		if classifyFailure(err) == jobRetry {
+			logger.Warn("answer interrupted, the job returns to the queue on the next start", "error", err)
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("the answer exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+		} else {
+			logger.Error("answering the question failed", "error", err)
+		}
+		p.finish(ctx, logger, job, false, err)
+		return
+	}
+
+	logger.Info("question handled",
+		"comment_id", req.CommentID,
+		"path", req.Path,
 		"replied", result.Replied,
 		"requested_by", req.RequestedBy,
 	)

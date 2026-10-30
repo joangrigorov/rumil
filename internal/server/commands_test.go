@@ -51,6 +51,8 @@ func reviewCommentPayload(action, login, userType, body string, commentID, inRep
 		"id":                 commentID,
 		"body":               body,
 		"path":               "main.go",
+		"line":               12,
+		"original_line":      12,
 		"diff_hunk":          "@@ -10,4 +10,6 @@ func main() {",
 		"in_reply_to_id":     inReplyTo,
 		"author_association": testAssociation,
@@ -799,6 +801,168 @@ func TestAReviewCommandNeedsStandingOnAPublicRepository(t *testing.T) {
 				t.Errorf("queued jobs = %d, want %d", queued, want)
 			}
 		})
+	}
+}
+
+// A `@rumil why` reply on Rumil's own finding posts one threaded answer
+// explaining it, and opens no review.
+func TestWhyCommandAnswersRumilsOwnFinding(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		testutil.ReviewComment(101, 0, "rumil[bot]", "This wraps the settlement call without a timeout."),
+		testutil.ReviewComment(102, 101, "octocat", "Why is that a problem?"),
+	}
+
+	const answer = "The provider can hold the response headers open, so the worker waits on a call that has no bound."
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueText(answer)
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	body := reviewCommentPayload("created", "octocat", "User", "@rumil why is that a problem", 103, 101)
+	response := h.deliver(t, handler, "pull_request_review_comment", "d-why", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "d-why"))
+
+	posted := gh.PostedComments()
+	if len(posted) != 1 {
+		t.Fatalf("posted %d comments, want one answer: %+v", len(posted), posted)
+	}
+	if posted[0].InReplyTo != 103 {
+		t.Errorf("the answer carries in_reply_to %d, want the command's comment 103", posted[0].InReplyTo)
+	}
+	if !strings.Contains(posted[0].Body, answer) {
+		t.Errorf("the answer does not carry the model's text:\n%s", posted[0].Body)
+	}
+	if !strings.Contains(posted[0].Body, "<!-- rumil-answer:103 -->") {
+		t.Errorf("the answer carries no retry marker:\n%s", posted[0].Body)
+	}
+	if reviews := gh.SubmittedReviews(); len(reviews) != 0 {
+		t.Errorf("submitted %d reviews, want the question to open none", len(reviews))
+	}
+	if tools := llm.OfferedToolNames(); len(tools) != 0 {
+		t.Errorf("the answer session was offered tools %v, want none", tools)
+	}
+
+	requests := llm.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("model requests = %d, want one", len(requests))
+	}
+	prompt := requests[0].SystemPrompt
+	for _, want := range []string{
+		"This wraps the settlement call without a timeout.",
+		`yours="true"`,
+		"starts from your own finding",
+		"is that a problem",
+		"main.go line 12",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the answer prompt does not carry %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// A question in a thread Rumil never wrote in is answered from the thread's
+// context, without the answer claiming the finding as Rumil's.
+func TestWhyCommandAnswersAnotherAuthorsThread(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		testutil.ReviewComment(201, 0, "octocat", "Settlement is retried at this layer on purpose."),
+	}
+
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueText("The retry is here because the caller treats a timeout as retryable.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	body := reviewCommentPayload("created", "alice", "User", "@rumil why retry at this layer", 202, 201)
+	response := h.deliver(t, handler, "pull_request_review_comment", "d-why-other", body, sign(webhookSecret, body))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", response.Code, response.Body.String())
+	}
+
+	runPool(t, h, gh, jobCompleted(t, h, "d-why-other"))
+
+	if posted := gh.PostedComments(); len(posted) != 1 || posted[0].InReplyTo != 202 {
+		t.Fatalf("posted %+v, want one answer under comment 202", posted)
+	}
+	prompt := llm.Requests()[0].SystemPrompt
+	if !strings.Contains(prompt, "started by someone else") {
+		t.Errorf("the prompt does not tell the session the thread is not Rumil's:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Settlement is retried at this layer on purpose.") {
+		t.Errorf("the prompt does not carry the thread it answers:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "starts from your own finding") {
+		t.Errorf("the prompt claims somebody else's thread as Rumil's:\n%s", prompt)
+	}
+}
+
+// A `why` in the pull request conversation has no hunk and no thread, so it is
+// dropped before it costs a worker.
+func TestWhyCommandOnAConversationCommentIsIgnored(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	body := issueCommentPayload("created", "octocat", "User", "@rumil why is the retry unbounded", 501)
+	response := h.deliver(t, handler, "issue_comment", "d-why-conversation", body, sign(webhookSecret, body))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "review thread only") {
+		t.Fatalf("status = %d body = %s, want the conversation command ignored", response.Code, response.Body.String())
+	}
+
+	queued, err := h.db.CountJobs(context.Background(), store.StatusQueued)
+	if err != nil {
+		t.Fatalf("CountJobs returned error: %v", err)
+	}
+	if queued != 0 {
+		t.Errorf("queued jobs = %d, want none", queued)
+	}
+}
+
+// A redelivery or a rerun after an interruption must not answer the same
+// comment twice.
+func TestWhyCommandIsAnsweredOnce(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		testutil.ReviewComment(101, 0, "rumil[bot]", "This line wraps the call without a timeout."),
+	}
+	llm := testutil.NewFakeLLM(t)
+	llm.QueueText("The call is bounded by the worker timeout upstream.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler := server.Handler(h.webhook(), h.db, nil)
+
+	for _, id := range []string{"d-why-once", "d-why-once-retry"} {
+		body := reviewCommentPayload("created", "octocat", "User", "@rumil why", 202, 101)
+		if response := h.deliver(t, handler, "pull_request_review_comment", id, body, sign(webhookSecret, body)); response.Code != http.StatusAccepted {
+			t.Fatalf("%s: status = %d, want 202", id, response.Code)
+		}
+	}
+
+	pool := server.NewPool(h.db, h.engine(t, gh), h.cfg.App.BotHandle, 1, h.logger)
+	poolCtx, stopPool := context.WithCancel(context.Background())
+	pool.Start(poolCtx)
+
+	// One worker runs the two jobs in order, so the first answer is on the pull
+	// request before the second job looks for it.
+	waitFor(t, "both runs to finish", func() bool {
+		return jobCompleted(t, h, "d-why-once")() && jobCompleted(t, h, "d-why-once-retry")()
+	})
+	stopPool()
+	pool.Wait()
+
+	if posted := gh.PostedComments(); len(posted) != 1 {
+		t.Errorf("posted %d comments, want the answer to stay single: %+v", len(posted), posted)
+	}
+	if requests := llm.Count(); requests != 1 {
+		t.Errorf("model requests = %d, want the retry to reuse the first answer", requests)
 	}
 }
 

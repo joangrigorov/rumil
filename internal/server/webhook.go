@@ -38,7 +38,7 @@ const (
 	eventPullRequestReview = "pull_request_review"
 )
 
-// The two commands the conversation supports.
+// The commands the conversation supports.
 const (
 	// commandRemember records a rule from the comment.
 	commandRemember = "remember"
@@ -47,6 +47,10 @@ const (
 	// every surface: the API refuses one, and the people who hit that can ask
 	// in the conversation instead.
 	commandReview = "review"
+	// commandWhy and commandExplain ask Rumil to explain a finding it posted,
+	// as a reply inside the review thread the finding opened.
+	commandWhy     = "why"
+	commandExplain = "explain"
 )
 
 // signatureHeader carries the HMAC of the raw webhook body.
@@ -295,15 +299,21 @@ func (w *Webhook) classify(eventType string, d payload) (store.Job, string) {
 		if !ok {
 			return store.Job{}, fmt.Sprintf("the comment carries no @%s command", w.botLogin)
 		}
-		if command.Verb != commandRemember && command.Verb != commandReview {
+		if command.Verb != commandRemember && command.Verb != commandReview &&
+			!isAnswerVerb(command.Verb) {
 			return store.Job{}, fmt.Sprintf("command %q is not supported", command.Verb)
 		}
 		if command.Verb == commandRemember && command.Instruction == "" {
 			return store.Job{}, "the command carries no instruction"
 		}
-		// A command costs the operator model calls, and a review command
-		// spends them whether or not it records anything, so both verbs need
-		// the same standing.
+		if isAnswerVerb(command.Verb) && eventType != eventReviewComment {
+			// An answer needs the hunk and the thread. A conversation comment
+			// has neither, so the person is asked to reply where the finding is.
+			return store.Job{}, "why and explain are answered inside a review thread only"
+		}
+		// A command costs the operator model calls, and every verb spends them
+		// whether or not it records anything, so all of them need the same
+		// standing.
 		if !w.mayCommand(d) {
 			// Dropped here rather than in the worker, so an outsider's command
 			// never reaches the database, the model, or the embedder: the point
@@ -415,10 +425,14 @@ type comment struct {
 	// this comment records is exempt from moderation.
 	AuthorAssociation string `json:"author_association"`
 	HTMLURL           string `json:"html_url"`
-	// The next three are set on a review-thread reply only.
-	Path        string `json:"path"`
-	DiffHunk    string `json:"diff_hunk"`
-	InReplyToID int64  `json:"in_reply_to_id"`
+	// The next four are set on a review-thread reply only. Line is the line the
+	// comment hangs on in the reviewed diff; OriginalLine is the line it was
+	// written on, which is what remains when the comment is outdated.
+	Path         string `json:"path"`
+	Line         int    `json:"line"`
+	OriginalLine int    `json:"original_line"`
+	DiffHunk     string `json:"diff_hunk"`
+	InReplyToID  int64  `json:"in_reply_to_id"`
 }
 
 type pullRequest struct {

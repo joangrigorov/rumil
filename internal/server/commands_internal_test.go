@@ -35,6 +35,14 @@ func TestParseCommand(t *testing.T) {
 		{"review alone", "@rumil review", true, "review", "", false},
 		{"a focus that opens with org", "@rumil review. org consistency matters here", true, "review", "org consistency matters here", false},
 
+		// A question in a review thread is the same shape: the words after the
+		// verb are the question, and the verb is readable as a sentence.
+		{"why with a question", "@rumil why does this wrap the call", true, "why", "does this wrap the call", false},
+		{"why with a closing period", "@rumil why. The retry loop is not visible here", true, "why", "The retry loop is not visible here", false},
+		{"why alone", "@rumil why", true, "why", "", false},
+		{"explain in another case", "@rumil EXPLAIN this with the caller in mind", true, "explain", "this with the caller in mind", false},
+		{"explain with a colon", "@rumil explain: what makes this safe", true, "explain", "what makes this safe", false},
+
 		// T-040-01: the two ways a comment asks for an organization-wide rule.
 		{"the long scope marker", "@rumil remember --org all services log with slog", true, "remember", "all services log with slog", true},
 		{"the short scope marker", "@rumil remember org all services log with slog", true, "remember", "all services log with slog", true},

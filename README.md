@@ -32,6 +32,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Custom MCP servers](#custom-mcp-servers)
 - [Token usage and cost](#token-usage-and-cost)
 - [The queue and cancelling a review](#the-queue-and-cancelling-a-review)
+- [Asking why about a finding](#asking-why-about-a-finding)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Measuring review quality](#measuring-review-quality)
@@ -455,6 +456,18 @@ Rumil checks the budget between steps, after a step's usage is reported and befo
 Each row links to a confirmation page. Cancelling a **queued** job moves it to `CANCELLED` before a worker claims it, so nothing runs. Cancelling a **running review** sets a flag the worker polls; the engine checks it between steps and before a tool call, stops the session, records it as `CANCELLED`, and completes the GitHub check run as cancelled. A review that already reached GitHub before the flag was read stays posted and the session is recorded as a success: the cancel stops work that is still going, and does not retract a review.
 
 The same action appears on a running session's page. It needs `moderation.admin_token`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
+
+## Asking why about a finding
+
+A reply of `@rumil why` (or `@rumil explain`) in a review thread asks Rumil to say more about the finding there:
+
+```text
+@rumil why is the settlement call safe to leave without a timeout?
+```
+
+Rumil reads the thread, the diff hunk, and the file at the reviewed commit, and answers in the same thread. The answer is one model call and one reply: it explains the reasoning and points at the code it rests on. It does not open a review, add a finding, or resolve the thread. The reply is capped at 4,000 characters.
+
+The command works in a review thread only, because that is where the hunk and the thread are, and it needs the same standing as `review` and `remember` on a public repository. A question in a thread somebody else started is answered from that thread's context, and Rumil does not claim to have written the comment or the finding. The answer carries an invisible marker naming the comment it replies to, so a redelivered webhook or a rerun after an interruption does not answer twice.
 
 ## Repository guidelines
 

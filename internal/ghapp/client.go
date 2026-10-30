@@ -98,6 +98,9 @@ type ExistingComment struct {
 	// InReplyToID is the comment this one replies to, and zero when it opened
 	// the thread. It is what makes a thread walkable.
 	InReplyToID int64
+	// CreatedAt orders the comments of a thread. Two comments can share a
+	// second, so the id is the tie-breaker.
+	CreatedAt time.Time
 }
 
 // ReviewComment is one inline comment the reviewer wants to post.
@@ -558,6 +561,7 @@ func (c *Client) ExistingReviewComments(ctx context.Context) ([]ExistingComment,
 				Line:        cm.GetLine(),
 				Body:        cm.GetBody(),
 				InReplyToID: cm.GetInReplyTo(),
+				CreatedAt:   cm.GetCreatedAt().Time,
 			}
 			if user := cm.GetUser(); user != nil {
 				comment.Author = user.GetLogin()
