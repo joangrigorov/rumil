@@ -38,6 +38,7 @@ func TestParseCommand(t *testing.T) {
 		// A question in a review thread is the same shape: the words after the
 		// verb are the question, and the verb is readable as a sentence.
 		{"why with a question", "@rumil why does this wrap the call", true, "why", "does this wrap the call", false},
+		{"why with a question about one aspect", "@rumil why exactly is the gateway left unprotected?", true, "why", "exactly is the gateway left unprotected?", false},
 		{"why with a closing period", "@rumil why. The retry loop is not visible here", true, "why", "The retry loop is not visible here", false},
 		{"why alone", "@rumil why", true, "why", "", false},
 		{"explain in another case", "@rumil EXPLAIN this with the caller in mind", true, "explain", "this with the caller in mind", false},
