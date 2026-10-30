@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.19](https://github.com/joangrigorov/rumil/compare/v0.0.18...v0.0.19) (2026-10-30)
+
+
+### Features
+
+* **server:** carry a review command's focus into the task message ([#66](https://github.com/joangrigorov/rumil/issues/66)) ([5960319](https://github.com/joangrigorov/rumil/commit/596031910eec3fff5ee5fd20602ed7184f5c147f))
+
+
+### Bug Fixes
+
+* **ghapp:** read a large pull request's diff from the files API ([#60](https://github.com/joangrigorov/rumil/issues/60)) ([a5bd299](https://github.com/joangrigorov/rumil/commit/a5bd299e3636d224c7249e522f37e16d35d48c73))
+* **models:** bound the wait for a provider's response headers ([#63](https://github.com/joangrigorov/rumil/issues/63)) ([9e70b5e](https://github.com/joangrigorov/rumil/commit/9e70b5ee3315b3fa99fdad6f71afeeaf64fa3699))
+* **reviewer:** ask the model to continue when a turn ends without a review ([#62](https://github.com/joangrigorov/rumil/issues/62)) ([26bcc4c](https://github.com/joangrigorov/rumil/commit/26bcc4cfc8893d0633ddd8a7b04b7f9b31f9b2c5))
+* **reviewer:** name the provider failure in a no-review error ([#64](https://github.com/joangrigorov/rumil/issues/64)) ([cdf1dcb](https://github.com/joangrigorov/rumil/commit/cdf1dcba56094c5806b59213eef690fc6096ada5))
+* **server:** let the session stream authenticate with a read cookie ([#65](https://github.com/joangrigorov/rumil/issues/65)) ([3b1e01b](https://github.com/joangrigorov/rumil/commit/3b1e01b60e279e1a1d9676a220a98ccf767d7635))
+
 ## [0.0.18](https://github.com/joangrigorov/rumil/compare/v0.0.17...v0.0.18) (2026-10-30)
 
 
