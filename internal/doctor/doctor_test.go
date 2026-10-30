@@ -237,9 +237,9 @@ func TestEmbeddingCheckWarnsWhenMemoryIsOff(t *testing.T) {
 func TestGitHubCheckReadsTheInstallationAndRepo(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	cfg := &config.Config{GitHub: config.GitHub{
-		AppID:         123456,
+		AppID:          123456,
 		InstallationID: 98765432,
-		PrivateKeyPEM: string(testutil.TestPrivateKeyPEM(t)),
+		PrivateKeyPEM:  string(testutil.TestPrivateKeyPEM(t)),
 	}}
 
 	check := githubCheck(context.Background(), cfg, gh.URL(), "acme/payments", newRedactor(cfg))
@@ -256,9 +256,9 @@ func TestGitHubCheckReadsTheInstallationAndRepo(t *testing.T) {
 // A key that is not a key fails the check before any token request.
 func TestGitHubCheckFailsOnAWrongKey(t *testing.T) {
 	cfg := &config.Config{GitHub: config.GitHub{
-		AppID:         123456,
+		AppID:          123456,
 		InstallationID: 98765432,
-		PrivateKeyPEM: "this is not a pem",
+		PrivateKeyPEM:  "this is not a pem",
 	}}
 	check := githubCheck(context.Background(), cfg, "", "", newRedactor(cfg))
 	if check.Status != Fail {
@@ -274,9 +274,9 @@ func TestGitHubCheckFailsOnAWrongKey(t *testing.T) {
 func TestSnapshotCheckDownloadsAndRemovesTheTree(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	cfg := &config.Config{GitHub: config.GitHub{
-		AppID:         123456,
+		AppID:          123456,
 		InstallationID: 98765432,
-		PrivateKeyPEM: string(testutil.TestPrivateKeyPEM(t)),
+		PrivateKeyPEM:  string(testutil.TestPrivateKeyPEM(t)),
 	}}
 
 	check := snapshotCheck(context.Background(), cfg, gh.URL(), "acme/payments", newRedactor(cfg))
