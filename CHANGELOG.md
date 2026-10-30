@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.22](https://github.com/joangrigorov/rumil/compare/v0.0.21...v0.0.22) (2026-10-30)
+
+
+### Features
+
+* **reviewer:** focus the answer on the question after why ([#98](https://github.com/joangrigorov/rumil/issues/98)) ([aad1172](https://github.com/joangrigorov/rumil/commit/aad1172d189f12808f7916363fc2b15b2d545ab7))
+
 ## [0.0.21](https://github.com/joangrigorov/rumil/compare/v0.0.20...v0.0.21) (2026-10-30)
 
 
