@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.0.20](https://github.com/joangrigorov/rumil/compare/v0.0.19...v0.0.20) (2026-10-30)
+
+
+### Features
+
+* **eval:** run the reviewer against a fixture set and score the findings ([#87](https://github.com/joangrigorov/rumil/issues/87)) ([777ba50](https://github.com/joangrigorov/rumil/commit/777ba5010c5a05ab16e66789b551729fd980c6b6)), closes [#72](https://github.com/joangrigorov/rumil/issues/72)
+* **reviewer:** let a review call tools from an operator MCP server ([#84](https://github.com/joangrigorov/rumil/issues/84)) ([05d3d7d](https://github.com/joangrigorov/rumil/commit/05d3d7d5da8045d1a05408d572fd1003315c9e61)), closes [#69](https://github.com/joangrigorov/rumil/issues/69)
+* **reviewer:** record token usage and estimated cost with a budget ([#85](https://github.com/joangrigorov/rumil/issues/85)) ([526f480](https://github.com/joangrigorov/rumil/commit/526f48075775b88e5c64f53d117a0c008a306f79)), closes [#70](https://github.com/joangrigorov/rumil/issues/70)
+* **reviewer:** report each review as a GitHub check run ([#82](https://github.com/joangrigorov/rumil/issues/82)) ([07ed516](https://github.com/joangrigorov/rumil/commit/07ed5161aca7ad2f5c3a0e53551e1bc19694943d))
+* **server:** show the queue in the deck and let an operator cancel a review ([#86](https://github.com/joangrigorov/rumil/issues/86)) ([428ca0d](https://github.com/joangrigorov/rumil/commit/428ca0d1d8d0cde9d0be9d79b7efb39d7853049e)), closes [#78](https://github.com/joangrigorov/rumil/issues/78)
+* **store:** record the outcome of every finding Rumil posts ([#83](https://github.com/joangrigorov/rumil/issues/83)) ([24a06b9](https://github.com/joangrigorov/rumil/commit/24a06b94b0206640c8ef23dfc6e48d44f0fa1c70))
+
+
+### Bug Fixes
+
+* **reviewer:** treat pull request content as untrusted in the prompt ([#80](https://github.com/joangrigorov/rumil/issues/80)) ([a46ca27](https://github.com/joangrigorov/rumil/commit/a46ca2765625e3d12f9a234b9ddec2e0b6b34e74))
+
 ## [0.0.19](https://github.com/joangrigorov/rumil/compare/v0.0.18...v0.0.19) (2026-10-30)
 
 
