@@ -32,6 +32,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Custom MCP servers](#custom-mcp-servers)
 - [Token usage and cost](#token-usage-and-cost)
 - [The queue and cancelling a review](#the-queue-and-cancelling-a-review)
+- [Metrics](#metrics)
 - [Asking why about a finding](#asking-why-about-a-finding)
 - [Provider fallback](#provider-fallback)
 - [Repository guidelines](#repository-guidelines)
@@ -260,6 +261,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `server.public_url` | unset | Public base address of the deck, used as the details link on the review's GitHub check run. Unset leaves the check without a link |
+| `server.metrics_listen` | unset | Address for a separate Prometheus listener, such as `127.0.0.1:9090`. Unset leaves `/metrics` on the main listener behind `moderation.admin_token`; setting it moves the endpoint there without a credential, so bind it to loopback or a firewalled interface |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium`, `high` or `max`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `max` is for providers that expose it, such as DeepSeek V4 Flash |
@@ -471,6 +473,36 @@ Rumil checks the budget between steps, after a step's usage is reported and befo
 Each row links to a confirmation page. Cancelling a **queued** job moves it to `CANCELLED` before a worker claims it, so nothing runs. Cancelling a **running review** sets a flag the worker polls; the engine checks it between steps and before a tool call, stops the session, records it as `CANCELLED`, and completes the GitHub check run as cancelled. A review that already reached GitHub before the flag was read stays posted and the session is recorded as a success: the cancel stops work that is still going, and does not retract a review.
 
 The same action appears on a running session's page. It needs `moderation.admin_token`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
+
+## Metrics
+
+`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs `moderation.admin_token`, as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
+
+```yaml
+server:
+  metrics_listen: "127.0.0.1:9090"
+```
+
+With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or the admin token.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rumil_webhook_jobs_total` | counter | `event`, `outcome` | Deliveries by event and outcome: `received`, `queued`, `completed`, `failed` |
+| `rumil_queue_jobs` | gauge | `status` | Jobs waiting (`queued`) and being worked on (`running`), read from the database at scrape time |
+| `rumil_queue_oldest_job_age_seconds` | gauge | | Age of the oldest queued job; zero when the queue is empty |
+| `rumil_sessions` | gauge | `status` | Review sessions `running`, `succeeded` and `failed`, read at scrape time |
+| `rumil_review_duration_seconds` | histogram | `outcome` | Wall-clock time of a review: `submitted`, `turn_limit`, `output_limit`, `no_submission`, `cancelled` or `failed` |
+| `rumil_provider_requests_total` | counter | `class` | Model steps: `ok`, or the error class `auth`, `rate_limit`, `unavailable`, `invalid_request`, `context_overflow`, `other` |
+| `rumil_provider_retries_total` | counter | | Provider requests the retry policy scheduled again |
+| `rumil_provider_header_timeouts_total` | counter | | Provider calls that timed out before the response headers arrived |
+| `rumil_reviews_without_submission_total` | counter | `reason` | Sessions that said nothing about the pull request, using the same reasons as the duration histogram |
+| `rumil_snapshot_fallbacks_total` | counter | | Sessions that used the GitHub API tools because the working tree was unavailable |
+| `rumil_memory_retrieval_failures_total` | counter | | Pre-retrieval attempts that could not read the recorded rules |
+| `rumil_tokens_total` | counter | `kind` | Tokens used: `input`, `output`, `cache_read` and `cache_creation` |
+| `rumil_estimated_cost_usd_total` | counter | | Estimated provider cost of completed sessions, when the chat provider is priced |
+| `rumil_metrics_scrape_errors_total` | counter | | Database reads behind `/metrics` that failed; the gauges are then left out of that scrape |
+
+Labels stay low-cardinality: no repository, pull request, session id, tool argument or error text is a label. A delivery for another installation, or an event Rumil does not handle, is counted under its event name or `other`; the queue and session gauges come from the database, so a restarted process reports the current state rather than the counters it remembered.
 
 ## Asking why about a finding
 

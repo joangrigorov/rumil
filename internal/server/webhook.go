@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/joangrigorov/rumil/internal/ghapp"
+	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/server/web"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -69,6 +70,15 @@ type Webhook struct {
 	botLogin       string
 	installationID int64
 	logger         *slog.Logger
+	meter          *metrics.Metrics
+}
+
+// WebhookOption tunes a webhook at construction.
+type WebhookOption func(*Webhook)
+
+// WithWebhookMetrics counts deliveries and the jobs they queue.
+func WithWebhookMetrics(meter *metrics.Metrics) WebhookOption {
+	return func(w *Webhook) { w.meter = meter }
 }
 
 // NewWebhook takes the configured webhook secret and bot handle, so it can
@@ -76,17 +86,21 @@ type Webhook struct {
 // installation Rumil serves. An App's webhook secret is account-wide, so a
 // delivery signed with it can belong to any installation of the App; only the
 // configured one has an installation token the engine can use.
-func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, logger *slog.Logger) *Webhook {
+func NewWebhook(secret, botHandle string, installationID int64, jobs *store.DB, logger *slog.Logger, opts ...WebhookOption) *Webhook {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Webhook{
+	webhook := &Webhook{
 		secret:         []byte(secret),
 		jobs:           jobs,
 		botLogin:       ghapp.NormalizeLogin(botHandle),
 		installationID: installationID,
 		logger:         logger,
 	}
+	for _, opt := range opts {
+		opt(webhook)
+	}
+	return webhook
 }
 
 // Handler builds the routes of `rumil serve`. Method patterns make the mux
@@ -169,6 +183,9 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"status": "missing X-GitHub-Delivery"})
 		return
 	}
+	// An authenticated delivery is received whether or not it becomes a job;
+	// the outcome labels tell the two apart.
+	w.meter.Job(metricEvent(eventType), "received")
 
 	// Feedback on an earlier finding is recorded before the delivery is
 	// classified: a reply that is not a command, a reaction and a dismissal are
@@ -186,6 +203,7 @@ func (w *Webhook) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
 
 	switch err := w.jobs.Enqueue(r.Context(), job); {
 	case err == nil:
+		w.meter.Job(metricEvent(eventType), "queued")
 		w.logger.Info("queued a review",
 			"delivery_id", deliveryID, "event_type", eventType,
 			"installation_id", job.InstallationID,

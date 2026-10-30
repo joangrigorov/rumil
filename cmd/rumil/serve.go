@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/server"
@@ -85,14 +86,20 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
+			meter := metrics.New()
+			meter.CollectDatabase(db, logger)
+
 			pool := server.NewPool(db, engine, cfg.App.BotHandle, cfg.Worker.Concurrency, logger,
-				server.WithJobTimeout(cfg.Worker.Timeout()))
-			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger)
+				server.WithJobTimeout(cfg.Worker.Timeout()),
+				server.WithMetrics(meter))
+			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.InstallationID, db, logger,
+				server.WithWebhookMetrics(meter))
 
 			// The observation deck shares the moderation credential. Its
 			// recorder is attached to the pool before the workers start, so a
 			// review that begins immediately is still recorded.
-			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminToken, logger)
+			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminToken, logger,
+				server.WithSessionsMetrics(meter))
 			pool.SetSessionRecorder(sessionsUI.Recorder())
 
 			// The moderation surface is mounted with whatever the operator
@@ -106,9 +113,28 @@ func newServeCmd(configPath *string) *cobra.Command {
 			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.InstallationID, logger)
 			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminToken, logger)
 
+			handler := server.Handler(webhook, db, moderationUI, sessionsUI)
+			var metricsServer *http.Server
+			if cfg.Server.MetricsListen == "" {
+				// No separate listener: the endpoint shares the main one and
+				// needs the admin credential like every other operator surface.
+				handler = server.WithMetricsEndpoint(handler, server.MetricsHandler(meter, cfg.Moderation.AdminToken, logger))
+			} else {
+				// A separate address is what makes it reachable: the operator
+				// binds it to loopback or a firewalled interface and the
+				// scraper needs no credential.
+				metricsMux := http.NewServeMux()
+				metricsMux.Handle("GET /metrics", meter.Handler())
+				metricsServer = &http.Server{
+					Addr:              cfg.Server.MetricsListen,
+					Handler:           metricsMux,
+					ReadHeaderTimeout: readHeaderTimeout,
+				}
+			}
+
 			httpServer := &http.Server{
 				Addr:              address,
-				Handler:           server.Handler(webhook, db, moderationUI, sessionsUI),
+				Handler:           handler,
 				ReadHeaderTimeout: readHeaderTimeout,
 			}
 
@@ -116,13 +142,21 @@ func newServeCmd(configPath *string) *cobra.Command {
 			defer stopPool()
 			pool.Start(poolCtx)
 
-			serveErr := make(chan error, 1)
+			serveErr := make(chan error, 2)
 			go func() {
 				logger.Info("listening", "address", address, "worker_concurrency", cfg.Worker.Concurrency)
 				if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					serveErr <- err
 				}
 			}()
+			if metricsServer != nil {
+				go func() {
+					logger.Info("metrics listening", "address", cfg.Server.MetricsListen)
+					if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						serveErr <- err
+					}
+				}()
+			}
 
 			select {
 			case err := <-serveErr:
@@ -139,6 +173,11 @@ func newServeCmd(configPath *string) *cobra.Command {
 			// finish inside what is left of the grace period.
 			if err := httpServer.Shutdown(shutdownCtx); err != nil {
 				logger.Warn("closing the HTTP server failed", "error", err)
+			}
+			if metricsServer != nil {
+				if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+					logger.Warn("closing the metrics server failed", "error", err)
+				}
 			}
 			stopPool()
 

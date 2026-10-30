@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -106,16 +107,22 @@ func (e *Engine) observeKitEvent(ctx context.Context, observer Observer, event k
 			"response": event.Response, "stop_reason": event.StopReason, "error": errorText(event.Error),
 		}}
 	case kit.ErrorEvent:
-		mapped = Event{Type: "error", At: mapped.At, Payload: map[string]any{"error": errorText(event.Error)}}
+		payload := map[string]any{"error": errorText(event.Error)}
+		providerFailurePayload(payload, event.Error)
+		mapped = Event{Type: "error", At: mapped.At, Payload: payload}
 	case kit.RetryEvent:
-		mapped = Event{Type: "retry", At: mapped.At, Payload: map[string]any{
+		payload := map[string]any{
 			"attempt": event.Attempt, "delay_ms": event.Delay.Milliseconds(), "error": errorText(event.Error),
-		}}
+		}
+		providerFailurePayload(payload, event.Error)
+		mapped = Event{Type: "retry", At: mapped.At, Payload: payload}
 	case kit.StepResumeEvent:
-		mapped = Event{Type: "step_resume", At: mapped.At, Payload: map[string]any{
+		payload := map[string]any{
 			"step": event.StepNumber, "resume": event.Resume,
 			"delay_ms": event.Delay.Milliseconds(), "error": errorText(event.Error),
-		}}
+		}
+		providerFailurePayload(payload, event.Error)
+		mapped = Event{Type: "step_resume", At: mapped.At, Payload: payload}
 	case kit.WarningsEvent:
 		mapped = Event{Type: "warnings", At: mapped.At, Payload: map[string]any{"warnings": event.Warnings}}
 	case kit.CompactionEvent:
@@ -129,6 +136,47 @@ func (e *Engine) observeKitEvent(ctx context.Context, observer Observer, event k
 	}
 
 	observer.Observe(ctx, mapped)
+}
+
+// providerFailurePayload adds what a provider failure means for the metrics
+// surface. The class is low-cardinality and the error text stays out of it; a
+// timeout is the response-header budget, which is what the provider client
+// bounds.
+func providerFailurePayload(payload map[string]any, err error) {
+	if err == nil {
+		return
+	}
+	payload["class"] = providerErrorClass(err)
+	if isTimeout(err) {
+		payload["header_timeout"] = true
+	}
+}
+
+// providerErrorClass maps kit's provider sentinels onto the classes the metric
+// labels carry.
+func providerErrorClass(err error) string {
+	classified := kit.ClassifyProviderError(err)
+	switch {
+	case errors.Is(classified, kit.ErrRateLimit):
+		return "rate_limit"
+	case errors.Is(classified, kit.ErrAuth):
+		return "auth"
+	case errors.Is(classified, kit.ErrProviderUnavailable):
+		return "unavailable"
+	case errors.Is(classified, kit.ErrInvalidRequest):
+		return "invalid_request"
+	case errors.Is(classified, kit.ErrContextOverflow):
+		return "context_overflow"
+	default:
+		return "other"
+	}
+}
+
+// isTimeout reports whether err is a deadline, including the response-header
+// timeout the provider's bounded client returns.
+func isTimeout(err error) bool {
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 // toolArgs prefers the parsed arguments, which the deck renders as structured

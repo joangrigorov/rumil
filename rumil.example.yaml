@@ -80,6 +80,7 @@ worker:
 server:
   listen: ":8080"                 # HTTP address for the webhook endpoint, overridden by --listen
   # public_url: "https://rumil.example.com" # Address reviewers reach the deck on; links the review's GitHub check run to its session
+  # metrics_listen: "127.0.0.1:9090" # Separate Prometheus listener, unauthenticated by design; unset serves /metrics on the main listener behind the admin token
 
 models:
   default_chat: "deepseek-v4-flash"    # Optional: defaults to the first provider that is not an embedding provider

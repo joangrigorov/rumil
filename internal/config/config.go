@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -225,6 +226,11 @@ type Server struct {
 	// PublicURL is the address a reviewer reaches the deck on. It is what a
 	// GitHub check run links to; empty leaves the check without a details link.
 	PublicURL string `yaml:"public_url"`
+	// MetricsListen is the address of a separate metrics listener. It is
+	// empty by default: /metrics then lives on the main listener behind the
+	// admin token. A separate listener is meant for a loopback or firewalled
+	// address that a scraper reaches without the credential.
+	MetricsListen string `yaml:"metrics_listen"`
 }
 
 // MCPServer is one operator-provided MCP server whose tools a review may use.
@@ -649,6 +655,14 @@ func (c *Config) Validate() error {
 		parsed, err := url.Parse(c.Server.PublicURL)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return fmt.Errorf("server.public_url must be an absolute http or https URL, got %q", c.Server.PublicURL)
+		}
+	}
+	if c.Server.MetricsListen != "" {
+		// A listener with no port would bind a random one, which a scraper
+		// cannot discover from the configuration.
+		if _, _, err := net.SplitHostPort(c.Server.MetricsListen); err != nil {
+			return fmt.Errorf("server.metrics_listen must be an address such as 127.0.0.1:9090, got %q: %w",
+				c.Server.MetricsListen, err)
 		}
 	}
 	if err := validateMCPServers(c.MCPServers); err != nil {

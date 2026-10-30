@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -80,14 +81,16 @@ type SessionRecorder struct {
 	db     *store.DB
 	broker *broker
 	logger *slog.Logger
+	meter  *metrics.Metrics
 }
 
 // NewSessionRecorder builds the recorder over the same database the deck reads.
-func NewSessionRecorder(db *store.DB, broker *broker, logger *slog.Logger) *SessionRecorder {
+// meter may be nil, and observation then stays a trace with no metrics.
+func NewSessionRecorder(db *store.DB, broker *broker, logger *slog.Logger, meter *metrics.Metrics) *SessionRecorder {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &SessionRecorder{db: db, broker: broker, logger: logger}
+	return &SessionRecorder{db: db, broker: broker, logger: logger, meter: meter}
 }
 
 // Start records the session row and returns the observer to attach to the
@@ -103,6 +106,7 @@ func (r *SessionRecorder) Start(ctx context.Context, request store.NewReviewSess
 		db:        r.db,
 		broker:    r.broker,
 		logger:    r.logger,
+		meter:     r.meter,
 		sessionID: session.ID,
 		events:    make(chan store.ReviewEvent, eventQueueSize),
 		done:      make(chan struct{}),
@@ -118,6 +122,7 @@ type sessionObserver struct {
 	db        *store.DB
 	broker    *broker
 	logger    *slog.Logger
+	meter     *metrics.Metrics
 	sessionID string
 
 	seq   atomic.Int64
@@ -132,6 +137,8 @@ type sessionObserver struct {
 
 // Observe records one event.
 func (o *sessionObserver) Observe(_ context.Context, event reviewer.Event) {
+	o.recordMetrics(event)
+
 	payload, err := json.Marshal(event.Payload)
 	if err != nil {
 		o.logger.Warn("encoding a session event failed", "session_id", o.sessionID, "type", event.Type, "error", err)
@@ -166,6 +173,33 @@ func (o *sessionObserver) Observe(_ context.Context, event reviewer.Event) {
 			return
 		}
 		o.events <- record
+	}
+}
+
+// recordMetrics turns the events that describe a failure into counters. The
+// payload carries the class, so no error string becomes a label.
+func (o *sessionObserver) recordMetrics(event reviewer.Event) {
+	if o.meter == nil {
+		return
+	}
+	switch event.Type {
+	case "step_finish":
+		o.meter.ProviderRequest("ok")
+	case "error":
+		class, _ := event.Payload["class"].(string)
+		if class == "" {
+			class = "other"
+		}
+		o.meter.ProviderRequest(class)
+		if timeout, _ := event.Payload["header_timeout"].(bool); timeout {
+			o.meter.ProviderHeaderTimeout()
+		}
+	case "retry":
+		o.meter.ProviderRetry()
+	case "snapshot_failed":
+		o.meter.SnapshotFallback()
+	case "memory_failed":
+		o.meter.MemoryFailure()
 	}
 }
 
