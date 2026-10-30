@@ -9,6 +9,7 @@
     <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
     {{if .Live}}<span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}
     <span class="session-clock" id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span>
+    <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="true" title="Hide the model's thinking"><span class="glyph" aria-hidden="true">✦</span> Thinking</button>
   </div>
 </header>
 
@@ -62,5 +63,6 @@
   </div>
 </section>
 
+<script src="/static/markdown.js" defer></script>
 <script src="/static/sessions.js" defer></script>
 {{end}}

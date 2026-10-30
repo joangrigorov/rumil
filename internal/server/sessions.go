@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -80,10 +81,21 @@ type reviewSessionsPage struct {
 	Refresh  string
 	Fixed    bool
 	Sessions []store.ReviewSession
-	Count    int
-	Status   string
-	Repo     string
-	Live     bool
+	// Total is every session the filter matches, not only this page.
+	Total  int
+	Status string
+	Repo   string
+	Live   bool
+	// Page is 1-based. PageCount is at least one, so the pager can always say
+	// "Page 1 of 1" instead of dividing by zero. PageCountKnown is false when
+	// the usage aggregate failed and only this page's length is known.
+	Page           int
+	PageCount      int
+	PageCountKnown bool
+	HasPrev        bool
+	HasNext        bool
+	PrevHref       string
+	NextHref       string
 	// Usage totals the whole filter, not only the page the list shows.
 	Usage store.UsageTotals
 }
@@ -114,11 +126,21 @@ type reviewSessionPage struct {
 	CancelJobID string
 }
 
+// sessionsPerPage is the list's page size. It matches the store's default, so
+// one page is one bounded read.
+const sessionsPerPage = store.ReviewListDefault
+
 func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 	rawRepo := r.URL.Query().Get("repo")
+	pageNumber, err := sessionPage(r)
+	if err != nil {
+		s.auth.refuse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
 	filter := store.ReviewSessionFilter{
 		Status: strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))),
-		Limit:  store.ReviewListDefault,
+		Limit:  sessionsPerPage,
+		Offset: (pageNumber - 1) * sessionsPerPage,
 	}
 	if rawRepo != "" {
 		org, name, err := splitRepoRef(rawRepo)
@@ -136,10 +158,43 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usage, err := s.db.ReviewSessionUsage(r.Context(), filter)
-	if err != nil {
+	usage, usageErr := s.db.ReviewSessionUsage(r.Context(), filter)
+	total := filter.Offset + len(sessions)
+	if usageErr != nil {
 		// The totals are informational; the list still stands without them.
-		s.logger.Warn("aggregating review session usage failed", "error", err)
+		// Pagination is then best effort: the page knows whether it is full,
+		// but not how many pages follow.
+		s.logger.Warn("aggregating review session usage failed", "error", usageErr)
+		usage = store.UsageTotals{}
+	} else {
+		total = usage.Sessions
+	}
+
+	pageCount := (total + sessionsPerPage - 1) / sessionsPerPage
+	if usageErr != nil && pageCount < pageNumber {
+		pageCount = pageNumber
+	}
+	if pageCount < 1 {
+		pageCount = 1
+	}
+
+	query := url.Values{}
+	if filter.Status != "" {
+		query.Set("status", filter.Status)
+	}
+	if rawRepo != "" {
+		query.Set("repo", rawRepo)
+	}
+	if usageErr == nil && total > 0 && pageNumber > pageCount {
+		// A bookmarked page past the end lands on the last page instead of an
+		// empty list that claims sessions exist.
+		http.Redirect(w, r, sessionsHref(query, pageCount), http.StatusSeeOther)
+		return
+	}
+
+	hasNext := pageNumber < pageCount
+	if usageErr != nil {
+		hasNext = len(sessions) == sessionsPerPage
 	}
 
 	live := false
@@ -151,14 +206,21 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := reviewSessionsPage{
-		Title:    "Review sessions",
-		Section:  "sessions",
-		Sessions: sessions,
-		Count:    len(sessions),
-		Status:   filter.Status,
-		Repo:     rawRepo,
-		Live:     live,
-		Usage:    usage,
+		Title:          "Review sessions",
+		Section:        "sessions",
+		Sessions:       sessions,
+		Total:          total,
+		Status:         filter.Status,
+		Repo:           rawRepo,
+		Live:           live,
+		Page:           pageNumber,
+		PageCount:      pageCount,
+		PageCountKnown: usageErr == nil,
+		HasPrev:        pageNumber > 1,
+		HasNext:        hasNext,
+		PrevHref:       sessionsHref(query, pageNumber-1),
+		NextHref:       sessionsHref(query, pageNumber+1),
+		Usage:          usage,
 	}
 	if live {
 		// The list has no JavaScript of its own: while a review runs, the page
@@ -167,6 +229,36 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writePage(w, r, sessionsTemplates, "sessions.html", page)
+}
+
+// sessionPage reads the 1-based page number. The first page is the default and
+// carries no query parameter.
+func sessionPage(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("page"))
+	if raw == "" {
+		return 1, nil
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil || page < 1 {
+		return 0, errors.New("page takes a positive number")
+	}
+	return page, nil
+}
+
+// sessionsHref builds a list URL that keeps the filters and moves to page.
+func sessionsHref(query url.Values, page int) string {
+	values := url.Values{}
+	for key, entries := range query {
+		values[key] = append([]string(nil), entries...)
+	}
+	if page > 1 {
+		values.Set("page", strconv.Itoa(page))
+	}
+	encoded := values.Encode()
+	if encoded == "" {
+		return "/ui/sessions"
+	}
+	return "/ui/sessions?" + encoded
 }
 
 func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {

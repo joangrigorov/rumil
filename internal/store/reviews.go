@@ -167,6 +167,9 @@ type ReviewSessionFilter struct {
 	RepoName string
 	Status   string
 	Limit    int
+	// Offset skips that many matching sessions, which is how the deck reaches
+	// a page after the first. It is ignored when negative.
+	Offset int
 }
 
 // ReviewEvent is one recorded step of a session.
@@ -330,6 +333,10 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 	case limit > ReviewListMax:
 		limit = ReviewListMax
 	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
 
 	rows, err := d.pool.Query(ctx, `
 		SELECT `+reviewSessionColumns+`
@@ -338,7 +345,7 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 		  AND ($2 = '' OR org_name = $2)
 		  AND ($3 = '' OR repo_name = $3)
 		ORDER BY started_at DESC, id DESC
-		LIMIT $4`, filter.Status, filter.OrgName, filter.RepoName, limit)
+		LIMIT $4 OFFSET $5`, filter.Status, filter.OrgName, filter.RepoName, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing review sessions: %w", err)
 	}
