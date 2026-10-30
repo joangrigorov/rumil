@@ -505,6 +505,36 @@ With that set, `/metrics` is served on `127.0.0.1:9090` without authentication a
 
 Labels stay low-cardinality: no repository, pull request, session id, tool argument or error text is a label. A delivery for another installation, or an event Rumil does not handle, is counted under its event name or `other`; the queue and session gauges come from the database, so a restarted process reports the current state rather than the counters it remembered.
 
+## Metrics
+
+`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs `moderation.admin_token`, as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
+
+```yaml
+server:
+  metrics_listen: "127.0.0.1:9090"
+```
+
+With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or the admin token.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rumil_webhook_jobs_total` | counter | `event`, `outcome` | Deliveries by event and outcome: `received`, `queued`, `completed`, `failed` |
+| `rumil_queue_jobs` | gauge | `status` | Jobs waiting (`queued`) and being worked on (`running`), read from the database at scrape time |
+| `rumil_queue_oldest_job_age_seconds` | gauge | | Age of the oldest queued job; zero when the queue is empty |
+| `rumil_sessions` | gauge | `status` | Review sessions `running`, `succeeded` and `failed`, read at scrape time |
+| `rumil_review_duration_seconds` | histogram | `outcome` | Wall-clock time of a review: `submitted`, `turn_limit`, `output_limit`, `no_submission`, `cancelled` or `failed` |
+| `rumil_provider_requests_total` | counter | `class` | Model steps: `ok`, or the error class `auth`, `rate_limit`, `unavailable`, `invalid_request`, `context_overflow`, `other` |
+| `rumil_provider_retries_total` | counter | | Provider requests the retry policy scheduled again |
+| `rumil_provider_header_timeouts_total` | counter | | Provider calls that timed out before the response headers arrived |
+| `rumil_reviews_without_submission_total` | counter | `reason` | Sessions that said nothing about the pull request, using the same reasons as the duration histogram |
+| `rumil_snapshot_fallbacks_total` | counter | | Sessions that used the GitHub API tools because the working tree was unavailable |
+| `rumil_memory_retrieval_failures_total` | counter | | Pre-retrieval attempts that could not read the recorded rules |
+| `rumil_tokens_total` | counter | `kind` | Tokens used: `input`, `output`, `cache_read` and `cache_creation` |
+| `rumil_estimated_cost_usd_total` | counter | | Estimated provider cost of completed sessions, when the chat provider is priced |
+| `rumil_metrics_scrape_errors_total` | counter | | Database reads behind `/metrics` that failed; the gauges are then left out of that scrape |
+
+Labels stay low-cardinality: no repository, pull request, session id, tool argument or error text is a label. A delivery for another installation, or an event Rumil does not handle, is counted under its event name or `other`; the queue and session gauges come from the database, so a restarted process reports the current state rather than the counters it remembered.
+
 ## Asking why about a finding
 
 A reply of `@rumil why` (or `@rumil explain`) in a review thread asks Rumil to say more about the finding there:
