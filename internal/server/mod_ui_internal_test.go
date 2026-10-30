@@ -8,9 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/store"
 )
+
+// testCredentials wraps one token in the named shape the surfaces take.
+func testCredentials(token string) []config.AdminCredential {
+	if token == "" {
+		return nil
+	}
+	return []config.AdminCredential{{Name: "legacy", Token: token}}
+}
 
 // Every refusal the surface can make has to reach the caller as a status they
 // can act on: 500 for a rule that needs a moderator to look again says the
@@ -120,7 +129,7 @@ func TestSplitRepoRefTakesOwnerAndNameOnly(t *testing.T) {
 // A refusal is shaped like the success it stands in for, so a JSON client never
 // has to parse a plain-text error to find out what happened.
 func TestRefuseFollowsTheCallersShape(t *testing.T) {
-	ui := NewModerationUI(nil, "s3cret-token", nil)
+	ui := NewModerationUI(nil, testCredentials("s3cret-token"), nil)
 
 	jsonRequest := httptest.NewRequest(http.MethodPost, "/api/moderation/9f1c/reject", nil)
 	jsonRecorder := httptest.NewRecorder()
@@ -175,7 +184,7 @@ func TestPathGlobOfTellsAnAbsentFieldFromAnEmptyOne(t *testing.T) {
 
 // The credential is compared whole, and the scheme is the RFC's to define.
 func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
-	ui := NewModerationUI(nil, "s3cret-token", nil)
+	ui := NewModerationUI(nil, testCredentials("s3cret-token"), nil)
 	cases := []struct {
 		name   string
 		header string
@@ -197,7 +206,11 @@ func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
 			if tc.header != "" {
 				request.Header.Set("Authorization", tc.header)
 			}
-			if got := ui.auth.authorized(request); got != tc.want {
+			got := false
+			if presented, ok := ui.auth.presented(request); ok {
+				_, got = ui.auth.identify(presented)
+			}
+			if got != tc.want {
 				t.Errorf("authorized(%q) = %v, want %v", tc.header, got, tc.want)
 			}
 		})

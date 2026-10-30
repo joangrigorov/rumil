@@ -22,7 +22,7 @@ import (
 func sessionsHandler(t *testing.T, h *harness) (http.Handler, *server.SessionsUI) {
 	t.Helper()
 
-	deck := server.NewSessionsUI(h.db, adminToken, h.logger)
+	deck := server.NewSessionsUI(h.db, credentialsFor(adminToken), h.logger)
 	return server.Handler(h.webhook(), h.db, nil, deck), deck
 }
 
@@ -474,7 +474,7 @@ func TestObservationDeckQueuesAContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing the queued request: %v", err)
 	}
-	if request.SessionID != session.ID || request.Turns != 0 || request.RequestedBy != "admin-token" {
+	if request.SessionID != session.ID || request.Turns != 0 || request.RequestedBy != "legacy" {
 		t.Errorf("queued request = %+v, want the session, the configured budget and the admin token", request)
 	}
 

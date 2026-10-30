@@ -477,7 +477,79 @@ type Database struct {
 type Moderation struct {
 	AcceptAll               bool     `yaml:"accept_all"`
 	AutoApproveAssociations []string `yaml:"auto_approve_associations"`
-	AdminToken              string   `yaml:"admin_token"`
+	// AdminToken is the single credential operators used before named
+	// credentials existed. It is accepted as an entry named "legacy".
+	AdminToken string `yaml:"admin_token"`
+	// AdminTokens are the named credentials the operator surfaces accept.
+	// Every one is compared on every request, and the name of the matching
+	// entry is what the audit trail records.
+	AdminTokens []AdminCredential `yaml:"admin_tokens"`
+}
+
+// AdminCredential is one named credential for the moderation page, the deck and
+// the metrics endpoint. The name identifies the holder in the audit trail; the
+// token is the secret itself.
+type AdminCredential struct {
+	Name  string `yaml:"name"`
+	Token string `yaml:"token"`
+}
+
+// maxAdminCredentials bounds the constant-time comparisons one admin request
+// makes. Sixteen named holders is a team, not a directory.
+const maxAdminCredentials = 16
+
+// adminCredentialName is what a name may contain. It is rendered in the audit
+// trail and on the pages, so it is a plain handle rather than free text.
+var adminCredentialName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// AdminCredentials is the effective credential set. A lone admin_token is an
+// entry named "legacy", which keeps a configuration written before named
+// credentials worked without changing it.
+func (m Moderation) AdminCredentials() []AdminCredential {
+	credentials := make([]AdminCredential, 0, len(m.AdminTokens)+1)
+	if m.AdminToken != "" {
+		credentials = append(credentials, AdminCredential{Name: "legacy", Token: m.AdminToken})
+	}
+	return append(credentials, m.AdminTokens...)
+}
+
+// validateCredentials refuses a set that cannot identify one holder: a missing
+// name, a name that is not a handle, a duplicated name or a duplicated token.
+// The duplicate token check is what keeps the audit name unambiguous.
+func (m Moderation) validateCredentials() error {
+	if len(m.AdminCredentials()) > maxAdminCredentials {
+		return fmt.Errorf("moderation.admin_token and moderation.admin_tokens name %d credentials, want at most %d",
+			len(m.AdminCredentials()), maxAdminCredentials)
+	}
+
+	names := map[string]bool{}
+	tokens := map[string]bool{}
+	if m.AdminToken != "" {
+		names["legacy"] = true
+		tokens[m.AdminToken] = true
+	}
+	for i, credential := range m.AdminTokens {
+		name := strings.TrimSpace(credential.Name)
+		if name == "" {
+			return fmt.Errorf("moderation.admin_tokens[%d].name is required", i)
+		}
+		if !adminCredentialName.MatchString(name) {
+			return fmt.Errorf("moderation.admin_tokens[%d].name must be 1-64 letters, digits, '.', '_' or '-', starting with a letter or digit, got %q",
+				i, credential.Name)
+		}
+		if names[name] {
+			return fmt.Errorf("moderation.admin_tokens has two credentials named %q", name)
+		}
+		if strings.TrimSpace(credential.Token) == "" {
+			return fmt.Errorf("moderation.admin_tokens[%d].token is required", i)
+		}
+		if tokens[credential.Token] {
+			return fmt.Errorf("moderation.admin_tokens[%d].token repeats another credential's token, so the audit trail could not name the holder", i)
+		}
+		names[name] = true
+		tokens[credential.Token] = true
+	}
+	return nil
 }
 
 // AutoApproves reports whether a commenter with this GitHub
@@ -757,6 +829,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("memory.repo_scope_boost must be between 0 and 1, got %v", boost)
 	}
 
+	if err := c.Moderation.validateCredentials(); err != nil {
+		return err
+	}
 	if err := c.GitHub.validate(); err != nil {
 		return err
 	}

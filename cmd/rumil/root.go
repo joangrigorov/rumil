@@ -66,9 +66,9 @@ func warnAboutModeration(cfg *config.Config, logger *slog.Logger, serve bool) {
 		logger.Warn("moderation.accept_all is on: a rule written in a comment reaches the review prompt without a maintainer approving it",
 			"hint", "set moderation.accept_all to false and approve rules with `rumil mod approve`")
 	}
-	if serve && cfg.Moderation.AdminToken == "" {
-		logger.Warn("moderation.admin_token is not set: the moderation UI and API refuse every request",
-			"hint", "set moderation.admin_token to reach /ui/moderation and `rumil mod` over HTTP")
+	if serve && len(cfg.Moderation.AdminCredentials()) == 0 {
+		logger.Warn("no admin credential is set: the moderation UI, the deck and /metrics refuse every request",
+			"hint", "set moderation.admin_token, or moderation.admin_tokens, to reach /ui/moderation and the deck")
 	}
 }
 

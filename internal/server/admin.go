@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/joangrigorov/rumil/internal/config"
 )
 
 // contentSecurityPolicy is what the operator pages send with every HTML
@@ -30,50 +33,73 @@ const adminCookieName = "rumil_admin"
 // EventSource follow a session; a state-changing request still needs the
 // header.
 type adminAuth struct {
-	token  string
-	logger *slog.Logger
-	realm  string
+	credentials []config.AdminCredential
+	logger      *slog.Logger
+	realm       string
 }
 
 // newAdminAuth returns the guard for one surface. A nil logger discards.
-func newAdminAuth(token, realm string, logger *slog.Logger) *adminAuth {
+func newAdminAuth(credentials []config.AdminCredential, realm string, logger *slog.Logger) *adminAuth {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &adminAuth{token: token, logger: logger, realm: realm}
+	return &adminAuth{credentials: credentials, logger: logger, realm: realm}
 }
 
-// authorize refuses a request that does not carry the token, before the handler
-// reads anything.
+// adminIdentityKey carries the name of the credential a request authenticated
+// with. The audit trail reads it instead of the shared token.
+type adminIdentityKey struct{}
+
+// adminIdentity is the credential name that authorized a request, or an empty
+// string when the request did not pass through the guard.
+func adminIdentity(r *http.Request) string {
+	name, _ := r.Context().Value(adminIdentityKey{}).(string)
+	return name
+}
+
+// authorize refuses a request that does not carry a configured token, before
+// the handler reads anything.
 func (a *adminAuth) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.token == "" {
-			a.logger.Warn("an admin request arrived while the admin token is not set")
+		if len(a.credentials) == 0 {
+			a.logger.Warn("an admin request arrived while no admin credential is configured")
 			a.refuse(w, r, http.StatusServiceUnavailable, "this surface needs an admin token")
 			return
 		}
-		if !a.authorized(r) {
-			a.logger.Warn("refused an admin request with a missing or wrong token",
-				"path", r.URL.Path, "remote", r.RemoteAddr)
-			w.Header().Set("WWW-Authenticate", `Basic realm="`+a.realm+`"`)
-			a.refuse(w, r, http.StatusUnauthorized, "unauthorized")
+		presented, ok := a.presented(r)
+		if !ok {
+			a.unauthorized(w, r)
 			return
 		}
-		a.remember(w, r)
-		next(w, r)
+		name, ok := a.identify(presented)
+		if !ok {
+			a.unauthorized(w, r)
+			return
+		}
+		a.remember(w, r, presented)
+		next(w, r.WithContext(context.WithValue(r.Context(), adminIdentityKey{}, name)))
 	}
+}
+
+func (a *adminAuth) unauthorized(w http.ResponseWriter, r *http.Request) {
+	a.logger.Warn("refused an admin request with a missing or wrong token",
+		"path", r.URL.Path, "remote", r.RemoteAddr)
+	w.Header().Set("WWW-Authenticate", `Basic realm="`+a.realm+`"`)
+	a.refuse(w, r, http.StatusUnauthorized, "unauthorized")
 }
 
 // remember hands the browser a cookie for the reads that cannot carry a
 // header. It is set on a read the operator already authenticated, and it is
 // scoped to this site; a form or fetch on another origin does not send it.
-func (a *adminAuth) remember(w http.ResponseWriter, r *http.Request) {
+// The cookie carries the presented token, which identifies one configured
+// entry on the next request.
+func (a *adminAuth) remember(w http.ResponseWriter, r *http.Request, presented string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
-		Value:    base64.RawURLEncoding.EncodeToString([]byte(a.token)),
+		Value:    base64.RawURLEncoding.EncodeToString([]byte(presented)),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   requestIsTLS(r),
@@ -144,54 +170,70 @@ func sameOrigin(r *http.Request) bool {
 	return strings.EqualFold(parsed.Host, r.Host)
 }
 
-// authorized checks the presented credential against the configured token. The
-// scheme is matched case-insensitively because the RFC says it is
-// case-insensitive, and a credential that fails to parse is simply not
-// accepted. A read may present the cookie the pages set; every other method
-// needs the header, so a cookie cannot drive a state change.
-func (a *adminAuth) authorized(r *http.Request) bool {
-	if a.authorizedHeader(r) {
-		return true
+// presented reads the credential a request carries. The scheme is matched
+// case-insensitively because the RFC says it is case-insensitive, and a
+// credential that fails to parse is simply not accepted. A read may present the
+// cookie the pages set; every other method needs the header, so a cookie cannot
+// drive a state change.
+func (a *adminAuth) presented(r *http.Request) (string, bool) {
+	if credential, ok := headerCredential(r); ok {
+		return credential, true
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return false
+		return "", false
 	}
-	return a.authorizedCookie(r)
+	return cookieCredential(r)
 }
 
-func (a *adminAuth) authorizedHeader(r *http.Request) bool {
+func headerCredential(r *http.Request) (string, bool) {
 	scheme, credential, found := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !found {
-		return false
+		return "", false
 	}
 	switch {
 	case strings.EqualFold(scheme, "Bearer"):
-		return equalToken(credential, a.token)
+		return credential, credential != ""
 	case strings.EqualFold(scheme, "Basic"):
 		raw, err := base64.StdEncoding.DecodeString(credential)
 		if err != nil {
-			return false
+			return "", false
 		}
 		_, password, found := strings.Cut(string(raw), ":")
 		if !found {
-			return false
+			return "", false
 		}
-		return equalToken(password, a.token)
+		return password, password != ""
 	default:
-		return false
+		return "", false
 	}
 }
 
-func (a *adminAuth) authorizedCookie(r *http.Request) bool {
+func cookieCredential(r *http.Request) (string, bool) {
 	cookie, err := r.Cookie(adminCookieName)
 	if err != nil {
-		return false
+		return "", false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(cookie.Value)
 	if err != nil {
-		return false
+		return "", false
 	}
-	return equalToken(string(raw), a.token)
+	return string(raw), true
+}
+
+// identify names the configured credential the presented token belongs to.
+// Every entry is compared, including after a match: stopping at the first hit
+// would make the request time depend on which holder it was, and the compare
+// itself is over two hashes of equal length.
+func (a *adminAuth) identify(presented string) (string, bool) {
+	name := ""
+	found := false
+	for _, credential := range a.credentials {
+		if equalToken(presented, credential.Token) {
+			name = credential.Name
+			found = true
+		}
+	}
+	return name, found
 }
 
 // equalToken compares a presented credential with the configured token. Both

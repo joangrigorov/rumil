@@ -274,7 +274,8 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `models.providers[].request_timeout` | `2m` | How long a chat provider may take to send its response headers, as a Go duration. Only a chat provider may set it. A provider that queues a request can sit silent for minutes; the attempt fails at this budget so the retry policy can try again, rather than holding a worker until `worker.job_timeout`. The streamed answer is not cut off, because only the wait before its first byte is bounded |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
-| `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. The pages set a same-site cookie that authenticates reads only, so the session live stream can connect where `EventSource` cannot send a header. Unset means both refuse every request |
+| `moderation.admin_token` | unset | The single admin credential, kept for a configuration written before named credentials. It is accepted as an entry named `legacy`. A bearer token or basic-auth password for the moderation UI, the deck, cancellation and `/metrics`; the pages set a same-site cookie that authenticates reads only, so the session live stream can connect where `EventSource` cannot send a header. Unset, with no `admin_tokens`, means every operator surface refuses every request |
+| `moderation.admin_tokens` | empty | Named admin credentials: `[{name, token}]`. Every entry is accepted, and the name of the matching entry is what the audit trail records. Names are 1–64 letters, digits, `.`, `_` or `-`; names and tokens must be unique. At most 16 entries |
 
 ## Review one pull request from the command line
 
@@ -473,7 +474,37 @@ Rumil checks the budget between steps, after a step's usage is reported and befo
 
 Each row links to a confirmation page. Cancelling a **queued** job moves it to `CANCELLED` before a worker claims it, so nothing runs. Cancelling a **running review** sets a flag the worker polls; the engine checks it between steps and before a tool call, stops the session, records it as `CANCELLED`, and completes the GitHub check run as cancelled. A review that already reached GitHub before the flag was read stays posted and the session is recorded as a success: the cancel stops work that is still going, and does not retract a review.
 
-The same action appears on a running session's page. It needs `moderation.admin_token`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
+The same action appears on a running session's page. It needs an admin credential — `moderation.admin_token`, or any entry of `moderation.admin_tokens`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
+
+## Metrics
+
+`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs an admin credential — `moderation.admin_token` or any entry of `moderation.admin_tokens` — as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
+
+```yaml
+server:
+  metrics_listen: "127.0.0.1:9090"
+```
+
+With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or the admin token.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `rumil_webhook_jobs_total` | counter | `event`, `outcome` | Deliveries by event and outcome: `received`, `queued`, `completed`, `failed` |
+| `rumil_queue_jobs` | gauge | `status` | Jobs waiting (`queued`) and being worked on (`running`), read from the database at scrape time |
+| `rumil_queue_oldest_job_age_seconds` | gauge | | Age of the oldest queued job; zero when the queue is empty |
+| `rumil_sessions` | gauge | `status` | Review sessions `running`, `succeeded` and `failed`, read at scrape time |
+| `rumil_review_duration_seconds` | histogram | `outcome` | Wall-clock time of a review: `submitted`, `turn_limit`, `output_limit`, `no_submission`, `cancelled` or `failed` |
+| `rumil_provider_requests_total` | counter | `class` | Model steps: `ok`, or the error class `auth`, `rate_limit`, `unavailable`, `invalid_request`, `context_overflow`, `other` |
+| `rumil_provider_retries_total` | counter | | Provider requests the retry policy scheduled again |
+| `rumil_provider_header_timeouts_total` | counter | | Provider calls that timed out before the response headers arrived |
+| `rumil_reviews_without_submission_total` | counter | `reason` | Sessions that said nothing about the pull request, using the same reasons as the duration histogram |
+| `rumil_snapshot_fallbacks_total` | counter | | Sessions that used the GitHub API tools because the working tree was unavailable |
+| `rumil_memory_retrieval_failures_total` | counter | | Pre-retrieval attempts that could not read the recorded rules |
+| `rumil_tokens_total` | counter | `kind` | Tokens used: `input`, `output`, `cache_read` and `cache_creation` |
+| `rumil_estimated_cost_usd_total` | counter | | Estimated provider cost of completed sessions, when the chat provider is priced |
+| `rumil_metrics_scrape_errors_total` | counter | | Database reads behind `/metrics` that failed; the gauges are then left out of that scrape |
+
+Labels stay low-cardinality: no repository, pull request, session id, tool argument or error text is a label. A delivery for another installation, or an event Rumil does not handle, is counted under its event name or `other`; the queue and session gauges come from the database, so a restarted process reports the current state rather than the counters it remembered.
 
 ## Metrics
 
@@ -590,13 +621,28 @@ rumil mod approve 3df15f48 --rule-text "the JWT validator's 60s clock skew toler
 rumil mod reject 3df15f48 --moderator alice
 ```
 
-Or from the moderation page, which needs no JavaScript and no session. It answers only when `moderation.admin_token` is set — the example config reads that from `${RUMIL_ADMIN_TOKEN}` — and takes the value as a bearer credential or as the password of a basic-auth credential (any username):
+Or from the moderation page, which needs no JavaScript and no session. It answers only when at least one admin credential is set — `moderation.admin_token`, or `moderation.admin_tokens` — and takes the value as a bearer credential or as the password of a basic-auth credential (any username):
 
 ```text
 https://<your-rumil-host>/ui/moderation
 ```
 
 The same decisions are available as JSON for scripting: `POST /api/moderation/<id>/approve` and `POST /api/moderation/<id>/reject`, with form fields `rule_text`, `path_glob`, `scope`, `authority` and `moderator`.
+
+### Named admin credentials
+
+One shared token cannot say who decided, and revoking one person means changing it for everybody. `moderation.admin_tokens` names each holder:
+
+```yaml
+moderation:
+  admin_tokens:
+    - name: alice
+      token: ${ALICE_ADMIN_TOKEN}
+    - name: ci-bot
+      token: ${CI_ADMIN_TOKEN}
+```
+
+Every configured token is compared on every request, and the matching name is what the audit trail records: `reviewed_by` on a moderation decision, `requested_by` on a continuation, and the log line when a session stream opens. A form may still name somebody with `moderator` or `requested_by`, which an API client uses when the credential is a service account. To rotate, add the new entry and restart, move the holder to it, then remove the old entry and restart; removing an entry stops its header and its cookie on the next request. A lone `moderation.admin_token` keeps working as an entry named `legacy`.
 
 Approving can also narrow a rule: an organization-wide proposal can be recorded for the repository it was proposed in with `--scope REPO`. The other direction is refused, because one decision on a page should not push a rule that reaches a single repository out to every repository in the organization.
 
@@ -699,7 +745,7 @@ It prints the effective non-secret settings and one line per check, then exits n
 
 **Every webhook delivery is rejected.** `github.webhook_secret` must match the App's webhook secret exactly, and the endpoint GitHub reaches is `POST /webhooks/github` on whatever host you configured.
 
-**`/ui/moderation` answers "the moderation surface needs moderation.admin_token".** Set `moderation.admin_token` — the example config takes it from `${RUMIL_ADMIN_TOKEN}` — and restart. Until then the page and the API refuse every request rather than standing open.
+**`/ui/moderation` answers "the moderation surface needs an admin token".** Set `moderation.admin_token`, or add an entry to `moderation.admin_tokens` — the example config takes the single token from `${RUMIL_ADMIN_TOKEN}` — and restart. Until then the page, the deck and `/metrics` refuse every request rather than standing open.
 
 **The container will not start on this machine.** The published image is `linux/amd64`. Use `docker compose up`, which compiles Rumil for the host architecture.
 
