@@ -21,7 +21,7 @@ concurrency:
 jobs:
   detect:
     name: Detect Go module
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       go_module: ${{ steps.detect.outputs.go_module }}
     steps:
@@ -41,7 +41,7 @@ jobs:
     name: Go verification gates
     needs: detect
     if: ${{ needs.detect.outputs.go_module == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # The database tests start their own pgvector container through
       # testcontainers, so the runner needs Docker and nothing else. This makes
@@ -83,6 +83,10 @@ jobs:
       - name: Vulnerability check
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
+          # The action defaults go-version-input to "stable" and passes it as
+          # go-version; setup-go then ignores go-version-file. An explicit empty
+          # value leaves the version to go.mod.
+          go-version-input: ""
           go-version-file: go.mod
           go-package: ./...
           repo-checkout: false
