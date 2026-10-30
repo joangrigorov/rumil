@@ -66,6 +66,50 @@ func TestCreateIssueCommentPostsAConversationComment(t *testing.T) {
 	}
 }
 
+// Thread walks from a reply to the comment that opened it and returns that
+// thread only, oldest first.
+func TestThreadReturnsTheWholeThreadFromAnyReply(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	gh.Comments = []testutil.CommentEntry{
+		comment(10, 0, "rumil[bot]", "This wraps the call without a timeout."),
+		comment(11, 10, "octocat", "Why does that matter?"),
+		comment(12, 10, "alice", "It already has one upstream."),
+		comment(20, 0, "dependabot[bot]", "Bump the module."),
+		comment(21, 20, "octocat", "Thanks."),
+	}
+	client := newTestClient(t, gh)
+
+	for _, tc := range []struct {
+		name     string
+		comment  int64
+		wantIDs  []int64
+		wantBody string
+	}{
+		{"a deep reply", 11, []int64{10, 11, 12}, "This wraps the call without a timeout."},
+		{"the root", 10, []int64{10, 11, 12}, "This wraps the call without a timeout."},
+		{"another thread", 21, []int64{20, 21}, "Bump the module."},
+		{"a comment the listing does not hold", 99, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			thread, err := client.Thread(context.Background(), tc.comment)
+			if err != nil {
+				t.Fatalf("Thread returned error: %v", err)
+			}
+			if len(thread) != len(tc.wantIDs) {
+				t.Fatalf("thread has %d comments, want %d: %+v", len(thread), len(tc.wantIDs), thread)
+			}
+			for i, want := range tc.wantIDs {
+				if thread[i].ID != want {
+					t.Errorf("comment %d has id %d, want %d", i, thread[i].ID, want)
+				}
+			}
+			if tc.wantBody != "" && thread[0].Body != tc.wantBody {
+				t.Errorf("root body = %q, want %q", thread[0].Body, tc.wantBody)
+			}
+		})
+	}
+}
+
 // The retry that returns a job to the queue has to see the answer the previous
 // attempt already posted, on both kinds of command.
 func TestCommentBodiesReadTheCommandThread(t *testing.T) {

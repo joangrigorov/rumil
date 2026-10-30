@@ -3,6 +3,7 @@ package ghapp
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/google/go-github/v69/github"
 )
@@ -102,6 +103,48 @@ func repliesTo(byID map[int64]ExistingComment, id, ancestor int64) bool {
 		id = byID[id].InReplyToID
 	}
 	return false
+}
+
+// Thread returns the comments of the review thread commentID belongs to,
+// oldest first. The walk goes up through in_reply_to to the comment that
+// opened the thread and then collects everything hanging below it, which is
+// what gives an answer the finding it explains and the exchange since.
+//
+// A comment the listing has not caught up with yields an empty thread rather
+// than an error: the caller still has the payload's own body and hunk.
+func (c *Client) Thread(ctx context.Context, commentID int64) ([]ExistingComment, error) {
+	comments, err := c.ExistingReviewComments(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[int64]ExistingComment, len(comments))
+	for _, comment := range comments {
+		byID[comment.ID] = comment
+	}
+
+	root := commentID
+	for depth := 0; depth < threadDepthLimit; depth++ {
+		comment, ok := byID[root]
+		if !ok || comment.InReplyToID == 0 {
+			break
+		}
+		root = comment.InReplyToID
+	}
+
+	thread := make([]ExistingComment, 0, len(comments))
+	for _, comment := range comments {
+		if repliesTo(byID, comment.ID, root) {
+			thread = append(thread, comment)
+		}
+	}
+	sort.SliceStable(thread, func(i, j int) bool {
+		if thread[i].CreatedAt.Equal(thread[j].CreatedAt) {
+			return thread[i].ID < thread[j].ID
+		}
+		return thread[i].CreatedAt.Before(thread[j].CreatedAt)
+	})
+	return thread, nil
 }
 
 // ThreadCommentBy returns the body of the first comment in the chain that

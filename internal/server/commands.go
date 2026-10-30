@@ -7,22 +7,25 @@ import (
 
 // Command is one instruction parsed out of a comment that mentions Rumil.
 //
-// The pull request conversation supports two commands. `remember <instruction>`
+// The pull request conversation supports four commands. `remember <instruction>`
 // records a rule (project_plan.md §6 Phase 4), in the two scopes of §6 Phase 6:
 // a `--org` marker before the instruction or the word `org` after it records a
 // rule for the whole organization rather than for the repository the comment is
 // on. `review` asks for a review of the pull request the comment is on, which
 // is the trigger that works where the App cannot be requested as a reviewer:
 // the REST API refuses a GitHub App in its reviewers list, and the UI does not
-// offer one everywhere. Parsing happens in the webhook so a comment that asks
-// for nothing never takes a worker.
+// offer one everywhere. `why` and `explain` ask Rumil to say more about a
+// finding inside a review thread. Parsing happens in the webhook so a comment
+// that asks for nothing never takes a worker.
 type Command struct {
-	// Verb is the command word, lowercased: "remember" or "review".
+	// Verb is the command word, lowercased: "remember", "review", "why" or
+	// "explain".
 	Verb string
 	// Instruction is what the person wrote after the verb, with the scope marker
 	// taken out. It is the raw material of the synthesis step, not a rule yet,
 	// and it is empty for a command that carries none. For `review` it is the
-	// focus guidance, capped so a pasted log cannot fill every task message.
+	// focus guidance, and for `why` and `explain` it is the question itself;
+	// both are capped so a pasted log cannot fill every task message.
 	Instruction string
 	// Org is true when the command asked for an organization-wide rule, which is
 	// the only thing that lets the synthesis session record one.
@@ -69,7 +72,7 @@ func splitVerb(rest string) Command {
 	switch command.Verb {
 	case commandRemember:
 		command.Org, command.Instruction = splitScope(instruction)
-	case commandReview:
+	case commandReview, commandWhy, commandExplain:
 		command.Instruction = focusOf(instruction)
 	default:
 		command.Instruction = instruction
@@ -126,6 +129,11 @@ func splitScope(instruction string) (org bool, rest string) {
 	default:
 		return false, instruction
 	}
+}
+
+// isAnswerVerb reports whether the command asks Rumil to explain a finding.
+func isAnswerVerb(verb string) bool {
+	return verb == commandWhy || verb == commandExplain
 }
 
 // isHandleByte reports whether a byte continues a GitHub login, so a match
