@@ -17,11 +17,18 @@ import (
 // rather than silently trusted.
 const contentSecurityPolicy = "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
 
+// adminCookieName carries the admin token to the browser's EventSource. The
+// deck's live stream is fetched by EventSource, which cannot set an
+// Authorization header, so the page hands the browser a same-site cookie.
+const adminCookieName = "rumil_admin"
+
 // adminAuth is the credential and the request checks the operator surfaces
 // share. The token is accepted as a bearer credential, and as the password of
 // a basic credential, because a browser cannot set an Authorization header of
 // its own; basic auth is what lets a maintainer use the HTML pages without a
-// login route, a cookie, or a line of JavaScript.
+// login route. Reads also accept the cookie the pages set, which is what lets
+// EventSource follow a session; a state-changing request still needs the
+// header.
 type adminAuth struct {
 	token  string
 	logger *slog.Logger
@@ -52,8 +59,37 @@ func (a *adminAuth) authorize(next http.HandlerFunc) http.HandlerFunc {
 			a.refuse(w, r, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		a.remember(w, r)
 		next(w, r)
 	}
+}
+
+// remember hands the browser a cookie for the reads that cannot carry a
+// header. It is set on a read the operator already authenticated, and it is
+// scoped to this site; a form or fetch on another origin does not send it.
+func (a *adminAuth) remember(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    base64.RawURLEncoding.EncodeToString([]byte(a.token)),
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   requestIsTLS(r),
+		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// requestIsTLS reports whether the browser reached Rumil over TLS, directly or
+// through a proxy that set X-Forwarded-Proto. A Secure cookie set over plain
+// HTTP would be dropped by the browser, so the check has to see the proxy's
+// view.
+func requestIsTLS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // sameSite refuses a state-changing request that the browser says came from
@@ -111,8 +147,19 @@ func sameOrigin(r *http.Request) bool {
 // authorized checks the presented credential against the configured token. The
 // scheme is matched case-insensitively because the RFC says it is
 // case-insensitive, and a credential that fails to parse is simply not
-// accepted.
+// accepted. A read may present the cookie the pages set; every other method
+// needs the header, so a cookie cannot drive a state change.
 func (a *adminAuth) authorized(r *http.Request) bool {
+	if a.authorizedHeader(r) {
+		return true
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	return a.authorizedCookie(r)
+}
+
+func (a *adminAuth) authorizedHeader(r *http.Request) bool {
 	scheme, credential, found := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !found {
 		return false
@@ -133,6 +180,18 @@ func (a *adminAuth) authorized(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+func (a *adminAuth) authorizedCookie(r *http.Request) bool {
+	cookie, err := r.Cookie(adminCookieName)
+	if err != nil {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return false
+	}
+	return equalToken(string(raw), a.token)
 }
 
 // equalToken compares a presented credential with the configured token. Both
