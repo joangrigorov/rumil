@@ -381,14 +381,18 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			e.logger.Warn("closing the review session failed", "error", closeErr)
 		}
 	}()
-	if observer != nil {
-		// The subscription goes before Prompt, which is what emits the
-		// lifecycle: subscribing after it would only see a finished session.
-		unsubscribe := session.Subscribe(func(event kit.Event) {
+	// The subscription goes before Prompt, which is what emits the lifecycle:
+	// subscribing after it would only see a finished session. It runs with or
+	// without an observer, because the provider failures it collects are what
+	// a no-review error names.
+	issues := &providerIssues{}
+	unsubscribe := session.Subscribe(func(event kit.Event) {
+		issues.note(event)
+		if observer != nil {
 			e.observeKitEvent(ctx, observer, event)
-		})
-		defer unsubscribe()
-	}
+		}
+	})
+	defer unsubscribe()
 
 	userPrompt := ReviewUserPrompt(req.Owner, req.Repo, req.Number)
 	if req.Continuation != nil {
@@ -471,6 +475,9 @@ func (e *Engine) Review(ctx context.Context, req Request) (*Result, error) {
 			cause = fmt.Sprintf(" (turn limit %d reached)", maxTurns)
 		case result.OutputLimitReached:
 			cause = " (model output limit reached)"
+		}
+		if provider := issues.summary(); provider != "" {
+			cause += fmt.Sprintf(" (the model provider reported: %s)", provider)
 		}
 		return &result, fmt.Errorf("%w for %s/%s#%d after %d steps and %d tool calls%s",
 			ErrNoReviewSubmitted, req.Owner, req.Repo, req.Number, result.Steps, result.ToolCalls, cause)
