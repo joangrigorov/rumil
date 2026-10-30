@@ -338,6 +338,7 @@ func AnswerPrompt(req AnswerRequest, thread []ghapp.ExistingComment, code string
 		b.WriteString("\n\n<question>\n")
 		b.WriteString(neuterTag(req.Question, "question"))
 		b.WriteString("\n</question>")
+		b.WriteString("\n\nAnswer that question directly. When it names a particular aspect, address that aspect; the finding is the context, not a template for the answer.")
 	} else {
 		b.WriteString("\n\nThe question carries no words beyond the command: explain the reasoning behind the finding above.")
 	}

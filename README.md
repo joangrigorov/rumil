@@ -539,7 +539,7 @@ A reply of `@rumil why` (or `@rumil explain`) in a review thread asks Rumil to s
 @rumil why is the settlement call safe to leave without a timeout?
 ```
 
-Rumil reads the thread, the diff hunk, and the file at the reviewed commit, and answers in the same thread. The answer is one model call and one reply: it explains the reasoning and points at the code it rests on. It does not open a review, add a finding, or resolve the thread. The reply is capped at 4,000 characters.
+Rumil reads the thread, the diff hunk, and the file at the reviewed commit, and answers in the same thread. The words after the command are the question, so `@rumil why exactly is the gateway left unprotected?` asks about that aspect, while a bare `@rumil why` asks for the reasoning behind the finding. The answer is one model call and one reply: it explains the reasoning and points at the code it rests on. It does not open a review, add a finding, or resolve the thread. The reply is capped at 4,000 characters.
 
 The command works in a review thread only, because that is where the hunk and the thread are, and it needs the same standing as `review` and `remember` on a public repository. A question in a thread somebody else started is answered from that thread's context, and Rumil does not claim to have written the comment or the finding. The answer carries an invisible marker naming the comment it replies to, so a redelivered webhook or a rerun after an interruption does not answer twice.
 

@@ -858,6 +858,7 @@ func TestWhyCommandAnswersRumilsOwnFinding(t *testing.T) {
 		`yours="true"`,
 		"starts from your own finding",
 		"is that a problem",
+		"Answer that question directly",
 		"main.go line 12",
 	} {
 		if !strings.Contains(prompt, want) {

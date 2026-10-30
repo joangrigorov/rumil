@@ -364,3 +364,27 @@ func TestTheSynthesisPromptKeepsTheCommandAsData(t *testing.T) {
 		}
 	}
 }
+
+// The words after `why` are the question. The prompt carries them in
+// <question> and says to answer that question, so a specific aspect is not
+// replaced by a restatement of the finding.
+func TestAnswerPromptAnswersTheQuestionAfterWhy(t *testing.T) {
+	const question = "exactly is the gateway left unprotected?"
+	prompt := AnswerPrompt(AnswerRequest{Question: question}, nil, "", false, "rumil")
+	for _, want := range []string{
+		"<question>\n" + question + "\n</question>",
+		"Answer that question directly",
+		"the finding is the context, not a template",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the answer prompt does not carry %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestAnswerPromptWithoutAQuestionExplainsTheFinding(t *testing.T) {
+	prompt := AnswerPrompt(AnswerRequest{}, nil, "", false, "rumil")
+	if !strings.Contains(prompt, "explain the reasoning behind the finding above") {
+		t.Errorf("the bare why prompt does not ask for the finding's reasoning:\n%s", prompt)
+	}
+}
