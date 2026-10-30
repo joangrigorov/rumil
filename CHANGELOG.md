@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.18](https://github.com/joangrigorov/rumil/compare/v0.0.17...v0.0.18) (2026-10-30)
+
+
+### Features
+
+* **config:** let an embedding provider set its request timeout ([#58](https://github.com/joangrigorov/rumil/issues/58)) ([cebfa93](https://github.com/joangrigorov/rumil/commit/cebfa93fc7eaa221f42950cfa806b87f73f6a005))
+
 ## [0.0.17](https://github.com/joangrigorov/rumil/compare/v0.0.16...v0.0.17) (2026-10-29)
 
 
