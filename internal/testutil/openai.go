@@ -67,6 +67,17 @@ type FakeLLM struct {
 	embeddings    [][]float32
 	embedded      []string
 	embeddingFail int
+	// failures are error messages answered for the next chat requests, oldest
+	// first, so a test can drive kit's retry path.
+	failures []string
+}
+
+// QueueFailure makes the next chat request answer 503 with message.
+func (f *FakeLLM) QueueFailure(message string) *FakeLLM {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = append(f.failures, message)
+	return f
 }
 
 // NewFakeLLM starts the fake endpoint. When the script runs out it replies with
@@ -229,6 +240,19 @@ func (f *FakeLLM) handle(w http.ResponseWriter, r *http.Request) {
 		f.unknown = append(f.unknown, r.Method+" "+r.URL.Path)
 		f.mu.Unlock()
 		http.Error(w, `{"error":{"message":"unsupported endpoint"}}`, http.StatusNotFound)
+		return
+	}
+
+	f.mu.Lock()
+	failure := ""
+	if len(f.failures) > 0 {
+		failure, f.failures = f.failures[0], f.failures[1:]
+	}
+	f.mu.Unlock()
+	if failure != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": failure}})
 		return
 	}
 

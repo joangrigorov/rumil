@@ -744,11 +744,37 @@ func TestASecondTurnWithoutTheReviewStillFails(t *testing.T) {
 
 	h := newHarness(t, gh, llm, harnessOpts{})
 
-	if _, err := h.review(t); !errors.Is(err, ErrNoReviewSubmitted) {
+	_, err := h.review(t)
+	if !errors.Is(err, ErrNoReviewSubmitted) {
 		t.Fatalf("Review error = %v, want ErrNoReviewSubmitted", err)
 	}
 	if got := llm.Count(); got != 2 {
 		t.Errorf("model requests = %d, want the turn and one nudge", got)
+	}
+	if strings.Contains(err.Error(), "the model provider reported") {
+		t.Errorf("error = %v, want no provider failure named when none was reported", err)
+	}
+}
+
+// A session that ended after provider failures names the last one, so the
+// outcome reads as an unavailable provider and not as a model that stopped.
+func TestANoReviewErrorNamesTheProviderFailure(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	for i := 0; i < 2; i++ {
+		llm.QueueFailure("Service is too busy. We advise users to temporarily switch to alternative LLM API service providers.")
+	}
+	llm.QueueText("I'll compare base and head contents directly.")
+
+	h := newHarness(t, gh, llm, harnessOpts{})
+
+	_, err := h.review(t)
+	if !errors.Is(err, ErrNoReviewSubmitted) {
+		t.Fatalf("Review error = %v, want ErrNoReviewSubmitted", err)
+	}
+	if !strings.Contains(err.Error(), "the model provider reported") ||
+		!strings.Contains(err.Error(), "Service is too busy") {
+		t.Errorf("error = %v, want the provider failure named", err)
 	}
 }
 

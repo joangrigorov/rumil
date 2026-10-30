@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	kit "github.com/mark3labs/kit/pkg/kit"
@@ -164,4 +165,43 @@ func errorText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// maxProviderIssueBytes caps the provider message quoted in a session error.
+const maxProviderIssueBytes = 300
+
+// providerIssues remembers the last provider-side failure kit reported for one
+// session. A review that ends without a review then says what the provider did,
+// rather than reading like a model that chose to stop.
+type providerIssues struct {
+	mu   sync.Mutex
+	last string
+}
+
+func (p *providerIssues) note(event kit.Event) {
+	var err error
+	switch event := event.(type) {
+	case kit.ErrorEvent:
+		err = event.Error
+	case kit.RetryEvent:
+		err = event.Error
+	case kit.StepResumeEvent:
+		err = event.Error
+	}
+	if err == nil {
+		return
+	}
+	text := errorText(err)
+	if len(text) > maxProviderIssueBytes {
+		text = text[:maxProviderIssueBytes] + "…"
+	}
+	p.mu.Lock()
+	p.last = text
+	p.mu.Unlock()
+}
+
+func (p *providerIssues) summary() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last
 }
