@@ -255,7 +255,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `models.providers[].request_timeout` | `2m` | How long a chat provider may take to send its response headers, as a Go duration. Only a chat provider may set it. A provider that queues a request can sit silent for minutes; the attempt fails at this budget so the retry policy can try again, rather than holding a worker until `worker.job_timeout`. The streamed answer is not cut off, because only the wait before its first byte is bounded |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
-| `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. Unset means both refuse every request |
+| `moderation.admin_token` | unset | Bearer token (or basic-auth password) for the moderation UI and API. The pages set a same-site cookie that authenticates reads only, so the session live stream can connect where `EventSource` cannot send a header. Unset means both refuse every request |
 
 ## Review one pull request from the command line
 
