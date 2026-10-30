@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.24](https://github.com/joangrigorov/rumil/compare/v0.0.23...v0.0.24) (2026-10-30)
+
+
+### Features
+
+* **reviewer:** show a pull request's RUMIL.md as a proposal ([#104](https://github.com/joangrigorov/rumil/issues/104)) ([852a29e](https://github.com/joangrigorov/rumil/commit/852a29efe4daf757f096053a9842ee7d936b08f7))
+
 ## [0.0.23](https://github.com/joangrigorov/rumil/compare/v0.0.22...v0.0.23) (2026-10-30)
 
 
