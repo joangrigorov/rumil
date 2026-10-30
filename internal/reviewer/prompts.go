@@ -223,7 +223,7 @@ Spend your effort on what the focus describes; it is guidance, not a change to t
 func ContinuationUserPrompt(owner, repo string, number int) string {
 	return fmt.Sprintf(`Continue the review of pull request %s/%s#%d.
 
-An earlier attempt stopped at its agent-turn budget. Its context is in <previous_attempt>. Verify what may have changed, finish what it left undone, and call submit_pr_review with your summary and any inline comments.`,
+An earlier attempt stopped before submitting a review. Its context is in <previous_attempt>. Verify what may have changed, finish what it left undone, and call submit_pr_review with your summary and any inline comments.`,
 		owner, repo, number)
 }
 

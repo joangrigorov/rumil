@@ -33,6 +33,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 - [Token usage and cost](#token-usage-and-cost)
 - [The queue and cancelling a review](#the-queue-and-cancelling-a-review)
 - [Asking why about a finding](#asking-why-about-a-finding)
+- [Provider fallback](#provider-fallback)
 - [Repository guidelines](#repository-guidelines)
 - [Teaching Rumil your conventions](#teaching-rumil-your-conventions)
 - [Measuring review quality](#measuring-review-quality)
@@ -378,6 +379,20 @@ rumil sessions continue <session-id> --turns 25 --requested-by alice
 `--turns` is the new attempt's own step budget. Without it the attempt uses `app.max_agent_turns`, and a configured `0` still means unlimited. The command queues a job and prints the session it will continue; `rumil serve` runs it. The new attempt starts with the earlier attempt's tool results, partial summary and the same commit, and is recorded as a separate session that points at its parent, with who asked and when. A session that already submitted a review is refused, and so is one whose pull request has moved since the earlier attempt.
 
 The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears for any failed session that has not been continued yet, and uses the configured budget. It shares `moderation.admin_token` with the moderation surface, so the page records the credential as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
+
+## Provider fallback
+
+`models.fallback` lists chat providers, in order, that Rumil tries when the selected provider fails before a review is submitted:
+
+```yaml
+models:
+  default_chat: "primary"
+  fallback: ["secondary", "third"]
+```
+
+A provider is tried when it exhausts its attempts on transport errors, 5xx responses, repeated 429s, or a response-header timeout. Authentication and invalid-request failures stop the attempt instead: another provider would answer the same request the same way. Embedding providers are not part of the chain, because an embedding failure already degrades memory without failing the review.
+
+A fallback starts a new attempt on the same commit with the earlier attempt's tool calls and partial text, capped the same way a continuation is. A review that already reached GitHub is never followed by another attempt, so a pull request is reviewed at most once. The session records the provider that produced the review, and the deck shows a **Falling back to another provider** event naming the two providers. The list holds at most five providers, and each must be a chat provider the operator configured. A provider a repository chose in `.rumil.yaml` falls back through the same operator list.
 
 ## Custom MCP servers
 

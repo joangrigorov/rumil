@@ -207,6 +207,18 @@
           repositorySettingsDetail(payload));
         break;
 
+      case "provider_fallback": {
+        var detail = (payload.from || "the primary provider") + " → " + (payload.to || "the fallback");
+        if (payload.model) {
+          detail += " (" + payload.model + ")";
+        }
+        if (payload.error) {
+          detail += " · " + String(payload.error).slice(0, 300);
+        }
+        marker("warn", "Falling back to another provider", detail);
+        break;
+      }
+
       case "memory_retrieved":
         marker("info", "Recorded rules retrieved", count(payload.rules, "rule") + (payload.bytes ? " · " + bytes(payload.bytes) : ""));
         break;

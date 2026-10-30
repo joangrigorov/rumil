@@ -192,8 +192,8 @@ func (o *sessionObserver) write() {
 				switch event.Type {
 				case "session_metadata":
 					o.updateMetadata(ctx, event)
-				case "repository_settings":
-					o.updateRepositorySettings(ctx, event)
+				case "repository_settings", "provider_fallback":
+					o.updateSessionModel(ctx, event)
 				}
 				o.broker.publish(o.sessionID, event)
 			}
@@ -236,18 +236,19 @@ func (o *sessionObserver) updateMetadata(ctx context.Context, event store.Review
 	}
 }
 
-// updateRepositorySettings records the model the review actually runs on. A
-// repository's settings may choose a provider other than the configured
-// default, and the session row is written before the engine reads the file.
-func (o *sessionObserver) updateRepositorySettings(ctx context.Context, event store.ReviewEvent) {
-	var settings struct {
+// updateSessionModel records the model the review actually runs on. A
+// repository's settings may choose a provider of its own, and a provider
+// failure may move the review to a fallback, both after the session row was
+// written.
+func (o *sessionObserver) updateSessionModel(ctx context.Context, event store.ReviewEvent) {
+	var payload struct {
 		Model string `json:"model"`
 	}
-	if err := json.Unmarshal(event.Payload, &settings); err != nil {
-		o.logger.Warn("decoding repository settings failed", "session_id", o.sessionID, "error", err)
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		o.logger.Warn("decoding the session model failed", "session_id", o.sessionID, "error", err)
 		return
 	}
-	if err := o.db.UpdateReviewSessionModel(ctx, o.sessionID, settings.Model); err != nil {
+	if err := o.db.UpdateReviewSessionModel(ctx, o.sessionID, payload.Model); err != nil {
 		o.logger.Warn("recording the session model failed", "session_id", o.sessionID, "error", err)
 	}
 }
