@@ -1,6 +1,6 @@
 module github.com/joangrigorov/rumil
 
-go 1.27.2
+go 1.27.3
 
 require (
 	charm.land/fantasy v0.45.5
