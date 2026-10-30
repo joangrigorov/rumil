@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.25](https://github.com/joangrigorov/rumil/compare/v0.0.24...v0.0.25) (2026-10-30)
+
+
+### Features
+
+* **deck:** add thinking toggle, markdown output, and session pagination ([#106](https://github.com/joangrigorov/rumil/issues/106)) ([fac30cc](https://github.com/joangrigorov/rumil/commit/fac30cc1a578f19ac540632b7d6cae4e366ad693))
+
 ## [0.0.24](https://github.com/joangrigorov/rumil/compare/v0.0.23...v0.0.24) (2026-10-30)
 
 
