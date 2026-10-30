@@ -134,12 +134,25 @@ func SystemPrompt(ctx SessionContext) string {
 	return b.String()
 }
 
-// ReviewUserPrompt is the task message for one pull request.
-func ReviewUserPrompt(owner, repo string, number int) string {
-	return fmt.Sprintf(`Review pull request %s/%s#%d.
+// ReviewUserPrompt is the task message for one pull request. focus is the
+// guidance the person who asked for the review wrote after the command; it is
+// delimited because those are their words rather than the operator's
+// instructions.
+func ReviewUserPrompt(owner, repo string, number int, focus string) string {
+	prompt := fmt.Sprintf(`Review pull request %s/%s#%d.
 
 Work through the diff, verify each candidate finding against the surrounding code, and finish by calling submit_pr_review with your summary and any inline comments.`,
 		owner, repo, number)
+	if focus == "" {
+		return prompt
+	}
+	return prompt + fmt.Sprintf(`
+
+The person who asked for this review added a focus:
+<focus>
+%s
+</focus>
+Spend your effort on what the focus describes. Still report any other clear defect you find, and still finish with submit_pr_review.`, focus)
 }
 
 // ContinuationUserPrompt is the task message for a second attempt. The earlier

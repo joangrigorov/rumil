@@ -1,6 +1,9 @@
 package server
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Command is one instruction parsed out of a comment that mentions Rumil.
 //
@@ -18,7 +21,8 @@ type Command struct {
 	Verb string
 	// Instruction is what the person wrote after the verb, with the scope marker
 	// taken out. It is the raw material of the synthesis step, not a rule yet,
-	// and it is empty for a command that carries none.
+	// and it is empty for a command that carries none. For `review` it is the
+	// focus guidance, capped so a pasted log cannot fill every task message.
 	Instruction string
 	// Org is true when the command asked for an organization-wide rule, which is
 	// the only thing that lets the synthesis session record one.
@@ -61,9 +65,41 @@ func splitVerb(rest string) Command {
 	if i := strings.IndexAny(rest, " \t\r\n"); i >= 0 {
 		verb, instruction = rest[:i], strings.TrimSpace(rest[i+1:])
 	}
-	command := Command{Verb: strings.ToLower(verb)}
-	command.Org, command.Instruction = splitScope(instruction)
+	command := Command{Verb: commandVerb(verb)}
+	switch command.Verb {
+	case commandRemember:
+		command.Org, command.Instruction = splitScope(instruction)
+	case commandReview:
+		command.Instruction = focusOf(instruction)
+	default:
+		command.Instruction = instruction
+	}
 	return command
+}
+
+// commandVerb reads the verb out of the first token. A person writes a command
+// as a sentence — "review. Focus on the migration" — so a closing period or
+// colon belongs to the prose rather than the verb.
+func commandVerb(token string) string {
+	return strings.ToLower(strings.TrimRight(token, ".:"))
+}
+
+// maxFocusBytes bounds the guidance a review command carries. A comment body
+// can be tens of kilobytes, and the guidance goes into the task message of
+// every turn, so a pasted log would crowd out the work.
+const maxFocusBytes = 2000
+
+// focusOf trims the guidance and caps it at a rune boundary.
+func focusOf(instruction string) string {
+	instruction = strings.TrimSpace(instruction)
+	if len(instruction) <= maxFocusBytes {
+		return instruction
+	}
+	cut := maxFocusBytes
+	for cut > 0 && !utf8.RuneStart(instruction[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(instruction[:cut])
 }
 
 // splitScope reads the scope marker at the head of an instruction: `--org`, or

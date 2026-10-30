@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestParseCommand(t *testing.T) {
 	for _, tc := range []struct {
@@ -20,8 +24,16 @@ func TestParseCommand(t *testing.T) {
 		{"the handle in another case", "@Rumil remember we retry", true, "remember", "we retry", false},
 		{"a mention of another account", "@rumil2 remember we retry", false, "", "", false},
 		{"no mention", "looks good to me", false, "", "", false},
-		{"another command", "@rumil context: the payments flow", true, "context:", "the payments flow", false},
+		{"another command", "@rumil context: the payments flow", true, "context", "the payments flow", false},
 		{"a mention inside a word", "the rumil@rumil and its use", true, "and", "its use", false},
+
+		// A review can be asked for as a sentence, and the words after the
+		// verb are the focus the reviewer spends its effort on.
+		{"review with a closing period", "@rumil review. Focus on migration consistency", true, "review", "Focus on migration consistency", false},
+		{"review with a colon", "@rumil review: check the retry path", true, "review", "check the retry path", false},
+		{"review with a closing period alone", "@rumil review.", true, "review", "", false},
+		{"review alone", "@rumil review", true, "review", "", false},
+		{"a focus that opens with org", "@rumil review. org consistency matters here", true, "review", "org consistency matters here", false},
 
 		// T-040-01: the two ways a comment asks for an organization-wide rule.
 		{"the long scope marker", "@rumil remember --org all services log with slog", true, "remember", "all services log with slog", true},
@@ -72,5 +84,24 @@ func TestParseCommandKeepsAMultilineInstruction(t *testing.T) {
 	}
 	if command.Instruction != "first line\nsecond line" {
 		t.Errorf("instruction = %q, want the whole note", command.Instruction)
+	}
+}
+
+// The guidance is pasted into every turn's task message, so a long comment is
+// capped at a rune boundary rather than cut through a character.
+func TestFocusIsCappedAtARuneBoundary(t *testing.T) {
+	long := strings.Repeat("a", maxFocusBytes-1) + "é" + strings.Repeat("b", 500)
+	command, ok := parseCommand("rumil", "@rumil review. "+long)
+	if !ok {
+		t.Fatal("the review command did not parse")
+	}
+	if len(command.Instruction) > maxFocusBytes {
+		t.Errorf("focus is %d bytes, want at most %d", len(command.Instruction), maxFocusBytes)
+	}
+	if !utf8.ValidString(command.Instruction) {
+		t.Error("the cap cut through a character")
+	}
+	if strings.HasSuffix(command.Instruction, "b") {
+		t.Error("the cap kept the tail of a long instruction")
 	}
 }
