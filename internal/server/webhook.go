@@ -65,7 +65,10 @@ const healthTimeout = 2 * time.Second
 
 // Webhook verifies and dispatches GitHub deliveries.
 type Webhook struct {
-	secret         []byte
+	secret []byte
+	// secretSource is read on each delivery, so a reloaded webhook secret
+	// takes effect without rebuilding the server.
+	secretSource   func() string
 	jobs           *store.DB
 	botLogin       string
 	installationID int64
@@ -80,6 +83,13 @@ type WebhookOption func(*Webhook)
 // WithWebhookMetrics counts deliveries and the jobs they queue.
 func WithWebhookMetrics(meter *metrics.Metrics) WebhookOption {
 	return func(w *Webhook) { w.meter = meter }
+}
+
+// WithWebhookSecretSource reads the webhook secret on each delivery, so a
+// reloaded secret takes effect without rebuilding the server. The constructor
+// secret is the initial value used when no source is set.
+func WithWebhookSecretSource(source func() string) WebhookOption {
+	return func(w *Webhook) { w.secretSource = source }
 }
 
 // WithInstallations is the set of installations this instance serves. Empty
@@ -287,7 +297,11 @@ func (w *Webhook) recordFindingFeedback(ctx context.Context, eventType string, d
 
 // validSignature compares the HMAC of the body with the header GitHub sent.
 func (w *Webhook) validSignature(header string, body []byte) bool {
-	if len(w.secret) == 0 || header == "" {
+	secret := w.secret
+	if w.secretSource != nil {
+		secret = []byte(w.secretSource())
+	}
+	if len(secret) == 0 || header == "" {
 		return false
 	}
 	encoded, ok := strings.CutPrefix(header, "sha256=")
@@ -299,7 +313,7 @@ func (w *Webhook) validSignature(header string, body []byte) bool {
 		return false
 	}
 
-	mac := hmac.New(sha256.New, w.secret)
+	mac := hmac.New(sha256.New, secret)
 	mac.Write(body)
 	return hmac.Equal(mac.Sum(nil), provided)
 }

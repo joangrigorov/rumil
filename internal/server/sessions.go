@@ -39,6 +39,14 @@ func WithSessionsMetrics(meter *metrics.Metrics) SessionsOption {
 	return func(s *SessionsUI) { s.meter = meter }
 }
 
+// WithSessionsCredentials reads the admin credentials on each request, so a
+// reloaded set takes effect without rebuilding the deck.
+func WithSessionsCredentials(source func() []config.AdminCredential) SessionsOption {
+	return func(s *SessionsUI) {
+		s.auth = newAdminAuthSource(source, "rumil sessions", s.logger)
+	}
+}
+
 // NewSessionsUI builds the deck. The broker is owned here so the recorder the
 // worker pool uses and the streams the browser reads are the same fan-out.
 func NewSessionsUI(db *store.DB, credentials []config.AdminCredential, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {

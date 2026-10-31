@@ -28,18 +28,33 @@ type ModerationUI struct {
 	logger  *slog.Logger
 }
 
+// ModerationOption tunes the moderation surface at construction.
+type ModerationOption func(*ModerationUI)
+
+// WithModerationCredentials reads the admin credentials on each request, so a
+// reloaded set takes effect without rebuilding the surface.
+func WithModerationCredentials(source func() []config.AdminCredential) ModerationOption {
+	return func(m *ModerationUI) {
+		m.auth = newAdminAuthSource(source, "rumil moderation", m.logger)
+	}
+}
+
 // NewModerationUI builds the surface. An empty credential list disables it
 // rather than opening it: with no token there is no way to tell an operator
 // from a stranger, so every request is refused.
-func NewModerationUI(service *moderation.Service, credentials []config.AdminCredential, logger *slog.Logger) *ModerationUI {
+func NewModerationUI(service *moderation.Service, credentials []config.AdminCredential, logger *slog.Logger, opts ...ModerationOption) *ModerationUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &ModerationUI{
+	ui := &ModerationUI{
 		service: service,
 		auth:    newAdminAuth(credentials, "rumil moderation", logger),
 		logger:  logger,
 	}
+	for _, opt := range opts {
+		opt(ui)
+	}
+	return ui
 }
 
 // Routes mounts the moderation surface. The two state-changing routes carry the

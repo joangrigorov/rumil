@@ -7,12 +7,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/metrics"
 	"github.com/joangrigorov/rumil/internal/moderation"
 	"github.com/joangrigorov/rumil/internal/reviewer"
@@ -38,11 +41,11 @@ func newServeCmd(configPath *string) *cobra.Command {
 			"trigger that works where GitHub will not let an App be requested as a reviewer.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, path, err := loadConfig(*configPath)
+			cfg, path, raw, err := loadConfigWithRaw(*configPath)
 			if err != nil {
 				return err
 			}
-			logger := newLogger(cfg.App.LogLevel)
+			logger, logLevelVar := newLevelLogger(cfg.App.LogLevel)
 			logger.Info("configuration loaded", "path", path)
 			warnAboutModeration(cfg, logger, true)
 
@@ -87,6 +90,17 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
+			// A reload replaces the engine and the configuration together. A job
+			// claims both when it starts, so it finishes on one generation and
+			// the next job picks up the new one.
+			var liveConfig atomic.Pointer[config.Config]
+			liveConfig.Store(cfg)
+			var liveEngine atomic.Pointer[reviewer.Engine]
+			liveEngine.Store(engine)
+			credentials := func() []config.AdminCredential {
+				return liveConfig.Load().Moderation.AdminCredentials()
+			}
+
 			meter := metrics.New()
 			meter.CollectDatabase(db, logger)
 
@@ -95,7 +109,8 @@ func newServeCmd(configPath *string) *cobra.Command {
 			// recorder is attached to every pool before the workers start, so a
 			// review that begins immediately is still recorded.
 			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminCredentials(), logger,
-				server.WithSessionsMetrics(meter))
+				server.WithSessionsMetrics(meter),
+				server.WithSessionsCredentials(credentials))
 
 			// One pool per installation: its workers claim only that account's
 			// jobs, so a busy installation cannot take another's workers. An
@@ -111,14 +126,19 @@ func newServeCmd(configPath *string) *cobra.Command {
 					logger.With("installation_id", id),
 					server.WithJobTimeout(cfg.Worker.Timeout()),
 					server.WithMetrics(meter),
-					server.WithPoolInstallations([]int64{id}))
+					server.WithPoolInstallations([]int64{id}),
+					server.WithEngineSource(func() *reviewer.Engine { return liveEngine.Load() }),
+					server.WithConfigSource(func() *config.Config { return liveConfig.Load() }))
 				pool.SetSessionRecorder(sessionsUI.Recorder())
 				pools = append(pools, pool)
 			}
 
 			webhook := server.NewWebhook(cfg.GitHub.WebhookSecret, cfg.App.BotHandle, cfg.GitHub.PrimaryInstallationID(), db, logger,
 				server.WithWebhookMetrics(meter),
-				server.WithInstallations(installations))
+				server.WithInstallations(installations),
+				server.WithWebhookSecretSource(func() string {
+					return liveConfig.Load().GitHub.WebhookSecret
+				}))
 
 			// The moderation surface is mounted with whatever the operator
 			// configured: no token means every request to it is refused, and no
@@ -131,14 +151,15 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.PrimaryInstallationID(), logger)
-			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminCredentials(), logger)
+			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminCredentials(), logger,
+				server.WithModerationCredentials(credentials))
 
 			handler := server.Handler(webhook, db, moderationUI, sessionsUI)
 			var metricsServer *http.Server
 			if cfg.Server.MetricsListen == "" {
 				// No separate listener: the endpoint shares the main one and
 				// needs the admin credential like every other operator surface.
-				handler = server.WithMetricsEndpoint(handler, server.MetricsHandler(meter, cfg.Moderation.AdminCredentials(), logger))
+				handler = server.WithMetricsEndpoint(handler, server.MetricsHandlerSource(meter, credentials, logger))
 			} else {
 				// A separate address is what makes it reachable: the operator
 				// binds it to loopback or a firewalled interface and the
@@ -151,6 +172,35 @@ func newServeCmd(configPath *string) *cobra.Command {
 					ReadHeaderTimeout: readHeaderTimeout,
 				}
 			}
+
+			// Only the file this process started with is watched. A newly
+			// created file at another discovery location stays invisible until
+			// the next start.
+			go config.Watch(ctx, path, raw, config.DefaultReloadInterval, logger, func(next *config.Config) error {
+				current := liveConfig.Load()
+				if fields := config.RestartRequired(current, next); len(fields) > 0 {
+					logger.Warn("configuration changes need a restart; keeping the running values",
+						"path", path, "fields", fields)
+				}
+				effective, err := config.ApplyReload(current, next)
+				if err != nil {
+					return err
+				}
+				if reflect.DeepEqual(current, effective) {
+					return nil
+				}
+				if effective.GitHub.WebhookSecret == "" {
+					return errors.New("github.webhook_secret is required to run the webhook server")
+				}
+				nextEngine, err := reviewer.NewEngine(effective, logger, githubAPIBaseURL, db)
+				if err != nil {
+					return err
+				}
+				liveEngine.Store(nextEngine)
+				liveConfig.Store(effective)
+				logLevelVar.Set(logLevel(effective.App.LogLevel))
+				return nil
+			})
 
 			httpServer := &http.Server{
 				Addr:              address,

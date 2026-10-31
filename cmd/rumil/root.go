@@ -42,15 +42,22 @@ func newRootCmd() *cobra.Command {
 // it, and hands back the path it read. Discovery means the operator does not
 // always know which file was used, so every command that reads one says so.
 func loadConfig(flag string) (*config.Config, string, error) {
+	cfg, path, _, err := loadConfigWithRaw(flag)
+	return cfg, path, err
+}
+
+// loadConfigWithRaw also returns the bytes the file held, which the server
+// uses as the reload watcher's baseline.
+func loadConfigWithRaw(flag string) (*config.Config, string, []byte, error) {
 	path, err := config.Env(flag).Locate()
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	cfg, err := config.Load(path)
+	cfg, raw, err := config.LoadWithRaw(path)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	return cfg, path, nil
+	return cfg, path, raw, nil
 }
 
 // warnAboutModeration logs what a configuration means for the approval gate.
@@ -74,17 +81,28 @@ func warnAboutModeration(cfg *config.Config, logger *slog.Logger, serve bool) {
 
 // newLogger returns the structured JSON logger used for every job-scoped line.
 func newLogger(level string) *slog.Logger {
-	var slogLevel slog.Level
+	logger, _ := newLevelLogger(level)
+	return logger
+}
+
+// newLevelLogger returns the logger and the level it reads. The level is a
+// variable so a reloaded app.log_level applies to loggers already handed out.
+func newLevelLogger(level string) (*slog.Logger, *slog.LevelVar) {
+	slogLevel := new(slog.LevelVar)
+	slogLevel.Set(logLevel(level))
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel})), slogLevel
+}
+
+// logLevel maps the validated app.log_level value to a slog level.
+func logLevel(level string) slog.Level {
 	switch level {
 	case "debug":
-		slogLevel = slog.LevelDebug
+		return slog.LevelDebug
 	case "warn":
-		slogLevel = slog.LevelWarn
+		return slog.LevelWarn
 	case "error":
-		slogLevel = slog.LevelError
+		return slog.LevelError
 	default:
-		slogLevel = slog.LevelInfo
+		return slog.LevelInfo
 	}
-
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel}))
 }

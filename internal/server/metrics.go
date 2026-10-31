@@ -24,7 +24,13 @@ func WithMetricsEndpoint(next http.Handler, scrape http.Handler) http.Handler {
 // separate metrics listener serves the unguarded handler, because its address
 // is what makes it reachable.
 func MetricsHandler(m *metrics.Metrics, credentials []config.AdminCredential, logger *slog.Logger) http.Handler {
-	return newAdminAuth(credentials, "rumil admin", logger).authorize(m.Handler().ServeHTTP)
+	return MetricsHandlerSource(m, func() []config.AdminCredential { return credentials }, logger)
+}
+
+// MetricsHandlerSource is MetricsHandler with a credential set that may change
+// between requests.
+func MetricsHandlerSource(m *metrics.Metrics, credentials func() []config.AdminCredential, logger *slog.Logger) http.Handler {
+	return newAdminAuthSource(credentials, "rumil admin", logger).authorize(m.Handler().ServeHTTP)
 }
 
 // metricEvent keeps the event label bounded: GitHub sends a fixed set of event

@@ -23,18 +23,31 @@ const pollInterval = 250 * time.Millisecond
 
 // Pool drains the webhook job queue with a fixed number of workers.
 type Pool struct {
-	jobs          *store.DB
-	engine        *reviewer.Engine
-	botLogin      string
-	workers       int
-	interval      time.Duration
-	timeout       time.Duration
+	jobs     *store.DB
+	engine   *reviewer.Engine
+	botLogin string
+	workers  int
+	interval time.Duration
+	timeout  time.Duration
+	// engineSource and configSource are read once when a job is claimed, so a
+	// reload that lands mid-job applies to the next job.
+	engineSource  func() *reviewer.Engine
+	configSource  func() *config.Config
 	recorder      *SessionRecorder
 	meter         *metrics.Metrics
 	installations []int64
 	logger        *slog.Logger
 
 	wg sync.WaitGroup
+}
+
+// jobRunner is one job's view of the pool. The engine and job timeout are
+// fixed when the job is claimed, which keeps a review on one configuration
+// from its first turn to its last.
+type jobRunner struct {
+	*Pool
+	engine  *reviewer.Engine
+	timeout time.Duration
 }
 
 // WithMetrics records job outcomes, review duration, token usage and the
@@ -69,6 +82,19 @@ func WithJobTimeout(timeout time.Duration) PoolOption {
 	}
 }
 
+// WithEngineSource supplies the engine for each job. The source is read once
+// when a job is claimed, so a review finishes on the configuration it started
+// with, and the next job picks up a reload.
+func WithEngineSource(source func() *reviewer.Engine) PoolOption {
+	return func(p *Pool) { p.engineSource = source }
+}
+
+// WithConfigSource supplies the live configuration for per-job settings such
+// as worker.job_timeout. A nil config falls back to the constructor values.
+func WithConfigSource(source func() *config.Config) PoolOption {
+	return func(p *Pool) { p.configSource = source }
+}
+
 // NewPool builds a pool of concurrency workers. botHandle is the configured
 // handle, which is what tells a command apart from a mention.
 func NewPool(jobs *store.DB, engine *reviewer.Engine, botHandle string, concurrency int, logger *slog.Logger, opts ...PoolOption) *Pool {
@@ -91,6 +117,31 @@ func NewPool(jobs *store.DB, engine *reviewer.Engine, botHandle string, concurre
 		opt(pool)
 	}
 	return pool
+}
+
+// currentEngine is the engine a job claimed now should use.
+func (p *Pool) currentEngine() *reviewer.Engine {
+	if p.engineSource != nil {
+		if engine := p.engineSource(); engine != nil {
+			return engine
+		}
+	}
+	return p.engine
+}
+
+// currentTimeout is the job budget in force now.
+func (p *Pool) currentTimeout() time.Duration {
+	if p.configSource != nil {
+		if cfg := p.configSource(); cfg != nil {
+			return cfg.Worker.Timeout()
+		}
+	}
+	return p.timeout
+}
+
+// newRunner fixes the engine and timeout for one job.
+func (p *Pool) newRunner() *jobRunner {
+	return &jobRunner{Pool: p, engine: p.currentEngine(), timeout: p.currentTimeout()}
 }
 
 // Start launches the workers. Cancelling ctx stops them claiming new jobs;
@@ -137,7 +188,7 @@ func (p *Pool) work(ctx context.Context, workerID string) {
 				return
 			}
 		default:
-			p.process(ctx, job)
+			p.newRunner().process(ctx, job)
 		}
 	}
 }
@@ -156,8 +207,8 @@ func (p *Pool) pause(ctx context.Context) bool {
 }
 
 // process runs one job and records its outcome.
-func (p *Pool) process(ctx context.Context, job *store.Job) {
-	logger := p.logger.With(
+func (r *jobRunner) process(ctx context.Context, job *store.Job) {
+	logger := r.logger.With(
 		"delivery_id", job.DeliveryID,
 		"job_id", job.ID,
 		"installation_id", job.InstallationID,
@@ -170,34 +221,34 @@ func (p *Pool) process(ctx context.Context, job *store.Job) {
 	case eventPullRequest:
 		// The reaction goes on the pull request, because a review request
 		// carries no comment to answer.
-		p.acknowledgeReview(ctx, logger, reviewer.Request{
+		r.acknowledgeReview(ctx, logger, reviewer.Request{
 			Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
 			InstallationID: job.InstallationID,
 		})
-		p.review(ctx, logger, job, "")
+		r.review(ctx, logger, job, "")
 	case eventIssueComment, eventReviewComment:
-		p.command(ctx, logger, job)
+		r.command(ctx, logger, job)
 	case continuation.EventType:
-		p.continuation(ctx, logger, job)
+		r.continuation(ctx, logger, job)
 	default:
 		logger.Info("the event needs no work")
-		p.finish(ctx, logger, job, true, nil)
+		r.finish(ctx, logger, job, true, nil)
 	}
 }
 
 // command runs what a comment asked for: a review of the pull request, or a
 // rule to record.
-func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job) {
-	delivery, command, err := p.commandOf(job)
+func (r *jobRunner) command(ctx context.Context, logger *slog.Logger, job *store.Job) {
+	delivery, command, err := r.commandOf(job)
 	if err != nil {
 		logger.Error("reading the command out of the delivery failed", "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
 	// The reaction goes on the comment, and it goes first: it tells the person
 	// the command was taken, which is what they are waiting for.
-	p.acknowledgeCommand(ctx, logger, reviewer.RememberRequest{
+	r.acknowledgeCommand(ctx, logger, reviewer.RememberRequest{
 		Owner: job.OrgName, Repo: job.RepoName, Number: job.PRNumber,
 		InstallationID: job.InstallationID,
 		CommentID:      delivery.Comment.ID, Conversation: job.EventType == eventIssueComment,
@@ -206,52 +257,52 @@ func (p *Pool) command(ctx context.Context, logger *slog.Logger, job *store.Job)
 	switch command.Verb {
 	case commandReview:
 		// The words after the verb are the focus the person asked for.
-		p.review(ctx, logger, job, command.Instruction)
+		r.review(ctx, logger, job, command.Instruction)
 	case commandRemember:
-		p.remember(ctx, logger, job, delivery, command)
+		r.remember(ctx, logger, job, delivery, command)
 	case commandWhy, commandExplain:
-		p.answer(ctx, logger, job, delivery, command)
+		r.answer(ctx, logger, job, delivery, command)
 	default:
 		// The webhook refuses a verb it does not know, so this is a job that
 		// outlived the version that queued it.
 		logger.Info("the command needs no work", "verb", command.Verb)
-		p.finish(ctx, logger, job, true, nil)
+		r.finish(ctx, logger, job, true, nil)
 	}
 }
 
 // acknowledgeReview reacts to a review request, best-effort: a reaction that
 // could not be posted is not a review that cannot run.
-func (p *Pool) acknowledgeReview(ctx context.Context, logger *slog.Logger, req reviewer.Request) {
-	if err := p.engine.Acknowledge(ctx, req); err != nil {
+func (r *jobRunner) acknowledgeReview(ctx context.Context, logger *slog.Logger, req reviewer.Request) {
+	if err := r.engine.Acknowledge(ctx, req); err != nil {
 		logger.Warn("acknowledging the review request failed", "error", err)
 	}
 }
 
 // acknowledgeCommand reacts to the comment that carried a command, which is
 // where the person who typed it is looking.
-func (p *Pool) acknowledgeCommand(ctx context.Context, logger *slog.Logger, req reviewer.RememberRequest) {
-	if err := p.engine.AcknowledgeCommand(ctx, req); err != nil {
+func (r *jobRunner) acknowledgeCommand(ctx context.Context, logger *slog.Logger, req reviewer.RememberRequest) {
+	if err := r.engine.AcknowledgeCommand(ctx, req); err != nil {
 		logger.Warn("acknowledging the command failed", "error", err)
 	}
 }
 
 // review runs one review request. focus is the guidance a review command
 // carried, and empty for a review requested as a reviewer.
-func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, focus string) {
+func (r *jobRunner) review(ctx context.Context, logger *slog.Logger, job *store.Job, focus string) {
 	// The review runs on its own bounded context so a shutdown stops new work
 	// without cutting off the review already in flight.
-	reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.timeout)
 	defer cancel()
 
-	watcher := newCancelWatcher(reviewCtx, p.jobs, job.ID, logger)
+	watcher := newCancelWatcher(reviewCtx, r.jobs, job.ID, logger)
 	defer watcher.Close()
 
 	// The session is the trace of this run. A database that cannot take one
 	// does not stop the review: observation is best effort.
 	var recorded *sessionObserver
 	var observer reviewer.Observer
-	if p.recorder != nil {
-		session, err := p.recorder.Start(reviewCtx, newReviewSession(job, p.engine.ModelName()))
+	if r.recorder != nil {
+		session, err := r.recorder.Start(reviewCtx, newReviewSession(job, r.engine.ModelName()))
 		if err != nil {
 			logger.Warn("recording the review session failed", "error", err)
 		} else {
@@ -266,7 +317,7 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 	}
 
 	started := time.Now()
-	result, err := p.engine.Review(reviewCtx, reviewer.Request{
+	result, err := r.engine.Review(reviewCtx, reviewer.Request{
 		Owner:          job.OrgName,
 		Repo:           job.RepoName,
 		Number:         job.PRNumber,
@@ -276,11 +327,11 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		Observer:       observer,
 		Cancelled:      watcher.Stopped,
 	})
-	p.observeReview(result, err, started)
+	r.observeReview(result, err, started)
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, err))
-		p.recordFindings(finishCtx, logger, recorded.sessionID, job.InstallationID,
+		r.recordFindings(finishCtx, logger, recorded.sessionID, job.InstallationID,
 			job.OrgName, job.RepoName, job.PRNumber, result)
 		finishCancel()
 	}
@@ -289,11 +340,11 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 			// The review reached GitHub before the flag was read. Taking it
 			// back is not a cancellation; the run is a success.
 			logger.Info("the cancellation arrived after the review was submitted, the review stands")
-			p.finish(ctx, logger, job, true, nil)
+			r.finish(ctx, logger, job, true, nil)
 			return
 		}
 		logger.Info("review cancelled by an operator")
-		p.cancel(ctx, logger, job)
+		r.cancel(ctx, logger, job)
 		return
 	}
 	if err != nil {
@@ -302,11 +353,11 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			logger.Error("review exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+			logger.Error("review exceeded its budget and will not be retried", "error", err, "timeout", r.timeout)
 		} else {
 			logger.Error("review failed", "error", err)
 		}
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
@@ -315,60 +366,60 @@ func (p *Pool) review(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		"event", result.Event,
 		"tool_calls", result.ToolCalls,
 	)
-	p.finish(ctx, logger, job, true, nil)
+	r.finish(ctx, logger, job, true, nil)
 }
 
 // continuation runs one admin-requested attempt at a session that stopped at
 // its turn limit. The attempt is a session row of its own, pointing at the
 // parent, so both records show it as a separate run.
-func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store.Job) {
+func (r *jobRunner) continuation(ctx context.Context, logger *slog.Logger, job *store.Job) {
 	request, err := continuation.Parse(job.Payload)
 	if err != nil {
 		logger.Error("reading the continuation request failed", "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
-	parent, err := p.jobs.ReviewSessionByID(ctx, request.SessionID)
+	parent, err := r.jobs.ReviewSessionByID(ctx, request.SessionID)
 	if errors.Is(err, store.ErrReviewSessionNotFound) {
 		err = fmt.Errorf("review session %s does not exist", request.SessionID)
 	}
 	if err != nil {
 		logger.Error("reading the session to continue failed", "session_id", request.SessionID, "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 	// The check is repeated here because the session may have submitted a
 	// review between the admin asking and a worker starting.
 	if err := parent.Continuable(); err != nil {
 		logger.Warn("refused a continuation", "session_id", parent.ID, "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
-	events, err := p.jobs.ReviewTranscriptEvents(ctx, parent.ID, store.ReviewTranscriptMax)
+	events, err := r.jobs.ReviewTranscriptEvents(ctx, parent.ID, store.ReviewTranscriptMax)
 	if err != nil {
 		logger.Error("reading the session transcript failed", "session_id", parent.ID, "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
-	continuationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	continuationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.timeout)
 	defer cancel()
 
-	watcher := newCancelWatcher(continuationCtx, p.jobs, job.ID, logger)
+	watcher := newCancelWatcher(continuationCtx, r.jobs, job.ID, logger)
 	defer watcher.Close()
 
 	var recorded *sessionObserver
 	var observer reviewer.Observer
-	if p.recorder != nil {
-		session, startErr := p.recorder.Start(continuationCtx, store.NewReviewSession{
+	if r.recorder != nil {
+		session, startErr := r.recorder.Start(continuationCtx, store.NewReviewSession{
 			JobID:           job.ID,
 			InstallationID:  parent.InstallationID,
 			OrgName:         parent.OrgName,
 			RepoName:        parent.RepoName,
 			PRNumber:        parent.PRNumber,
-			Model:           p.engine.ModelName(),
+			Model:           r.engine.ModelName(),
 			ParentSessionID: parent.ID,
 			RequestedBy:     request.RequestedBy,
 			RequestedAt:     &request.RequestedAt,
@@ -387,7 +438,7 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 	}
 
 	started := time.Now()
-	result, reviewErr := p.engine.Review(continuationCtx, reviewer.Request{
+	result, reviewErr := r.engine.Review(continuationCtx, reviewer.Request{
 		Owner:          parent.OrgName,
 		Repo:           parent.RepoName,
 		Number:         parent.PRNumber,
@@ -403,11 +454,11 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 			Turns:           request.Turns,
 		},
 	})
-	p.observeReview(result, reviewErr, started)
+	r.observeReview(result, reviewErr, started)
 	if recorded != nil {
 		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		recorded.Finish(finishCtx, sessionOutcome(result, reviewErr))
-		p.recordFindings(finishCtx, logger, recorded.sessionID, parent.InstallationID,
+		r.recordFindings(finishCtx, logger, recorded.sessionID, parent.InstallationID,
 			parent.OrgName, parent.RepoName, parent.PRNumber, result)
 		finishCancel()
 	}
@@ -415,11 +466,11 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		if result != nil && result.ReviewSubmitted {
 			logger.Info("the cancellation arrived after the review was submitted, the review stands",
 				"session_id", parent.ID)
-			p.finish(ctx, logger, job, true, nil)
+			r.finish(ctx, logger, job, true, nil)
 			return
 		}
 		logger.Info("continuation cancelled by an operator", "session_id", parent.ID)
-		p.cancel(ctx, logger, job)
+		r.cancel(ctx, logger, job)
 		return
 	}
 	if reviewErr != nil {
@@ -428,11 +479,11 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 			return
 		}
 		if errors.Is(reviewErr, context.DeadlineExceeded) {
-			logger.Error("continuation exceeded its budget and will not be retried", "error", reviewErr, "timeout", p.timeout)
+			logger.Error("continuation exceeded its budget and will not be retried", "error", reviewErr, "timeout", r.timeout)
 		} else {
 			logger.Error("continuation failed", "session_id", parent.ID, "error", reviewErr)
 		}
-		p.finish(ctx, logger, job, false, reviewErr)
+		r.finish(ctx, logger, job, false, reviewErr)
 		return
 	}
 
@@ -443,7 +494,7 @@ func (p *Pool) continuation(ctx context.Context, logger *slog.Logger, job *store
 		"event", result.Event,
 		"tool_calls", result.ToolCalls,
 	)
-	p.finish(ctx, logger, job, true, nil)
+	r.finish(ctx, logger, job, true, nil)
 }
 
 // newReviewSession is what a review job knows when its session starts.
@@ -552,27 +603,27 @@ func (p *Pool) cancel(ctx context.Context, logger *slog.Logger, job *store.Job) 
 
 // remember distills the command a comment carried into a rule and answers the
 // comment.
-func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
-	if !p.engine.MemoryConfigured() {
+func (r *jobRunner) remember(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
+	if !r.engine.MemoryConfigured() {
 		// Memory is opt-in, so a command that arrives while it is off is a
 		// configuration state rather than a failure: the job is completed with a
 		// warning instead of being marked FAILED.
 		logger.Warn("ignoring a command because memory is not configured")
-		p.finish(ctx, logger, job, true, nil)
+		r.finish(ctx, logger, job, true, nil)
 		return
 	}
 
-	req, err := p.rememberRequest(job, delivery, command)
+	req, err := r.rememberRequest(job, delivery, command)
 	if err != nil {
 		logger.Error("reading the command out of the delivery failed", "error", err)
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
-	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.timeout)
 	defer cancel()
 
-	result, err := p.engine.Remember(commandCtx, req)
+	result, err := r.engine.Remember(commandCtx, req)
 	if err != nil {
 		if classifyFailure(err) == jobRetry {
 			// Leave the job RUNNING: the next start returns it to the queue, and
@@ -581,11 +632,11 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			logger.Error("the command exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+			logger.Error("the command exceeded its budget and will not be retried", "error", err, "timeout", r.timeout)
 		} else {
 			logger.Error("recording the rule failed", "error", err)
 		}
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
@@ -597,13 +648,13 @@ func (p *Pool) remember(ctx context.Context, logger *slog.Logger, job *store.Job
 		"replied", result.Replied,
 		"requested_by", req.RequestedBy,
 	)
-	p.finish(ctx, logger, job, true, nil)
+	r.finish(ctx, logger, job, true, nil)
 }
 
 // answer explains a finding inside the review thread the question was asked
 // in. It is one model call and one reply: the answer session has no tools and
 // cannot open a review.
-func (p *Pool) answer(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
+func (r *jobRunner) answer(ctx context.Context, logger *slog.Logger, job *store.Job, delivery payload, command Command) {
 	line := delivery.Comment.Line
 	if line < 1 {
 		line = delivery.Comment.OriginalLine
@@ -622,21 +673,21 @@ func (p *Pool) answer(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		DiffHunk:       delivery.Comment.DiffHunk,
 	}
 
-	answerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), p.timeout)
+	answerCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.timeout)
 	defer cancel()
 
-	result, err := p.engine.Answer(answerCtx, req)
+	result, err := r.engine.Answer(answerCtx, req)
 	if err != nil {
 		if classifyFailure(err) == jobRetry {
 			logger.Warn("answer interrupted, the job returns to the queue on the next start", "error", err)
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			logger.Error("the answer exceeded its budget and will not be retried", "error", err, "timeout", p.timeout)
+			logger.Error("the answer exceeded its budget and will not be retried", "error", err, "timeout", r.timeout)
 		} else {
 			logger.Error("answering the question failed", "error", err)
 		}
-		p.finish(ctx, logger, job, false, err)
+		r.finish(ctx, logger, job, false, err)
 		return
 	}
 
@@ -646,7 +697,7 @@ func (p *Pool) answer(ctx context.Context, logger *slog.Logger, job *store.Job, 
 		"replied", result.Replied,
 		"requested_by", req.RequestedBy,
 	)
-	p.finish(ctx, logger, job, true, nil)
+	r.finish(ctx, logger, job, true, nil)
 }
 
 // commandOf reads the comment and the command back out of the delivery the

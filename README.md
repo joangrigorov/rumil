@@ -373,6 +373,16 @@ rumil serve
 
 Without `--config` it reads the first file of the [search](#where-the-file-is-found) — `/etc/rumil/rumil.yaml` for a package install, `./rumil.yaml` for an extracted archive. It serves on `server.listen` (`:8080` unless the config or `--listen` says otherwise). The database at `database.dsn` has to exist with the `pgvector` extension in it; with `database.auto_migrate: true` Rumil creates and updates its own tables at startup.
 
+### Reloading the configuration
+
+`rumil serve` watches the file it loaded and applies a valid change without a restart. It watches only that file: if it started from `~/.config/rumil/config.yaml`, a later `./rumil.yaml` is ignored until the next start. The file is checked every two seconds, and a change applies after two identical reads, so a save that takes several writes is not parsed half-written. An edit that does not parse or validate leaves the running configuration in place and logs the reason.
+
+A new review, continuation or command uses the reloaded settings. A session already running finishes on the settings it started with.
+
+Most settings reload: the chat models and fallbacks, prices, review and memory settings, compaction, snapshot, MCP servers, `server.public_url`, `worker.job_timeout`, `app.log_level`, `moderation.*`, and `github.webhook_secret`. Admin tokens are read on each request, so rotating one takes effect immediately.
+
+These need a restart: `server.listen`, `server.metrics_listen`, `database.*`, `worker.concurrency` and each installation's `worker_concurrency`, `app.bot_handle`, the App id and private key, the installation list, and the embedding provider or its dimensions. The log names the fields that changed but will not apply.
+
 ### What a review does
 
 1. GitHub delivers a webhook. Rumil verifies the signature and queues the job in Postgres.
