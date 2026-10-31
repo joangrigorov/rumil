@@ -208,7 +208,7 @@ func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
 			}
 			got := false
 			if presented, ok := ui.auth.presented(request); ok {
-				_, got = ui.auth.identify(presented)
+				_, got = ui.auth.identify(ui.auth.credentials(), presented)
 			}
 			if got != tc.want {
 				t.Errorf("authorized(%q) = %v, want %v", tc.header, got, tc.want)

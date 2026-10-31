@@ -33,13 +33,22 @@ const adminCookieName = "rumil_admin"
 // EventSource follow a session; a state-changing request still needs the
 // header.
 type adminAuth struct {
-	credentials []config.AdminCredential
+	// credentials is read on every request, so a reloaded set takes effect
+	// without rebuilding the surface.
+	credentials func() []config.AdminCredential
 	logger      *slog.Logger
 	realm       string
 }
 
-// newAdminAuth returns the guard for one surface. A nil logger discards.
+// newAdminAuth returns the guard for one surface with a fixed set. A nil
+// logger discards.
 func newAdminAuth(credentials []config.AdminCredential, realm string, logger *slog.Logger) *adminAuth {
+	return newAdminAuthSource(func() []config.AdminCredential { return credentials }, realm, logger)
+}
+
+// newAdminAuthSource returns the guard for one surface whose credentials may
+// change between requests.
+func newAdminAuthSource(credentials func() []config.AdminCredential, realm string, logger *slog.Logger) *adminAuth {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -61,7 +70,8 @@ func adminIdentity(r *http.Request) string {
 // the handler reads anything.
 func (a *adminAuth) authorize(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if len(a.credentials) == 0 {
+		credentials := a.credentials()
+		if len(credentials) == 0 {
 			a.logger.Warn("an admin request arrived while no admin credential is configured")
 			a.refuse(w, r, http.StatusServiceUnavailable, "this surface needs an admin token")
 			return
@@ -71,7 +81,7 @@ func (a *adminAuth) authorize(next http.HandlerFunc) http.HandlerFunc {
 			a.unauthorized(w, r)
 			return
 		}
-		name, ok := a.identify(presented)
+		name, ok := a.identify(credentials, presented)
 		if !ok {
 			a.unauthorized(w, r)
 			return
@@ -224,10 +234,10 @@ func cookieCredential(r *http.Request) (string, bool) {
 // Every entry is compared, including after a match: stopping at the first hit
 // would make the request time depend on which holder it was, and the compare
 // itself is over two hashes of equal length.
-func (a *adminAuth) identify(presented string) (string, bool) {
+func (a *adminAuth) identify(credentials []config.AdminCredential, presented string) (string, bool) {
 	name := ""
 	found := false
-	for _, credential := range a.credentials {
+	for _, credential := range credentials {
 		if equalToken(presented, credential.Token) {
 			name = credential.Name
 			found = true

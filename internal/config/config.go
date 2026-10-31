@@ -717,11 +717,23 @@ func (m Moderation) AutoApproves(association string) bool {
 // Load reads path, expands ${ENV_VAR} placeholders, parses the YAML, applies
 // defaults, and validates the result.
 func Load(path string) (*Config, error) {
+	cfg, _, err := LoadWithRaw(path)
+	return cfg, err
+}
+
+// LoadWithRaw behaves like Load and also returns the bytes it parsed. The
+// reload watcher uses those bytes as its baseline, so the file it compares
+// against is exactly the one the process started with.
+func LoadWithRaw(path string) (*Config, []byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config %s: %w", path, err)
+		return nil, nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
-	return Parse(raw, path)
+	cfg, err := Parse(raw, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, raw, nil
 }
 
 // Parse behaves like Load for an in-memory document. source names the origin
