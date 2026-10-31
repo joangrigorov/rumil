@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.26](https://github.com/joangrigorov/rumil/compare/v0.0.25...v0.0.26) (2026-10-31)
+
+
+### Features
+
+* **config:** hot-reload the active configuration file ([#108](https://github.com/joangrigorov/rumil/issues/108)) ([f1dab03](https://github.com/joangrigorov/rumil/commit/f1dab03cf0cd6e82f52e7fa4dbf8913593a8f950))
+
 ## [0.0.25](https://github.com/joangrigorov/rumil/compare/v0.0.24...v0.0.25) (2026-10-30)
 
 
