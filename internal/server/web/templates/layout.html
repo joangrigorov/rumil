@@ -13,9 +13,19 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="topbar">
   <div class="topbar-inner">
-    <a class="brand" href="/ui/moderation">
-      <span class="brand-mark" aria-hidden="true">R</span>
-      <span class="brand-name">Rumil</span>
+    <!-- The Rumil mark, inlined from logo.svg so currentColor follows the theme. -->
+    <a class="brand" href="/ui/moderation" aria-label="Rumil">
+      <svg class="brand-logo" viewBox="0 0 1000 1040" aria-hidden="true" focusable="false">
+        <g fill="currentColor">
+          <path d="M 26 44 H 186 V 865 C 186 925, 205 948, 256 955 V 982 H 18 V 955 C 69 948, 88 925, 88 865 V 150 C 88 95, 70 74, 26 68 Z" />
+          <path fill-rule="evenodd" d="M 470 14 A 346 346 0 1 1 469.9 14 Z M 470 100 A 260 260 0 1 0 470.1 100 Z" />
+          <path d="M 470 232 L 497 333 L 598 360 L 497 387 L 470 488 L 443 387 L 342 360 L 443 333 Z" />
+          <g transform="translate(470, 360) rotate(53.5)">
+            <rect x="330" y="-32" width="100" height="64" />
+            <rect x="405" y="-71" width="380" height="142" rx="68" ry="68" />
+          </g>
+        </g>
+      </svg>
     </a>
     <nav class="nav" aria-label="Sections">
       <a href="/ui/moderation" {{if eq .Section "rules"}}aria-current="page"{{end}}>Rules</a>

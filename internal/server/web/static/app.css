@@ -26,8 +26,6 @@
   --scroll-thumb: #c9b184;
   --selection-bg: #e7bf83;
   --selection-ink: #2c2118;
-  --brand-bg: #b45309;
-  --brand-ink: #fff8ec;
   --btn-bg: #b45309;
   --btn-bg-hover: #92400e;
   --btn-ink: #fff8ec;
@@ -62,8 +60,6 @@
   --scroll-thumb: #2a313b;
   --selection-bg: #1f6feb;
   --selection-ink: #ffffff;
-  --brand-bg: #1f6feb;
-  --brand-ink: #ffffff;
   --btn-bg: #1f6feb;
   --btn-bg-hover: #388bfd;
   --btn-ink: #ffffff;
@@ -155,23 +151,16 @@ code {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  flex: none;
   color: var(--ink);
   text-decoration: none;
-  font-weight: 650;
-  letter-spacing: -0.01em;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--brand-bg);
-  color: var(--brand-ink);
-  font-size: 14px;
-  font-weight: 750;
+.brand-logo {
+  display: block;
+  width: 29px;
+  height: 30px;
+  color: var(--ink);
 }
 
 .nav {
@@ -733,11 +722,11 @@ body.console .topbar-inner {
 
 body.console .brand {
   color: var(--ink);
-  letter-spacing: -0.02em;
 }
 
-body.console .brand-mark {
-  border-radius: 4px;
+body.console .brand-logo {
+  width: 26px;
+  height: 27px;
 }
 
 body.console .nav a {
