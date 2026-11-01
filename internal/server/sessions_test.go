@@ -61,6 +61,21 @@ func newReviewSession(t *testing.T, h *harness, repo string, number int, title, 
 	return finished
 }
 
+func TestRootOpensTheSessionList(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	handler, _ := sessionsHandler(t, h)
+
+	response := moderatedRequest(t, handler, http.MethodGet, "/", adminToken, nil, "text/html")
+	if response.Code != http.StatusFound {
+		t.Fatalf("GET / = %d, want 302", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != "/ui/sessions" {
+		t.Errorf("GET / redirects to %q, want /ui/sessions", location)
+	}
+}
+
 func TestObservationDeckNeedsTheToken(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
@@ -106,6 +121,12 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the list does not contain %q:\n%s", want, body)
 		}
+	}
+
+	sessionsNav := strings.Index(body, ">Sessions</a>")
+	rulesNav := strings.Index(body, ">Rules</a>")
+	if sessionsNav < 0 || rulesNav < 0 || sessionsNav > rulesNav {
+		t.Errorf("the nav should list Sessions before Rules (sessions at %d, rules at %d)", sessionsNav, rulesNav)
 	}
 	if failed.Status != store.ReviewFailed {
 		t.Fatalf("the failed fixture is %q", failed.Status)

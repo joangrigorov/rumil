@@ -72,6 +72,11 @@ func (s *SessionsUI) Recorder() *SessionRecorder {
 
 // Routes mounts the deck.
 func (s *SessionsUI) Routes(mux *http.ServeMux) {
+	// The deck is the server's front page, so the bare origin opens the
+	// session list instead of answering 404.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/sessions", http.StatusFound)
+	})
 	mux.HandleFunc("GET /ui/sessions", s.auth.authorize(s.list))
 	mux.HandleFunc("GET /ui/sessions/{id}", s.auth.authorize(s.detail))
 	mux.HandleFunc("POST /ui/sessions/{id}/continue", s.auth.authorize(s.auth.sameSite(s.continueSession)))
