@@ -234,3 +234,24 @@ func TestStaticStylesheetIsEmbedded(t *testing.T) {
 		t.Errorf("the stylesheet carries no design tokens:\n%s", body)
 	}
 }
+
+// The favicon is the Rumil mark rather than the old letter tile, and it is
+// embedded with the other static assets.
+func TestFaviconUsesTheRumilMark(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/favicon.svg", nil)
+	recorder := httptest.NewRecorder()
+	staticHandler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /static/favicon.svg = %d, want 200", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "image/svg+xml") {
+		t.Errorf("Content-Type = %q, want an SVG type", contentType)
+	}
+	body := recorder.Body.String()
+	for _, want := range []string{`aria-label="Rumil"`, "M 470 232", "prefers-color-scheme"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the favicon does not contain %q:\n%s", want, body)
+		}
+	}
+}

@@ -128,6 +128,9 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 	if sessionsNav < 0 || rulesNav < 0 || sessionsNav > rulesNav {
 		t.Errorf("the nav should list Sessions before Rules (sessions at %d, rules at %d)", sessionsNav, rulesNav)
 	}
+	if !strings.Contains(body, `class="brand" href="/ui/sessions"`) {
+		t.Error("the brand link should open the session list")
+	}
 	if failed.Status != store.ReviewFailed {
 		t.Fatalf("the failed fixture is %q", failed.Status)
 	}
