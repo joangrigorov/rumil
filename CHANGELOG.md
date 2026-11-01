@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.28](https://github.com/joangrigorov/rumil/compare/v0.0.27...v0.0.28) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deck:** point the brand at sessions and use the mark as the favicon ([03fce66](https://github.com/joangrigorov/rumil/commit/03fce66cbd2887103d2f38d0482f4c65c9bb3305))
+
 ## [0.0.27](https://github.com/joangrigorov/rumil/compare/v0.0.26...v0.0.27) (2026-11-01)
 
 
