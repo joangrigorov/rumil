@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.27](https://github.com/joangrigorov/rumil/compare/v0.0.26...v0.0.27) (2026-11-01)
+
+
+### Features
+
+* **deck:** use the logo in the header and make sessions the default page ([d88baa4](https://github.com/joangrigorov/rumil/commit/d88baa43af1f3ac91686240d11504d87078a97c8))
+
 ## [0.0.26](https://github.com/joangrigorov/rumil/compare/v0.0.25...v0.0.26) (2026-10-31)
 
 
