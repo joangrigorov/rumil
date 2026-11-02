@@ -288,8 +288,21 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  width: 100%;
+  max-width: 1540px;
   height: 56px;
+  margin: 0 auto;
   padding: 0 var(--gutter);
+}
+
+/* Keep the navigation on the same centered rail as the page content. */
+body[data-section="home"] .topbar-inner,
+body[data-section="queue"] .topbar-inner {
+  max-width: 1280px;
+}
+
+body[data-section="cancel"] .topbar-inner {
+  max-width: 1024px;
 }
 
 .topbar-left,

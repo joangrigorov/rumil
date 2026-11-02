@@ -33,7 +33,7 @@
         <a href="/ui/home" {{if eq .Section "home"}}aria-current="page"{{end}}>Home</a>
         <a href="/ui/sessions" {{if eq .Section "sessions"}}aria-current="page"{{end}}>Sessions</a>
         <a href="/ui/moderation" {{if eq .Section "rules"}}aria-current="page"{{end}}>Rules</a>
-        <a href="/ui/queue" {{if eq .Section "queue"}}aria-current="page"{{end}}>Queue</a>
+        <a href="/ui/queue" {{if or (eq .Section "queue") (eq .Section "cancel")}}aria-current="page"{{end}}>Queue</a>
       </nav>
     </div>
     <div class="topbar-right">

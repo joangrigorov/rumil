@@ -77,7 +77,7 @@ func (s *SessionsUI) cancelConfirm(w http.ResponseWriter, r *http.Request) {
 
 	s.writePage(w, r, queueConfirmTemplates, "queue_confirm.html", queueConfirmPage{
 		Title:   "Cancel job",
-		Section: "queue",
+		Section: "cancel",
 		Job:     job,
 	})
 }
