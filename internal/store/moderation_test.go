@@ -123,6 +123,44 @@ func TestListMemoriesFiltersBySearchAndScope(t *testing.T) {
 	}
 }
 
+// The repository filter is a list of the repositories that actually have
+// rules, without a row per rule.
+func TestMemoryRepositoriesListsDistinctRepositories(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	for i, rule := range []struct {
+		repo string
+		text string
+	}{
+		{"payments", "Clock skew up to 60s is intentional"},
+		{"checkout", "The worker pool drains on SIGTERM"},
+		{"payments", "Settlements are idempotent upserts"},
+	} {
+		proposal := testProposal(rule.text, embeddingAt(i))
+		proposal.RepoName = rule.repo
+		if _, _, err := db.ProposeMemory(ctx, proposal); err != nil {
+			t.Fatalf("seeding a %s rule: %v", rule.repo, err)
+		}
+	}
+
+	repositories, err := db.MemoryRepositories(ctx, 98765432)
+	if err != nil {
+		t.Fatalf("MemoryRepositories returned error: %v", err)
+	}
+	if len(repositories) != 2 || repositories[0] != "acme/checkout" || repositories[1] != "acme/payments" {
+		t.Errorf("repositories = %v, want acme/checkout and acme/payments once each", repositories)
+	}
+
+	other, err := db.MemoryRepositories(ctx, 98765433)
+	if err != nil {
+		t.Fatalf("MemoryRepositories returned error: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("another tenant listed %v, want nothing", other)
+	}
+}
+
 // The Home summary counts every status in one read, scoped to the tenant.
 func TestMemoryStatsCountsByStatus(t *testing.T) {
 	db := testDB(t)

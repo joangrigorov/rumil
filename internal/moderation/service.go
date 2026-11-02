@@ -103,6 +103,12 @@ func (s *Service) Stats(ctx context.Context) (store.MemoryStats, error) {
 	return s.store.MemoryStats(ctx, s.installationID)
 }
 
+// Repositories returns the repositories this installation has rules for, which
+// is the set the rules page offers as a filter.
+func (s *Service) Repositories(ctx context.Context) ([]string, error) {
+	return s.store.MemoryRepositories(ctx, s.installationID)
+}
+
 // normalizeStatus turns a moderator's filter into one of the three statuses, or
 // into no filter at all when nothing was asked for.
 func normalizeStatus(status string) (string, error) {
