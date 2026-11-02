@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.31](https://github.com/joangrigorov/rumil/compare/v0.0.30...v0.0.31) (2026-11-02)
+
+
+### Features
+
+* **deck:** adopt the Stitch design system ([#118](https://github.com/joangrigorov/rumil/issues/118)) ([34c12b0](https://github.com/joangrigorov/rumil/commit/34c12b0fa7002b6e8475651b964b129575197c11))
+
 ## [0.0.30](https://github.com/joangrigorov/rumil/compare/v0.0.29...v0.0.30) (2026-11-02)
 
 
