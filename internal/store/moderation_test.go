@@ -82,6 +82,86 @@ func TestListMemoriesFiltersByStatusAndRepository(t *testing.T) {
 	})
 }
 
+// The table's filters narrow by the rule's text, its rationale and its scope,
+// which is what the moderation screen asks the statement for.
+func TestListMemoriesFiltersBySearchAndScope(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	repoRule := testProposal("The legacy worker keeps logrus until the migration", embeddingAt(0))
+	if _, _, err := db.ProposeMemory(ctx, repoRule); err != nil {
+		t.Fatalf("seeding a repository rule: %v", err)
+	}
+	orgRule := testProposal("Every service in the organization logs with log/slog", embeddingAt(1))
+	orgRule.Scope = ScopeOrg
+	if _, _, err := db.ProposeMemory(ctx, orgRule); err != nil {
+		t.Fatalf("seeding an organization rule: %v", err)
+	}
+
+	searched, err := db.ListMemories(ctx, MemoryFilter{InstallationID: repoRule.InstallationID, Search: "legacy worker"})
+	if err != nil {
+		t.Fatalf("ListMemories returned error: %v", err)
+	}
+	if len(searched) != 1 || searched[0].RuleText != repoRule.RuleText {
+		t.Errorf("search listed %+v, want only the repository rule", searched)
+	}
+
+	byRationale, err := db.ListMemories(ctx, MemoryFilter{InstallationID: repoRule.InstallationID, Search: "confirmed this in review"})
+	if err != nil {
+		t.Fatalf("ListMemories returned error: %v", err)
+	}
+	if len(byRationale) != 2 {
+		t.Errorf("searching the rationale listed %d rules, want both", len(byRationale))
+	}
+
+	scoped, err := db.ListMemories(ctx, MemoryFilter{InstallationID: repoRule.InstallationID, Scope: ScopeOrg})
+	if err != nil {
+		t.Fatalf("ListMemories returned error: %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].Scope != ScopeOrg {
+		t.Errorf("scope filter listed %+v, want only the organization rule", scoped)
+	}
+}
+
+// The Home summary counts every status in one read, scoped to the tenant.
+func TestMemoryStatsCountsByStatus(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	pending := testProposal("Clock skew up to 60s is intentional", embeddingAt(0))
+	if _, _, err := db.ProposeMemory(ctx, pending); err != nil {
+		t.Fatalf("seeding a pending rule: %v", err)
+	}
+	approved := testProposal("Settlements are idempotent upserts", embeddingAt(1))
+	if stored, _, err := db.ProposeMemory(ctx, approved); err != nil {
+		t.Fatalf("seeding an approved rule: %v", err)
+	} else if _, err := db.ApproveMemory(ctx, pending.InstallationID, stored.ID, MemoryDecision{ReviewedBy: "octocat"}); err != nil {
+		t.Fatalf("approving the rule: %v", err)
+	}
+	rejected := testProposal("The worker pool drains on SIGTERM", embeddingAt(2))
+	if stored, _, err := db.ProposeMemory(ctx, rejected); err != nil {
+		t.Fatalf("seeding a rejected rule: %v", err)
+	} else if _, err := db.RejectMemory(ctx, pending.InstallationID, stored.ID, "octocat"); err != nil {
+		t.Fatalf("rejecting the rule: %v", err)
+	}
+
+	stats, err := db.MemoryStats(ctx, pending.InstallationID)
+	if err != nil {
+		t.Fatalf("MemoryStats returned error: %v", err)
+	}
+	if stats != (MemoryStats{Total: 3, Pending: 1, Approved: 1, Rejected: 1}) {
+		t.Errorf("stats = %+v, want one of each and three in total", stats)
+	}
+
+	other, err := db.MemoryStats(ctx, pending.InstallationID+1)
+	if err != nil {
+		t.Fatalf("MemoryStats returned error: %v", err)
+	}
+	if other.Total != 0 {
+		t.Errorf("another tenant counted %d rules, want none", other.Total)
+	}
+}
+
 // T-030-02: approving a rule records who decided and makes the rule
 // retrievable.
 func TestApproveMemoryMakesTheRuleRetrievable(t *testing.T) {

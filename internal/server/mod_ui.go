@@ -61,16 +61,24 @@ func NewModerationUI(service *moderation.Service, credentials []config.AdminCred
 // same-site check, which is what a browser cannot be asked to skip.
 func (m *ModerationUI) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/moderation", m.auth.authorize(m.list))
+	mux.HandleFunc("GET /ui/moderation/{id}", m.auth.authorize(m.detail))
 	mux.HandleFunc("POST /api/moderation/{id}/approve", m.auth.authorize(m.auth.sameSite(m.approve)))
 	mux.HandleFunc("POST /api/moderation/{id}/reject", m.auth.authorize(m.auth.sameSite(m.reject)))
 }
 
 func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
-	rawRepo := r.URL.Query().Get("repo")
+	query := r.URL.Query()
+	rawRepo := query.Get("repo")
+	status := strings.ToUpper(strings.TrimSpace(query.Get("status")))
+	scope := strings.ToUpper(strings.TrimSpace(query.Get("scope")))
+	search := strings.TrimSpace(query.Get("search"))
+
 	filter := store.MemoryFilter{
-		Status:  r.URL.Query().Get("status"),
+		Status:  status,
+		Scope:   scope,
+		Search:  search,
 		Limit:   store.MemoryListMax,
-		OrgName: r.URL.Query().Get("org"),
+		OrgName: query.Get("org"),
 	}
 	if rawRepo != "" {
 		org, name, err := splitRepoRef(rawRepo)
@@ -87,23 +95,55 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The counts are informational, so a failure to read them does not take the
+	// table down; the page simply renders without the status summary.
+	var stats *store.MemoryStats
+	if counts, statsErr := m.service.Stats(r.Context()); statsErr != nil {
+		m.logger.Warn("counting the recorded rules failed", "error", statsErr)
+	} else {
+		stats = &counts
+	}
+
 	// The page renders text a commenter wrote, so it is not framed: an approve
 	// button under someone else's overlay would otherwise be a decision taken
 	// by whoever drew the overlay, from this origin, which the same-site check
 	// on the post cannot see.
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := moderationTemplates.ExecuteTemplate(w, "layout", moderationPage{
+	m.render(w, moderationTemplates, moderationPage{
 		Title:   "Recorded rules",
 		Section: "rules",
 		Rules:   memories,
 		Count:   len(memories),
-		Status:  strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Stats:   stats,
+		Status:  status,
+		Scope:   scope,
+		Search:  search,
 		Repo:    rawRepo,
+		Decided: query.Get("decided"),
+	})
+}
+
+func (m *ModerationUI) detail(w http.ResponseWriter, r *http.Request) {
+	rule, err := m.service.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		m.fail(w, r, err)
+		return
+	}
+	m.render(w, moderationDetailTemplates, moderationDetailPage{
+		Title:   "Rule " + rule.ShortID(),
+		Section: "rules",
+		Rule:    rule,
+		Pending: rule.Status == store.MemoryPending,
 		Decided: r.URL.Query().Get("decided"),
-	}); err != nil {
+	})
+}
+
+// render writes one operator page with the headers every rules screen carries.
+func (m *ModerationUI) render(w http.ResponseWriter, templates *template.Template, page any) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := templates.ExecuteTemplate(w, "layout", page); err != nil {
 		// The response is already streaming, so the failure can only be logged.
 		m.logger.Error("rendering the moderation page failed", "error", err)
 	}
@@ -194,7 +234,14 @@ func (m *ModerationUI) decide(w http.ResponseWriter, r *http.Request, memory sto
 		if status := r.FormValue("status_filter"); status != "" {
 			query.Set("status", status)
 		}
-		http.Redirect(w, r, "/ui/moderation?"+query.Encode(), http.StatusSeeOther)
+		target := "/ui/moderation"
+		if r.FormValue("next") == "detail" {
+			// A decision taken on the details page returns there, so the
+			// moderator sees the rule as it now stands instead of losing it
+			// from a filtered table.
+			target = "/ui/moderation/" + memory.ID
+		}
+		http.Redirect(w, r, target+"?"+query.Encode(), http.StatusSeeOther)
 		return
 	}
 
@@ -273,7 +320,8 @@ func moderatorOf(r *http.Request) string {
 	return "admin-token"
 }
 
-// moderationPage is what the template renders.
+// moderationPage is what the rules table renders. Stats is nil when the counts
+// could not be read, which only costs the status summary.
 type moderationPage struct {
 	Title   string
 	Section string
@@ -281,8 +329,23 @@ type moderationPage struct {
 	Fixed   bool
 	Rules   []store.Memory
 	Count   int
+	Stats   *store.MemoryStats
 	Status  string
+	Scope   string
+	Search  string
 	Repo    string
+	Decided string
+}
+
+// moderationDetailPage is the view model of one rule: everything the table has
+// no room for, and the decision form when the rule is still pending.
+type moderationDetailPage struct {
+	Title   string
+	Section string
+	Refresh string
+	Fixed   bool
+	Rule    store.Memory
+	Pending bool
 	Decided string
 }
 
@@ -291,7 +354,12 @@ type moderationPage struct {
 // disabled — which matters on a surface that can promote unvetted text into a
 // review prompt, where the less machinery between the operator and the decision
 // the better.
-var moderationTemplates = parseTemplates("moderation.html", pageFuncs())
+// The table and the details screen are separate sets: both define "content",
+// which the shared layout renders, so one set can only hold one of them.
+var (
+	moderationTemplates       = parseTemplates("moderation.html", pageFuncs())
+	moderationDetailTemplates = parseTemplates("moderation_detail.html", pageFuncs())
+)
 
 // pageFuncs are the helpers every operator page shares.
 func pageFuncs() template.FuncMap {

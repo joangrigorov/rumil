@@ -18,6 +18,9 @@ import (
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
+// homeSessionLimitForTest mirrors the Home page's five-per-section bound.
+const homeSessionLimitForTest = 5
+
 // sessionsHandler mounts the observation deck with the harness's database
 // behind it. The deck shares the moderation credential.
 func sessionsHandler(t *testing.T, h *harness) (http.Handler, *server.SessionsUI) {
@@ -61,7 +64,7 @@ func newReviewSession(t *testing.T, h *harness, repo string, number int, title, 
 	return finished
 }
 
-func TestRootOpensTheSessionList(t *testing.T) {
+func TestRootOpensHome(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -71,8 +74,8 @@ func TestRootOpensTheSessionList(t *testing.T) {
 	if response.Code != http.StatusFound {
 		t.Fatalf("GET / = %d, want 302", response.Code)
 	}
-	if location := response.Header().Get("Location"); location != "/ui/sessions" {
-		t.Errorf("GET / redirects to %q, want /ui/sessions", location)
+	if location := response.Header().Get("Location"); location != "/ui/home" {
+		t.Errorf("GET / redirects to %q, want /ui/home", location)
 	}
 }
 
@@ -83,7 +86,7 @@ func TestObservationDeckNeedsTheToken(t *testing.T) {
 	newReviewSession(t, h, "payments", 42, "Fix the flap", "", store.ReviewRunning)
 	handler, _ := sessionsHandler(t, h)
 
-	for _, path := range []string{"/ui/sessions", "/ui/sessions/00000000-0000-0000-0000-000000000000"} {
+	for _, path := range []string{"/ui/home", "/ui/sessions", "/ui/sessions/00000000-0000-0000-0000-000000000000"} {
 		response := moderatedRequest(t, handler, http.MethodGet, path, "", nil, "text/html")
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("GET %s without a token = %d, want 401", path, response.Code)
@@ -123,13 +126,14 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 		}
 	}
 
+	homeNav := strings.Index(body, ">Home</a>")
 	sessionsNav := strings.Index(body, ">Sessions</a>")
 	rulesNav := strings.Index(body, ">Rules</a>")
-	if sessionsNav < 0 || rulesNav < 0 || sessionsNav > rulesNav {
-		t.Errorf("the nav should list Sessions before Rules (sessions at %d, rules at %d)", sessionsNav, rulesNav)
+	if homeNav < 0 || sessionsNav < 0 || rulesNav < 0 || homeNav > sessionsNav || sessionsNav > rulesNav {
+		t.Errorf("the nav should list Home, Sessions and Rules in that order (home %d, sessions %d, rules %d)", homeNav, sessionsNav, rulesNav)
 	}
-	if !strings.Contains(body, `class="brand" href="/ui/sessions"`) {
-		t.Error("the brand link should open the session list")
+	if !strings.Contains(body, `class="brand" href="/ui/home"`) {
+		t.Error("the brand link should open Home")
 	}
 	if failed.Status != store.ReviewFailed {
 		t.Fatalf("the failed fixture is %q", failed.Status)
@@ -165,6 +169,66 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 	empty := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?status=RUNNING", adminToken, nil, "text/html")
 	if !strings.Contains(empty.Body.String(), "No sessions match.") {
 		t.Errorf("the empty state is missing:\n%s", empty.Body.String())
+	}
+}
+
+// Home is the landing page: the five sessions running now, the five that
+// finished last, and the rule summary with the pending decisions called out.
+func TestHomeShowsRunningRecentAndRuleStats(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+
+	var running []store.ReviewSession
+	for i := 1; i <= homeSessionLimitForTest+2; i++ {
+		running = append(running, newReviewSession(t, h, "payments", i, "Fix the flap", "", store.ReviewRunning))
+	}
+	var finished []store.ReviewSession
+	for i := 1; i <= homeSessionLimitForTest+2; i++ {
+		finished = append(finished, newReviewSession(t, h, "ledger", i, "Add a retry", "The change is sound.", store.ReviewSucceeded))
+	}
+
+	seedMemory(t, h, "Clock skew up to 60 seconds is intentional")
+	approved := seedMemory(t, h, "Money is decimal, never float")
+	if _, err := h.db.ApproveMemory(context.Background(), 98765432, approved.ID, store.MemoryDecision{ReviewedBy: "octocat"}); err != nil {
+		t.Fatalf("approving a rule: %v", err)
+	}
+
+	deck := server.NewSessionsUI(h.db, credentialsFor(adminToken), h.logger,
+		server.WithSessionsRuleStats(func(ctx context.Context) (store.MemoryStats, error) {
+			return h.db.MemoryStats(ctx, 98765432)
+		}))
+	handler := server.Handler(h.webhook(), h.db, nil, deck)
+
+	response := moderatedRequest(t, handler, http.MethodGet, "/ui/home", adminToken, nil, "text/html")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, want := range []string{
+		"Running now",
+		"Recently completed",
+		"1 rule needs a decision",
+		"acme/payments#",
+		"acme/ledger#",
+		`href="/ui/moderation?status=PENDING"`,
+		`class="brand" href="/ui/home"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Home does not contain %q:\n%s", want, body)
+		}
+	}
+	if rows := strings.Count(body, `class="session-row"`); rows != homeSessionLimitForTest*2 {
+		t.Errorf("Home shows %d session rows, want %d", rows, homeSessionLimitForTest*2)
+	}
+	// The two oldest sessions of each kind fall outside the five.
+	for _, session := range []store.ReviewSession{running[0], finished[0]} {
+		if strings.Contains(body, session.ID) {
+			t.Errorf("Home lists a session outside the top five: %s", session.ID)
+		}
+	}
+	if !strings.Contains(body, running[len(running)-1].ID) || !strings.Contains(body, finished[len(finished)-1].ID) {
+		t.Error("Home does not list the newest sessions")
 	}
 }
 

@@ -1,0 +1,139 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow"><a href="/ui/moderation">Rules</a> / {{short .Rule.ID}}</p>
+    <h1>Rule details</h1>
+    <p class="lede">{{if .Pending}}This rule is waiting for a decision. Approving it keeps the wording below and makes it available to reviews.{{else}}This rule has already been decided. Its wording and reach are recorded below.{{end}}</p>
+  </div>
+  <p class="count"><span class="pill status-{{lower .Rule.Status}}">{{.Rule.Status}}</span></p>
+</header>
+
+{{if .Decided}}<p class="notice" role="status">{{.Decided}}</p>{{end}}
+
+<div class="detail-grid">
+  <article class="detail-card">
+    <div class="detail-tags">
+      <span class="pill scope-{{lower .Rule.Scope}}">{{.Rule.Scope}}</span>
+      {{if eq .Rule.Authority "DIRECTIVE"}}<span class="pill authority-directive">DIRECTIVE</span>{{else}}<span class="pill authority-context">CONTEXT</span>{{end}}
+      <code class="rule-id">{{short .Rule.ID}}</code>
+    </div>
+
+    <p class="rule-body">{{.Rule.RuleText}}</p>
+
+    {{if .Rule.Rationale}}
+    <div class="rationale">
+      <span class="field-label">Why this rule was proposed</span>
+      <p>{{.Rule.Rationale}}</p>
+    </div>
+    {{end}}
+
+    <dl class="detail-meta">
+      <div>
+        <dt>Repository</dt>
+        <dd>{{if eq .Rule.Scope "ORG"}}{{.Rule.OrgName}} <span class="cell-sub">proposed in {{.Rule.RepoName}}</span>{{else}}{{.Rule.OrgName}}/{{.Rule.RepoName}}{{end}}</dd>
+      </div>
+      <div>
+        <dt>Scope</dt>
+        <dd>{{if eq .Rule.Scope "ORG"}}Every repository in {{.Rule.OrgName}}{{else}}This repository, {{.Rule.RepoName}}{{end}}</dd>
+      </div>
+      <div>
+        <dt>Authority</dt>
+        <dd>{{if eq .Rule.Authority "DIRECTIVE"}}Above the repository guidelines{{else}}Recorded context; the guidelines outrank it{{end}}</dd>
+      </div>
+      <div>
+        <dt>Path glob</dt>
+        <dd>{{if .Rule.PathGlob}}<code>{{.Rule.PathGlob}}</code>{{else}}Whole repository{{end}}</dd>
+      </div>
+      <div>
+        <dt>Proposed</dt>
+        <dd>{{date .Rule.CreatedAt}} by {{.Rule.RequestedBy}}</dd>
+      </div>
+      {{if .Rule.SourcePR}}
+      <div>
+        <dt>Source</dt>
+        <dd>PR #{{.Rule.SourcePR}}{{if .Rule.SourceComment}} · <a href="{{.Rule.SourceComment}}" target="_blank" rel="noreferrer noopener">source comment</a>{{end}}</dd>
+      </div>
+      {{end}}
+      {{if .Rule.ReviewedBy}}
+      <div>
+        <dt>Decided by</dt>
+        <dd>{{.Rule.ReviewedBy}} on {{date .Rule.UpdatedAt}}</dd>
+      </div>
+      {{end}}
+    </dl>
+  </article>
+
+  {{if .Pending}}
+  <section class="detail-card">
+    <h2 class="section-title">Decision</h2>
+    <p class="section-sub">Approve the rule as it was proposed, or adjust its wording and reach first. Rejecting keeps the row for the record but takes it out of every review.</p>
+
+    <form id="decision-{{short .Rule.ID}}" class="form-stack" method="post" action="/api/moderation/{{.Rule.ID}}/approve">
+      <input type="hidden" name="next" value="detail">
+
+      <label class="field">
+        <span class="field-label">Rule wording</span>
+        <textarea name="rule_text" rows="5">{{.Rule.RuleText}}</textarea>
+        <span class="field-hint">This is the text a review reads. Editing it re-embeds the rule so it is found by the words you approve.</span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Path glob</span>
+        <input type="text" name="path_glob" value="{{.Rule.PathGlob}}" placeholder="internal/payments/**" spellcheck="false">
+        <span class="field-hint">Limit the rule to matching files. Leave it empty to apply to the whole repository.</span>
+      </label>
+
+      {{if eq .Rule.Scope "ORG"}}
+      <label class="field">
+        <span class="field-label">Scope</span>
+        <select name="scope">
+          <option value="ORG" selected>ORG — every repository in {{.Rule.OrgName}}</option>
+          <option value="REPO">REPO — this repository, {{.Rule.RepoName}}</option>
+        </select>
+        <span class="field-hint">A rule can be narrowed to the repository it was proposed in. It is not widened from here.</span>
+      </label>
+      {{end}}
+
+      <label class="field">
+        <span class="field-label">Authority</span>
+        <select name="authority">
+          {{if eq .Rule.Authority "DIRECTIVE"}}
+          <option value="DIRECTIVE" selected>DIRECTIVE — above the guidelines</option>
+          <option value="CONTEXT">CONTEXT — the guidelines outrank it</option>
+          {{else}}
+          <option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>
+          <option value="DIRECTIVE">DIRECTIVE — above the guidelines{{if eq .Rule.Scope "ORG"}}; needs REPO scope{{end}}</option>
+          {{end}}
+        </select>
+        <span class="field-hint">A directive overrides the repository's <code>RUMIL.md</code> for this case. It applies to one repository.</span>
+      </label>
+    </form>
+
+    <div class="decision-bar">
+      <button class="btn btn-primary" type="submit" form="decision-{{short .Rule.ID}}">Approve rule</button>
+      <form method="post" action="/api/moderation/{{.Rule.ID}}/reject">
+        <input type="hidden" name="next" value="detail">
+        <button class="btn btn-danger" type="submit">Reject rule</button>
+      </form>
+    </div>
+  </section>
+  {{else}}
+  <section class="detail-card">
+    <h2 class="section-title">Decision</h2>
+    <p class="section-sub">This rule is {{lower .Rule.Status}}, so there is nothing left to decide.</p>
+    <dl class="detail-meta">
+      <div>
+        <dt>Status</dt>
+        <dd><span class="pill status-{{lower .Rule.Status}}">{{.Rule.Status}}</span></dd>
+      </div>
+      {{if .Rule.ReviewedBy}}
+      <div>
+        <dt>Decided by</dt>
+        <dd>{{.Rule.ReviewedBy}} on {{date .Rule.UpdatedAt}}</dd>
+      </div>
+      {{end}}
+    </dl>
+  </section>
+  {{end}}
+</div>
+{{end}}

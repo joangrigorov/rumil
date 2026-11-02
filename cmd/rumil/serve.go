@@ -110,7 +110,10 @@ func newServeCmd(configPath *string) *cobra.Command {
 			// review that begins immediately is still recorded.
 			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminCredentials(), logger,
 				server.WithSessionsMetrics(meter),
-				server.WithSessionsCredentials(credentials))
+				server.WithSessionsCredentials(credentials),
+				server.WithSessionsRuleStats(func(ctx context.Context) (store.MemoryStats, error) {
+					return db.MemoryStats(ctx, cfg.GitHub.PrimaryInstallationID())
+				}))
 
 			// One pool per installation: its workers claim only that account's
 			// jobs, so a busy installation cannot take another's workers. An

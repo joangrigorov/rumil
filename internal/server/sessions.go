@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,9 @@ type SessionsUI struct {
 	broker *broker
 	meter  *metrics.Metrics
 	logger *slog.Logger
+	// ruleStats feeds the Home page's rule summary. It is nil when the deck is
+	// mounted without the moderation surface.
+	ruleStats func(context.Context) (store.MemoryStats, error)
 }
 
 // SessionsOption tunes the deck at construction.
@@ -45,6 +49,12 @@ func WithSessionsCredentials(source func() []config.AdminCredential) SessionsOpt
 	return func(s *SessionsUI) {
 		s.auth = newAdminAuthSource(source, "rumil sessions", s.logger)
 	}
+}
+
+// WithSessionsRuleStats supplies the rule counts the Home page shows. Without
+// it, Home lists sessions and leaves the rule summary out.
+func WithSessionsRuleStats(source func(context.Context) (store.MemoryStats, error)) SessionsOption {
+	return func(s *SessionsUI) { s.ruleStats = source }
 }
 
 // NewSessionsUI builds the deck. The broker is owned here so the recorder the
@@ -72,11 +82,12 @@ func (s *SessionsUI) Recorder() *SessionRecorder {
 
 // Routes mounts the deck.
 func (s *SessionsUI) Routes(mux *http.ServeMux) {
-	// The deck is the server's front page, so the bare origin opens the
-	// session list instead of answering 404.
+	// Home is the server's front page, so the bare origin opens it instead of
+	// answering 404.
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/sessions", http.StatusFound)
+		http.Redirect(w, r, "/ui/home", http.StatusFound)
 	})
+	mux.HandleFunc("GET /ui/home", s.auth.authorize(s.home))
 	mux.HandleFunc("GET /ui/sessions", s.auth.authorize(s.list))
 	mux.HandleFunc("GET /ui/sessions/{id}", s.auth.authorize(s.detail))
 	mux.HandleFunc("POST /ui/sessions/{id}/continue", s.auth.authorize(s.auth.sameSite(s.continueSession)))

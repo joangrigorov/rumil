@@ -256,6 +256,52 @@ func TestListReviewSessionsIsNewestFirstAndBounded(t *testing.T) {
 	}
 }
 
+// Home asks for what finished last, so a running session is left to its own
+// section and the order is the finish time.
+func TestRecentCompletedReviewSessionsSkipsRunningAndIsNewestFirst(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	create := func(number int) ReviewSession {
+		t.Helper()
+		session, err := db.CreateReviewSession(ctx, NewReviewSession{
+			InstallationID: 98765432,
+			OrgName:        "acme",
+			RepoName:       "payments",
+			PRNumber:       number,
+		})
+		if err != nil {
+			t.Fatalf("creating session %d: %v", number, err)
+		}
+		return session
+	}
+
+	create(1) // left running
+	for _, number := range []int{2, 3} {
+		session := create(number)
+		if err := db.FinishReviewSession(ctx, session.ID, ReviewOutcome{Status: ReviewSucceeded}); err != nil {
+			t.Fatalf("finishing session %d: %v", number, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	sessions, err := db.RecentCompletedReviewSessions(ctx, 1)
+	if err != nil {
+		t.Fatalf("RecentCompletedReviewSessions returned error: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].PRNumber != 3 {
+		t.Errorf("recent = %+v, want the last finished session (#3)", sessions)
+	}
+
+	sessions, err = db.RecentCompletedReviewSessions(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentCompletedReviewSessions returned error: %v", err)
+	}
+	if len(sessions) != 2 || sessions[0].PRNumber != 3 || sessions[1].PRNumber != 2 {
+		t.Errorf("recent = %+v, want the completed sessions newest first", sessions)
+	}
+}
+
 func TestReviewSessionContinuationRecordsTheAttempt(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()

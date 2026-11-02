@@ -1,0 +1,111 @@
+{{define "content"}}
+<header class="page-head">
+  <div class="page-head-text">
+    <p class="eyebrow">rumil / home</p>
+    <h1>Home</h1>
+    <p class="lede">What the reviewer is working on, what it finished last, and whether any recorded rule is waiting for a decision.</p>
+  </div>
+</header>
+
+{{if .Stats}}
+<section class="home-summary" aria-label="Rules at a glance">
+  <div class="stat-grid">
+    <a class="stat" href="/ui/moderation">
+      <span class="stat-label">Rules</span>
+      <span class="stat-value">{{.Stats.Total}}</span>
+      <span class="stat-note">recorded</span>
+    </a>
+    <a class="stat{{if gt .Stats.Pending 0}} stat-pending{{end}}" href="/ui/moderation?status=PENDING">
+      <span class="stat-label">Pending</span>
+      <span class="stat-value">{{.Stats.Pending}}</span>
+      <span class="stat-note">need a decision</span>
+    </a>
+    <a class="stat" href="/ui/moderation?status=APPROVED">
+      <span class="stat-label">Approved</span>
+      <span class="stat-value">{{.Stats.Approved}}</span>
+      <span class="stat-note">reaching reviews</span>
+    </a>
+    <a class="stat" href="/ui/moderation?status=REJECTED">
+      <span class="stat-label">Rejected</span>
+      <span class="stat-value">{{.Stats.Rejected}}</span>
+      <span class="stat-note">kept for the record</span>
+    </a>
+  </div>
+
+  {{if gt .Stats.Pending 0}}
+  <a class="home-alert" href="/ui/moderation?status=PENDING">
+    <span class="home-alert-title">{{.Stats.Pending}} {{if eq .Stats.Pending 1}}rule needs{{else}}rules need{{end}} a decision</span>
+    <span class="home-alert-sub">Open the pending rules to approve, edit or reject them.</span>
+    <span class="home-alert-go" aria-hidden="true">→</span>
+  </a>
+  {{else}}
+  <p class="home-clear">No rules are waiting for a decision.</p>
+  {{end}}
+</section>
+{{end}}
+
+<div class="home-grid">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Running now</h2>
+      <a class="panel-link" href="/ui/sessions?status=RUNNING">View all</a>
+    </div>
+    {{if .Running}}
+    <ol class="home-sessions">
+      {{range .Running}}
+      <li>
+        <a class="session-row" href="/ui/sessions/{{.ID}}">
+          <div class="session-row-top">
+            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+            <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+            <span class="session-when">{{date .StartedAt}}</span>
+          </div>
+          <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
+          <div class="session-meta">
+            {{if .Model}}<code>{{.Model}}</code>{{end}}
+            <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+            {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
+            <span>{{duration .StartedAt .FinishedAt}}</span>
+          </div>
+        </a>
+      </li>
+      {{end}}
+    </ol>
+    {{else}}
+    <p class="panel-empty">No review is running right now.</p>
+    {{end}}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="panel-title">Recently completed</h2>
+      <a class="panel-link" href="/ui/sessions">View all</a>
+    </div>
+    {{if .Recent}}
+    <ol class="home-sessions">
+      {{range .Recent}}
+      <li>
+        <a class="session-row" href="/ui/sessions/{{.ID}}">
+          <div class="session-row-top">
+            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+            <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+            <span class="session-when">{{datePtr .FinishedAt}}{{if not .FinishedAt}}{{date .StartedAt}}{{end}}</span>
+          </div>
+          <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
+          <div class="session-meta">
+            {{if .Model}}<code>{{.Model}}</code>{{end}}
+            <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+            {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
+            <span>{{duration .StartedAt .FinishedAt}}</span>
+            {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}
+          </div>
+        </a>
+      </li>
+      {{end}}
+    </ol>
+    {{else}}
+    <p class="panel-empty">No review has finished yet.</p>
+    {{end}}
+  </section>
+</div>
+{{end}}
