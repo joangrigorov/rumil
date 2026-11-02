@@ -1,25 +1,24 @@
-/* Rumil color theme: system by default, with an explicit dark or light choice.
+/* Rumil color theme: the Stitch deck is dark by default, with an explicit
+ * light choice or the operating system's preference.
  *
  * The script runs in the head so the resolved theme is on <html> before the
- * first paint. One button cycles Auto -> Dark -> Light; the stored value is the
- * user's choice and data-theme is always the resolved dark or light value.
+ * first paint. The stored value is the user's choice; data-theme is always the
+ * resolved dark or light value.
  */
 (function () {
   "use strict";
 
   var KEY = "rumil.theme";
-  var MODES = ["system", "dark", "light"];
-  var LABELS = { system: "Auto", dark: "Dark", light: "Light" };
   var root = document.documentElement;
   var media = window.matchMedia("(prefers-color-scheme: dark)");
-  var toggle = null;
+  var buttons = [];
 
   function stored() {
     try {
       var value = window.localStorage.getItem(KEY);
-      return value === "dark" || value === "light" ? value : "system";
+      return value === "dark" || value === "light" || value === "system" ? value : "dark";
     } catch (error) {
-      return "system";
+      return "dark";
     }
   }
 
@@ -30,24 +29,14 @@
     return media.matches ? "dark" : "light";
   }
 
-  function next(mode) {
-    return MODES[(MODES.indexOf(mode) + 1) % MODES.length];
-  }
-
   function apply(mode) {
     root.setAttribute("data-theme", resolved(mode));
     root.setAttribute("data-theme-mode", mode);
 
-    if (!toggle) {
-      toggle = document.getElementById("theme-toggle");
+    for (var i = 0; i < buttons.length; i++) {
+      var selected = buttons[i].getAttribute("data-theme-mode") === mode;
+      buttons[i].setAttribute("aria-pressed", selected ? "true" : "false");
     }
-    if (!toggle) {
-      return;
-    }
-
-    var nextMode = next(mode);
-    toggle.setAttribute("aria-label", "Color theme: " + LABELS[mode] + ". Activate to switch to " + LABELS[nextMode] + ".");
-    toggle.title = "Theme: " + LABELS[mode] + " (click for " + LABELS[nextMode] + ")";
   }
 
   apply(stored());
@@ -71,20 +60,19 @@
   });
 
   document.addEventListener("DOMContentLoaded", function () {
-    toggle = document.getElementById("theme-toggle");
+    buttons = Array.prototype.slice.call(document.querySelectorAll("button[data-theme-mode]"));
     apply(stored());
 
-    if (!toggle) {
-      return;
-    }
-    toggle.addEventListener("click", function () {
-      var mode = next(stored());
-      try {
-        window.localStorage.setItem(KEY, mode);
-      } catch (error) {
-        // A browser that blocks storage still gets the theme for this page.
-      }
-      apply(mode);
+    buttons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        var mode = button.getAttribute("data-theme-mode");
+        try {
+          window.localStorage.setItem(KEY, mode);
+        } catch (error) {
+          // A browser that blocks storage still gets the theme for this page.
+        }
+        apply(mode);
+      });
     });
   });
 })();

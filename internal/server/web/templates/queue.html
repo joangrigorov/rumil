@@ -1,39 +1,64 @@
 {{define "content"}}
+<div class="page-body">
 <header class="page-head">
   <div class="page-head-text">
-    <p class="eyebrow">rumil / queue</p>
+    <p class="eyebrow">Rumil / Queue</p>
     <h1>Queue</h1>
     <p class="lede">Deliveries waiting for a worker and reviews running now. The page refreshes while there is work; cancelling a review stops it before its next model request.</p>
   </div>
-  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}job{{else}}jobs{{end}}{{if .Running}} · <strong>{{.Running}}</strong> running{{end}}{{if .Queued}} · <strong>{{.Queued}}</strong> queued{{end}}</p>
+  <div class="count count-stack">
+    <div class="count-row">
+      <span class="count-chip"><strong>{{.Count}}</strong> {{if eq .Count 1}}job{{else}}jobs{{end}}</span>
+      {{if .Running}}<span class="count-chip"><strong>{{.Running}}</strong> running</span>{{end}}
+      {{if .Queued}}<span class="count-chip"><strong>{{.Queued}}</strong> queued</span>{{end}}
+    </div>
+    {{if .Entries}}<span class="count-note"><span class="icon icon-sm" aria-hidden="true">sync</span>The page refreshes automatically while there is work.</span>{{end}}
+  </div>
 </header>
 
 {{if .Entries}}
-<ol class="sessions">
+<div class="queue-grid">
+  <div class="queue-metric">
+    <span class="queue-metric-label">Active tasks</span>
+    <div class="queue-metric-body"><span class="queue-metric-value is-primary">{{.Running}}</span><span class="queue-metric-note">in flight</span></div>
+  </div>
+  <div class="queue-metric">
+    <span class="queue-metric-label">Queued work</span>
+    <div class="queue-metric-body"><span class="queue-metric-value is-tertiary">{{.Queued}}</span><span class="queue-metric-note">pending lease</span></div>
+  </div>
+</div>
+
+<div class="queue-list">
   {{range .Entries}}
-  <li>
-    <div class="session-row">
-      <div class="session-row-top">
-        <span class="pill status-{{lower .Status}}">{{if .CancelRequested}}cancelling…{{else}}{{.Status}}{{end}}</span>
-        <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
-        <span class="session-when">{{age .CreatedAt}} ago</span>
+  <div class="queue-card">
+    <div class="queue-card-main">
+      <div class="queue-card-top">
+        <span class="pill status-{{if .CancelRequested}}cancelling{{else}}{{lower .Status}}{{end}}">{{if .CancelRequested}}cancelling…{{else}}{{.Status}}{{end}}</span>
+        <span class="queue-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+        <span class="queue-id">{{.DeliveryID}}</span>
       </div>
-      <div class="session-meta">
-        <span>{{.EventType}}</span>
-        <span>delivery <code>{{short .DeliveryID}}</code></span>
-        {{if .WorkerID}}<span>worker <code>{{.WorkerID}}</code></span>{{end}}
-        {{if .SessionID}}<span><a href="/ui/sessions/{{.SessionID}}">open session</a></span>{{end}}
-        <span><a href="/ui/queue/{{.ID}}/cancel">Cancel…</a></span>
+      <div class="queue-card-meta">
+        <span class="event-type">{{.EventType}}</span>
+        <span class="sep" aria-hidden="true">•</span>
+        <span>{{age .CreatedAt}} ago</span>
+        <span class="sep" aria-hidden="true">•</span>
+        {{if .WorkerID}}<span class="worker">{{.WorkerID}}</span>{{else}}<span class="worker">unassigned</span>{{end}}
       </div>
     </div>
-  </li>
+    <div class="queue-card-actions">
+      {{if .SessionID}}<a href="/ui/sessions/{{.SessionID}}"><span>open session</span><span class="icon" aria-hidden="true">arrow_outward</span></a>{{end}}
+      <a class="cancel-link" href="/ui/queue/{{.ID}}/cancel"><span>Cancel…</span></a>
+    </div>
+  </div>
   {{end}}
-</ol>
+</div>
 {{else}}
 <div class="empty">
+  <span class="empty-icon"><span class="icon" aria-hidden="true">inbox</span></span>
   <p class="empty-title">Nothing is waiting.</p>
   <p>A delivery appears here between the webhook and a worker. A review that is running stays until it finishes or is cancelled.</p>
   <a class="btn btn-quiet" href="/ui/sessions">Review sessions</a>
 </div>
 {{end}}
+</div>
 {{end}}

@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1040" role="img" aria-label="Rumil">
   <style>
-    .tile { fill: #b45309; }
-    .mark { fill: #fff8ec; }
+    .tile { fill: #0284c7; }
+    .mark { fill: #ffffff; }
     @media (prefers-color-scheme: dark) {
-      .tile { fill: #1f6feb; }
+      .tile { fill: #93ccff; }
+      .mark { fill: #003351; }
     }
   </style>
   <rect class="tile" width="1000" height="1040" rx="220" />

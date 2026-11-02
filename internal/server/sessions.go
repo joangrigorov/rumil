@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -109,7 +110,11 @@ type reviewSessionsPage struct {
 	Total  int
 	Status string
 	Repo   string
-	Live   bool
+	// Repositories is every repository the deck has sessions for, for the
+	// filter's picker. A repository named in the URL is included even when the
+	// read failed, so a bookmarked filter stays visible.
+	Repositories []string
+	Live         bool
 	// Page is 1-based. PageCount is at least one, so the pager can always say
 	// "Page 1 of 1" instead of dividing by zero. PageCountKnown is false when
 	// the usage aggregate failed and only this page's length is known.
@@ -182,6 +187,15 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repositories, repoErr := s.db.ReviewSessionRepositories(r.Context())
+	if repoErr != nil {
+		// The picker is a convenience; the list still stands without it.
+		s.logger.Warn("listing review session repositories failed", "error", repoErr)
+	}
+	if rawRepo != "" && !slices.Contains(repositories, rawRepo) {
+		repositories = append([]string{rawRepo}, repositories...)
+	}
+
 	usage, usageErr := s.db.ReviewSessionUsage(r.Context(), filter)
 	total := filter.Offset + len(sessions)
 	if usageErr != nil {
@@ -236,6 +250,7 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 		Total:          total,
 		Status:         filter.Status,
 		Repo:           rawRepo,
+		Repositories:   repositories,
 		Live:           live,
 		Page:           pageNumber,
 		PageCount:      pageCount,

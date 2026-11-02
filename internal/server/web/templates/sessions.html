@@ -1,75 +1,115 @@
 {{define "content"}}
+<div class="page-body">
 <header class="page-head">
   <div class="page-head-text">
-    <p class="eyebrow">rumil / sessions</p>
+    <p class="eyebrow">Rumil / Sessions</p>
     <h1>Review sessions</h1>
     <p class="lede">Every review a worker has run, newest first. Open one to read the model's reasoning, the tools it called, and how the review ended.</p>
   </div>
-  <p class="count"><strong>{{.Total}}</strong> {{if eq .Total 1}}session{{else}}sessions{{end}}{{if .Live}} <span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}{{if .Usage.Reported}}<span class="usage-total">{{tokens .Usage.TotalTokens}} tokens{{if .Usage.CostReported}} · est. {{usd .Usage.CostUSD}}{{end}}</span>{{end}}</p>
+  <div class="count">
+    <span class="count-chip"><strong>{{.Total}}</strong> {{if eq .Total 1}}session{{else}}sessions{{end}} matching filters</span>
+    {{if .Live}}<span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">running now</span></span>{{end}}
+    {{if .Usage.Reported}}<span class="count-chip">{{tokens .Usage.TotalTokens}} tokens{{if .Usage.CostReported}} <span aria-hidden="true">·</span> ~{{usd .Usage.CostUSD}}{{end}}</span>{{end}}
+  </div>
 </header>
 
 <form class="filters" method="get" action="/ui/sessions" aria-label="Filter sessions">
-  <div class="filters-head">
-    <span class="filters-title">Filter</span>
-    <span class="filters-sub">Narrow by status or repository.</span>
-  </div>
   <div class="filters-fields">
-    <label class="field">
+    <div class="field">
       <span class="field-label">Status</span>
-      <select name="status">
-        <option value="">Any status</option>
-        <option value="RUNNING" {{if eq .Status "RUNNING"}}selected{{end}}>Running</option>
-        <option value="SUCCEEDED" {{if eq .Status "SUCCEEDED"}}selected{{end}}>Succeeded</option>
-        <option value="FAILED" {{if eq .Status "FAILED"}}selected{{end}}>Failed</option>
-      </select>
-    </label>
-    <label class="field field-grow">
+      <div class="segmented" role="group" aria-label="Status filter">
+        <label><input type="radio" name="status" value="" {{if eq .Status ""}}checked{{end}}><span>Any status</span></label>
+        <label><input type="radio" name="status" value="RUNNING" {{if eq .Status "RUNNING"}}checked{{end}}><span>Running</span></label>
+        <label><input type="radio" name="status" value="SUCCEEDED" {{if eq .Status "SUCCEEDED"}}checked{{end}}><span>Succeeded</span></label>
+        <label><input type="radio" name="status" value="FAILED" {{if eq .Status "FAILED"}}checked{{end}}><span>Failed</span></label>
+      </div>
+    </div>
+    <label class="field field-repo">
       <span class="field-label">Repository</span>
-      <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" autocomplete="off" spellcheck="false">
+      <div class="input-with-icon">
+        <span class="icon" aria-hidden="true">source</span>
+        <select name="repo">
+          <option value="">Any repository</option>
+          {{range .Repositories}}
+          <option value="{{.}}"{{if eq . $.Repo}} selected{{end}}>{{.}}</option>
+          {{end}}
+        </select>
+      </div>
     </label>
     <div class="filters-actions">
-      <button class="btn btn-primary" type="submit">Apply</button>
-      <a class="btn btn-quiet" href="/ui/sessions">Clear</a>
+      <button class="btn btn-primary" type="submit"><span class="icon" aria-hidden="true">filter_alt</span>Apply</button>
+      <a class="link-quiet" href="/ui/sessions">Clear</a>
     </div>
   </div>
 </form>
 
+<div class="list-note">
+  <span><span class="icon" aria-hidden="true">autorenew</span>While any visible session is running, the page refreshes automatically.</span>
+  <span>50 sessions per page <span aria-hidden="true">·</span> newest first</span>
+</div>
+
 {{if .Sessions}}
-<ol class="sessions">
-  {{range .Sessions}}
-  <li>
-    <a class="session-row" href="/ui/sessions/{{.ID}}">
-      <div class="session-row-top">
-        <span class="pill status-{{lower .Status}}">{{.Status}}</span>
-        {{if .ParentSessionID}}<span class="pill pill-continued">continued</span>{{end}}
-        <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
-        <span class="session-when">{{date .StartedAt}}</span>
-      </div>
-      <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
-      <div class="session-meta">
-        {{if .Model}}<code>{{.Model}}</code>{{end}}
-        <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
-        {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{if .Usage.CostUSD}}<span>est. {{usd .Usage.CostUSD}}</span>{{end}}{{end}}
-        <span>{{duration .StartedAt .FinishedAt}}</span>
-        {{if .ParentSessionID}}<span>continued from {{short .ParentSessionID}}</span>{{end}}
-        {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}
-      </div>
-    </a>
-  </li>
-  {{end}}
-</ol>
-{{if or .HasPrev .HasNext}}
-<nav class="pager" aria-label="Session pages">
-  {{if .HasPrev}}<a class="btn btn-quiet" href="{{.PrevHref}}" rel="prev">← Newer</a>{{else}}<span class="btn btn-quiet pager-disabled" aria-disabled="true">← Newer</span>{{end}}
-  <span class="pager-status">Page {{.Page}}{{if .PageCountKnown}} of {{.PageCount}}{{end}}</span>
-  {{if .HasNext}}<a class="btn btn-quiet" href="{{.NextHref}}" rel="next">Older →</a>{{else}}<span class="btn btn-quiet pager-disabled" aria-disabled="true">Older →</span>{{end}}
-</nav>
-{{end}}
+<div class="table-wrap">
+  <table class="data-table sessions-table" aria-label="Review sessions">
+    <thead>
+      <tr>
+        <th scope="col">Status</th>
+        <th scope="col">Pull request &amp; target</th>
+        <th scope="col">Model &amp; telemetry</th>
+        <th scope="col">Event</th>
+        <th scope="col" class="cell-when-right">Started / duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Sessions}}
+      <tr>
+        <td>
+          <div class="cell-status">
+            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+            {{if .ParentSessionID}}<span class="pill pill-continued"><span class="icon" aria-hidden="true">history</span>continued</span>{{end}}
+          </div>
+        </td>
+        <td class="cell-pr">
+          <div class="cell-pr-head">
+            <a class="session-link" href="/ui/sessions/{{.ID}}">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</a>
+            <span class="session-id">{{short .ID}}</span>
+          </div>
+          <div class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}No title recorded{{end}}</div>
+          {{if .ParentSessionID}}<div class="continued-from">continued from <a href="/ui/sessions/{{.ParentSessionID}}">{{short .ParentSessionID}}</a></div>{{end}}
+        </td>
+        <td>
+          <div class="cell-model">{{if .Model}}{{.Model}}{{else}}<span class="cell-muted">not reported</span>{{end}}</div>
+          <div class="cell-telemetry">
+            <span><strong>{{.ToolCalls}}</strong> tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+            {{if .Usage}}<span class="sep" aria-hidden="true">·</span><span>{{tokens .Usage.TotalTokens}} tokens{{if .Usage.CostUSD}} (est. {{usd .Usage.CostUSD}}){{end}}</span>{{end}}
+          </div>
+        </td>
+        <td class="cell-event">
+          {{if .ReviewEvent}}<span class="review-badge{{if or (eq .ReviewEvent "REQUEST_CHANGES") (eq .ReviewEvent "COMMENT")}} is-negative{{end}}">{{.ReviewEvent}}</span>{{else}}<span class="cell-muted">—</span>{{end}}
+        </td>
+        <td class="cell-when-right">
+          <span class="when-line">{{age .StartedAt}} ago</span>
+          <span class="duration-line"><span class="icon" aria-hidden="true">timer</span>{{duration .StartedAt .FinishedAt}}</span>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  <div class="table-foot">
+    <span>Page {{.Page}}{{if .PageCountKnown}} of {{.PageCount}}{{end}}</span>
+    <nav class="pager" aria-label="Session pages">
+      {{if .HasPrev}}<a class="btn btn-quiet btn-sm" href="{{.PrevHref}}" rel="prev"><span class="icon" aria-hidden="true">chevron_left</span>Newer</a>{{else}}<span class="btn btn-quiet btn-sm" aria-disabled="true"><span class="icon" aria-hidden="true">chevron_left</span>Newer</span>{{end}}
+      {{if .HasNext}}<a class="btn btn-quiet btn-sm" href="{{.NextHref}}" rel="next">Older<span class="icon" aria-hidden="true">chevron_right</span></a>{{else}}<span class="btn btn-quiet btn-sm" aria-disabled="true">Older<span class="icon" aria-hidden="true">chevron_right</span></span>{{end}}
+    </nav>
+  </div>
+</div>
 {{else}}
 <div class="empty">
+  <span class="empty-icon"><span class="icon" aria-hidden="true">search_off</span></span>
   <p class="empty-title">No sessions match.</p>
-  <p>{{if gt .Page 1}}This page is past the end of the list. <a href="{{.PrevHref}}">Go to the previous page</a>.{{else if .Status}}Try another status, or clear the filters.{{else}}A session is recorded when a worker starts a review. Ask Rumil to review a pull request and it lands here.{{end}}</p>
+  <p>{{if gt .Page 1}}This page is past the end of the list. <a href="{{.PrevHref}}">Go to the previous page</a>.{{else if or .Status .Repo}}Try another status or repository, or clear the filters.{{else}}A session is recorded when a worker starts a review. Ask Rumil to review a pull request and it lands here.{{end}}</p>
   <a class="btn btn-quiet" href="/ui/sessions">Clear filters</a>
 </div>
 {{end}}
+</div>
 {{end}}

@@ -397,6 +397,18 @@ func pageFuncs() template.FuncMap {
 			}
 			return t.UTC().Format("2 Jan 2006, 15:04 UTC")
 		},
+		"agePtr": func(t *time.Time) string {
+			if t == nil {
+				return ""
+			}
+			return ageText(*t)
+		},
+		"clock": func(t *time.Time) string {
+			if t == nil {
+				return ""
+			}
+			return t.UTC().Format("15:04")
+		},
 		"lower":    strings.ToLower,
 		"duration": durationText,
 		"sha":      shortSHA,

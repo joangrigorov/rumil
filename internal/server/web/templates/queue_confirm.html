@@ -1,27 +1,58 @@
 {{define "content"}}
-<header class="page-head">
-  <div class="page-head-text">
-    <p class="eyebrow"><a href="/ui/queue">Queue</a> / cancel</p>
-    <h1>{{if eq .Job.Status "RUNNING"}}Stop this review?{{else}}Cancel this queued job?{{end}}</h1>
-    <p class="lede">{{.Job.OrgName}}/{{.Job.RepoName}}#{{.Job.PRNumber}} · {{.Job.EventType}}</p>
-  </div>
-</header>
-
-<div class="session-facts">
-  <span>status <code>{{.Job.Status}}</code></span>
-  <span>delivery <code>{{short .Job.DeliveryID}}</code></span>
-  {{if .Job.WorkerID}}<span>worker <code>{{.Job.WorkerID}}</code></span>{{end}}
-  <span>age {{age .Job.CreatedAt}}</span>
+<div class="page-body page-body-narrow">
+<div class="breadcrumb-row">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/ui/queue"><span class="icon" aria-hidden="true">view_timeline</span>Queue</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span class="current">cancel</span>
+  </nav>
 </div>
 
-{{if eq .Job.Status "RUNNING"}}
-<p>The worker stops before its next model request, and the session is recorded <code>CANCELLED</code>. A review that has already reached GitHub is kept; a review that has not cannot be finished once the session stops.</p>
-{{else}}
-<p>The job leaves the queue without a worker running it. GitHub has already been answered; nothing is posted for it.</p>
-{{end}}
+<div class="cancel-grid">
+  <section class="cancel-card">
+    <div class="cancel-head">
+      <span class="pill status-{{lower .Job.Status}}">{{.Job.Status}}</span>
+      <span class="mono">{{short .Job.ID}}</span>
+    </div>
+    <div>
+      <h1>{{if eq .Job.Status "RUNNING"}}Stop this review?{{else}}Cancel this queued job?{{end}}</h1>
+      <p class="cancel-sub">
+        <span class="icon" aria-hidden="true">fork_right</span>
+        <span>{{.Job.OrgName}}/{{.Job.RepoName}}#{{.Job.PRNumber}}</span>
+        <span class="sep" aria-hidden="true">·</span>
+        <span class="event-name">{{.Job.EventType}}</span>
+      </p>
+    </div>
 
-<form class="continue-form" method="post" action="/ui/queue/{{.Job.ID}}/cancel">
-  <button class="btn btn-primary" type="submit">{{if eq .Job.Status "RUNNING"}}Stop the review{{else}}Cancel the job{{end}}</button>
-  <a class="btn btn-quiet" href="/ui/queue">Keep it</a>
-</form>
+    <div class="cancel-note">
+      <span class="icon" aria-hidden="true">info</span>
+      <div class="cancel-note-copy">
+        <span class="cancel-note-label">Automation impact</span>
+        {{if eq .Job.Status "RUNNING"}}
+        <p>The worker stops before its next model request, and the session is recorded <code>CANCELLED</code>. A review that has already reached GitHub is kept; a review that has not cannot be finished once the session stops.</p>
+        {{else}}
+        <p>The job leaves the queue without a worker running it. GitHub has already been answered; nothing is posted for it.</p>
+        {{end}}
+      </div>
+    </div>
+
+    <div class="cancel-actions">
+      <form method="post" action="/ui/queue/{{.Job.ID}}/cancel">
+        <button class="btn btn-danger-solid" type="submit"><span class="icon" aria-hidden="true">cancel</span>{{if eq .Job.Status "RUNNING"}}Stop the review{{else}}Cancel the job{{end}}</button>
+      </form>
+      <a class="btn btn-quiet" href="/ui/queue">Keep it</a>
+    </div>
+  </section>
+
+  <aside class="facts-panel">
+    <div class="facts-head">
+      <span><span class="icon" aria-hidden="true">fact_check</span>Facts</span>
+    </div>
+    <dl class="fact-row"><dt>Status</dt><dd class="is-primary">{{.Job.Status}}</dd></dl>
+    <dl class="fact-row"><dt>Delivery</dt><dd>{{.Job.DeliveryID}}</dd></dl>
+    <dl class="fact-row"><dt>Worker</dt><dd class="is-tertiary">{{if .Job.WorkerID}}{{.Job.WorkerID}}{{else}}unassigned{{end}}</dd></dl>
+    <dl class="fact-row"><dt>Age</dt><dd>{{age .Job.CreatedAt}}</dd></dl>
+  </aside>
+</div>
+</div>
 {{end}}

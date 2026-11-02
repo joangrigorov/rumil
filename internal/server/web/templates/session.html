@@ -1,67 +1,147 @@
 {{define "content"}}
-<header class="page-head session-head">
-  <div class="page-head-text">
-    <p class="eyebrow"><a href="/ui/sessions">Sessions</a> / <code>{{short .Session.ID}}</code></p>
-    <h1>{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</h1>
-    <p class="lede">{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}</p>
+<div class="page-body">
+<div class="breadcrumb-row">
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/ui/sessions"><span class="icon" aria-hidden="true">folder_open</span>Sessions</a>
+    <span class="sep" aria-hidden="true">/</span>
+    <span class="current">{{short .Session.ID}}</span>
+  </nav>
+  <div class="session-tools">
+    <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="true" title="Hide the model's thinking"><span class="icon" aria-hidden="true">psychology</span><span>Thinking blocks</span><span class="badge">SHOW</span></button>
   </div>
-  <div class="session-state">
-    <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
-    {{if .Live}}<span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}
-    <span class="session-clock" id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span>
-    <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="true" title="Hide the model's thinking"><span class="glyph" aria-hidden="true">✦</span> Thinking</button>
-  </div>
-</header>
-
-{{if .ContinuationQueued}}<p class="notice" role="status">Continuation queued. It appears as a new session when a worker picks it up.</p>{{end}}
-{{if .ContinuationFailed}}<p class="notice notice-bad">The continuation request failed before it started. Its cause is on the job record.</p>{{end}}
-
-<div class="session-facts">
-  {{if .Session.Model}}<span>model <code>{{.Session.Model}}</code></span>{{end}}
-  <span id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</span>
-  {{if .Session.Usage}}<span title="input / output / cache read / cache write">{{tokens .Session.Usage.InputTokens}} in · {{tokens .Session.Usage.OutputTokens}} out{{if .Session.Usage.CacheReadTokens}} · {{tokens .Session.Usage.CacheReadTokens}} cache read{{end}}{{if .Session.Usage.CacheCreationTokens}} · {{tokens .Session.Usage.CacheCreationTokens}} cache write{{end}}</span>{{if .Session.Usage.CostUSD}}<span>est. {{usd .Session.Usage.CostUSD}}</span>{{end}}{{else}}<span class="muted">usage not reported</span>{{end}}
-  <span>started {{date .Session.StartedAt}}</span>
-  {{if .Session.HeadSHA}}<span>head <code>{{sha .Session.HeadSHA}}</code></span>{{end}}
-  {{if .Parent}}<span>continued from <a href="/ui/sessions/{{.Parent.ID}}"><code>{{short .Parent.ID}}</code></a></span>{{end}}
-  {{if .Session.RequestedBy}}<span>requested by {{.Session.RequestedBy}}{{if .Session.RequestedAt}} at {{datePtr .Session.RequestedAt}}{{end}}</span>{{end}}
-  {{if .Continuation}}<span>continued as <a href="/ui/sessions/{{.Continuation.ID}}"><code>{{short .Continuation.ID}}</code> ({{.Continuation.Status}})</a></span>{{end}}
-  <a href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">open on GitHub</a>
 </div>
 
+<section class="session-banner">
+  <div class="session-banner-main">
+    <div class="session-banner-flags">
+      <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
+      {{if .Live}}<span class="live-badge live-flag" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}
+      <span class="session-clock"><span class="icon" aria-hidden="true">timer</span><span id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span></span>
+    </div>
+    <h1>{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</h1>
+    <p class="session-banner-sub">{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}</p>
+  </div>
+  <div class="session-banner-actions">
+    <a class="btn btn-quiet" href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">View PR on GitHub<span class="icon" aria-hidden="true">open_in_new</span></a>
+  </div>
+</section>
+
+<dl class="session-facts">
+  <div class="fact">
+    <dt>Model</dt>
+    <dd>{{if .Session.Model}}{{.Session.Model}}{{else}}—{{end}}</dd>
+  </div>
+  <div class="fact">
+    <dt>Tool calls</dt>
+    <dd class="is-primary" id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</dd>
+  </div>
+  {{if .Session.Usage}}
+  <div class="fact">
+    <dt>Input tokens</dt>
+    <dd>{{tokens .Session.Usage.InputTokens}}</dd>
+  </div>
+  <div class="fact">
+    <dt>Output tokens</dt>
+    <dd>{{tokens .Session.Usage.OutputTokens}}</dd>
+  </div>
+  <div class="fact">
+    <dt>Cache R / W</dt>
+    <dd class="is-secondary">{{tokens .Session.Usage.CacheReadTokens}} / {{tokens .Session.Usage.CacheCreationTokens}}</dd>
+  </div>
+  <div class="fact">
+    <dt>Est. cost</dt>
+    <dd class="is-tertiary">{{if .Session.Usage.CostUSD}}{{usd .Session.Usage.CostUSD}}{{else}}—{{end}}</dd>
+  </div>
+  {{else}}
+  <div class="fact"><dt>Input tokens</dt><dd>—</dd></div>
+  <div class="fact"><dt>Output tokens</dt><dd>—</dd></div>
+  <div class="fact"><dt>Cache R / W</dt><dd>—</dd></div>
+  <div class="fact"><dt>Est. cost</dt><dd>—</dd></div>
+  {{end}}
+  <div class="fact">
+    <dt>Head SHA</dt>
+    <dd>{{if .Session.HeadSHA}}{{sha .Session.HeadSHA}}{{else}}—{{end}}</dd>
+  </div>
+  <div class="fact">
+    <dt>Requested by</dt>
+    <dd>{{if .Session.RequestedBy}}{{.Session.RequestedBy}}{{if .Session.RequestedAt}} {{clock .Session.RequestedAt}}{{end}}{{else}}—{{end}}</dd>
+  </div>
+</dl>
+
+<div class="session-meta-line">
+  <span>Started: {{date .Session.StartedAt}}</span>
+  {{if .Parent}}<span class="sep" aria-hidden="true">•</span><span>Continued from <a href="/ui/sessions/{{.Parent.ID}}">{{short .Parent.ID}}</a></span>{{end}}
+  {{if .Continuation}}<span class="sep" aria-hidden="true">•</span><span>Continued as <a href="/ui/sessions/{{.Continuation.ID}}">{{short .Continuation.ID}} ({{.Continuation.Status}})</a></span>{{end}}
+  {{if and (not .Session.Usage) (not .Live)}}<span class="sep" aria-hidden="true">•</span><span>usage not reported</span>{{end}}
+</div>
+
+{{if or .ContinuationQueued .ContinuationFailed}}
+<div class="session-notices">
+  {{if .ContinuationQueued}}<p class="notice" role="status">Continuation queued. It appears as a new session when a worker picks it up.</p>{{end}}
+  {{if .ContinuationFailed}}<p class="notice notice-bad">The continuation request failed before it started. Its cause is on the job record.</p>{{end}}
+</div>
+{{end}}
+
 {{if .CanContinue}}
-<form class="continue-form" method="post" action="/ui/sessions/{{.Session.ID}}/continue">
-  <button class="btn btn-primary" type="submit">Continue review</button>
-  <span class="continue-hint">Another attempt with the configured turn budget, reusing this session's tool results and partial summary.</span>
-</form>
+<section class="actions-bar">
+  <div class="actions-copy">
+    <span class="actions-title">Continue review</span>
+    <span class="actions-sub">Another attempt with the configured turn budget, reusing this session's tool results and partial summary.</span>
+  </div>
+  <form class="continue-form" method="post" action="/ui/sessions/{{.Session.ID}}/continue">
+    <button class="btn btn-primary" type="submit"><span class="icon" aria-hidden="true">fast_forward</span>Continue review</button>
+  </form>
+</section>
+{{end}}
+
+{{if eq .Session.Status "SUCCEEDED"}}
+<section class="actions-bar actions-bar-done">
+  <div class="actions-copy actions-copy-inline">
+    <span class="icon" aria-hidden="true">check_circle</span>
+    <span>Review submitted successfully to GitHub pull request #{{.Session.PRNumber}}.</span>
+  </div>
+  <span class="actions-final">Session finalized</span>
+</section>
 {{end}}
 
 {{if .CancelJobID}}
-<form class="continue-form" method="get" action="/ui/queue/{{.CancelJobID}}/cancel">
-  <button class="btn btn-quiet" type="submit">Cancel review…</button>
-  <span class="continue-hint">Stops the worker before its next model request. A review already posted is kept.</span>
-</form>
+<section class="actions-bar">
+  <div class="actions-copy">
+    <span class="actions-title">Active review session in progress</span>
+    <span class="actions-sub">Stops the worker before its next model request; a review already posted is kept.</span>
+  </div>
+  <form class="continue-form" method="get" action="/ui/queue/{{.CancelJobID}}/cancel">
+    <button class="btn btn-danger" type="submit"><span class="icon" aria-hidden="true">stop_circle</span>Cancel review…</button>
+  </form>
+</section>
 {{end}}
 
 {{if .Session.Error}}<p class="notice notice-bad">{{.Session.Error}}</p>{{end}}
 
-<section class="console-window" aria-label="Session transcript">
-  <div class="console-scroll" id="console-scroll">
-    <div class="timeline console-log" id="timeline" role="log"
-        data-session-id="{{.Session.ID}}"
-        data-live="{{if .Live}}true{{else}}false{{end}}"
-        data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
-      <div class="timeline-empty" id="timeline-empty"><span class="activity-glyph" aria-hidden="true">✦</span> Loading the session…</div>
-    </div>
-    <noscript><p class="notice">The timeline needs JavaScript. The raw events are at <code>/api/sessions/{{.Session.ID}}/events.json</code>.</p></noscript>
+<section class="transcript-panel" aria-label="Session transcript">
+  <div class="transcript-head">
+    <h2 class="transcript-title"><span class="icon" aria-hidden="true">terminal</span>{{if .Live}}Live execution transcript{{else}}Execution transcript{{end}}</h2>
   </div>
+  <div class="console-window">
+    <div class="console-scroll" id="console-scroll">
+      <div class="timeline console-log" id="timeline" role="log"
+          data-session-id="{{.Session.ID}}"
+          data-live="{{if .Live}}true{{else}}false{{end}}"
+          data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
+        <div class="timeline-empty" id="timeline-empty"><span class="icon" aria-hidden="true">progress_activity</span> Loading the session…</div>
+      </div>
+      <noscript><p class="notice">The timeline needs JavaScript. The raw events are at <code>/api/sessions/{{.Session.ID}}/events.json</code>.</p></noscript>
+    </div>
 
-  <div class="activity" id="activity" role="status" aria-live="polite"{{if not .Live}} hidden{{end}}>
-    <span class="activity-glyph" aria-hidden="true">✦</span>
-    <span class="activity-label" id="activity-label">Thinking…</span>
-    <span class="activity-time" id="activity-time" aria-hidden="true"></span>
-    <span class="cursor" aria-hidden="true">▌</span>
+    <div class="activity" id="activity" role="status" aria-live="polite"{{if not .Live}} hidden{{end}}>
+      <span class="icon activity-glyph" aria-hidden="true">progress_activity</span>
+      <span class="activity-label" id="activity-label">Thinking…</span>
+      <span class="activity-time" id="activity-time" aria-hidden="true"></span>
+      <span class="cursor" aria-hidden="true">▌</span>
+    </div>
   </div>
 </section>
+</div>
 
 <script src="/static/markdown.js" defer></script>
 <script src="/static/sessions.js" defer></script>

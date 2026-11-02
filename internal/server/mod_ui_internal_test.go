@@ -230,7 +230,7 @@ func TestStaticStylesheetIsEmbedded(t *testing.T) {
 	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/css") {
 		t.Errorf("Content-Type = %q, want a CSS type", contentType)
 	}
-	if body := recorder.Body.String(); !strings.Contains(body, "--accent") {
+	if body := recorder.Body.String(); !strings.Contains(body, "--primary") {
 		t.Errorf("the stylesheet carries no design tokens:\n%s", body)
 	}
 }
