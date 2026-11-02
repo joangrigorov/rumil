@@ -438,6 +438,152 @@ func TestModerationPageWithNoRules(t *testing.T) {
 	}
 }
 
+// The table is a table: it shows the rule, where it applies and what was
+// decided, and the quick decision actions exist only while a rule is pending.
+func TestRulesTableOffersDecisionsOnlyForPendingRules(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+
+	pending := seedMemory(t, h, "Clock skew up to 60 seconds is intentional")
+	approved := seedMemory(t, h, "Money is decimal, never float")
+	rejected := seedMemory(t, h, "Settlements are retried three times")
+	if _, err := h.db.ApproveMemory(context.Background(), 98765432, approved.ID, store.MemoryDecision{ReviewedBy: "octocat"}); err != nil {
+		t.Fatalf("approving a rule: %v", err)
+	}
+	if _, err := h.db.RejectMemory(context.Background(), 98765432, rejected.ID, "octocat"); err != nil {
+		t.Fatalf("rejecting a rule: %v", err)
+	}
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	page := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	for _, rule := range []store.Memory{pending, approved, rejected} {
+		if !strings.Contains(body, rule.RuleText) {
+			t.Errorf("the table does not list %q", rule.RuleText)
+		}
+	}
+	approvePath := "/api/moderation/" + pending.ID + "/approve"
+	rejectPath := "/api/moderation/" + pending.ID + "/reject"
+	if !strings.Contains(body, approvePath) || !strings.Contains(body, rejectPath) {
+		t.Errorf("the pending rule has no decision actions:\n%s", body)
+	}
+	for _, rule := range []store.Memory{approved, rejected} {
+		if strings.Contains(body, "/api/moderation/"+rule.ID+"/approve") ||
+			strings.Contains(body, "/api/moderation/"+rule.ID+"/reject") {
+			t.Errorf("the table offers a decision on a %s rule:\n%s", rule.Status, body)
+		}
+	}
+
+	// The details screen of a decided rule has no decision form either.
+	decided := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+approved.ID, adminToken, nil, "text/html")
+	if decided.Code != http.StatusOK {
+		t.Fatalf("the decided rule details = %d, want 200 (body: %s)", decided.Code, decided.Body.String())
+	}
+	if strings.Contains(decided.Body.String(), "Approve rule") || strings.Contains(decided.Body.String(), `name="rule_text"`) {
+		t.Errorf("a decided rule still offers a decision:\n%s", decided.Body.String())
+	}
+}
+
+// One rule is one screen: the whole wording, where it came from and the reach
+// it has, with the decision form stacked vertically underneath.
+func TestRuleDetailsShowsTheWholeRuleAndDecidesInPlace(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	rule := seedMemory(t, h, "Clock skew up to 60 seconds is intentional in the JWT validator")
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	detail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+rule.ID, adminToken, nil, "text/html")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", detail.Code, detail.Body.String())
+	}
+	body := detail.Body.String()
+	for _, want := range []string{
+		rule.RuleText,
+		"the author confirmed it in review",
+		`class="form-stack"`,
+		`name="rule_text"`,
+		`name="path_glob"`,
+		`name="authority"`,
+		`name="next" value="detail"`,
+		`action="/api/moderation/` + rule.ID + `/approve"`,
+		`action="/api/moderation/` + rule.ID + `/reject"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the details screen does not contain %q:\n%s", want, body)
+		}
+	}
+
+	// A decision taken here returns here, with the rule as it now stands.
+	response := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+rule.ID+"/approve", adminToken,
+		url.Values{"next": {"detail"}, "path_glob": {"pkg/auth/**"}}, "text/html")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 (body: %s)", response.Code, response.Body.String())
+	}
+	location := response.Header().Get("Location")
+	if !strings.HasPrefix(location, "/ui/moderation/"+rule.ID) || !strings.Contains(location, "decided=approved") {
+		t.Errorf("Location = %q, want the rule's details page", location)
+	}
+
+	decided := moderatedRequest(t, handler, http.MethodGet, location, adminToken, nil, "text/html")
+	if decided.Code != http.StatusOK {
+		t.Fatalf("the decided details = %d, want 200 (body: %s)", decided.Code, decided.Body.String())
+	}
+	decidedBody := decided.Body.String()
+	if !strings.Contains(decidedBody, "APPROVED") {
+		t.Errorf("the rule does not show its new status:\n%s", decidedBody)
+	}
+	if strings.Contains(decidedBody, "Approve rule") || strings.Contains(decidedBody, `name="rule_text"`) {
+		t.Errorf("the decided rule still offers a decision:\n%s", decidedBody)
+	}
+	if !strings.Contains(decidedBody, "pkg/auth/**") {
+		t.Errorf("the details screen does not show the glob that was recorded:\n%s", decidedBody)
+	}
+
+	notFound := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/00000000-0000-0000-0000-000000000000", adminToken, nil, "text/html")
+	if notFound.Code != http.StatusNotFound {
+		t.Errorf("an unknown rule details = %d, want 404", notFound.Code)
+	}
+}
+
+// The table's filters narrow the same rows the API lists, and a scope the enum
+// does not have is refused rather than passed to the statement.
+func TestRulesTableFiltersBySearchAndScope(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	orgRule := seedScopedMemory(t, h, "Every service in the organization logs with log/slog", store.ScopeOrg)
+	repoRule := seedScopedMemory(t, h, "The legacy worker keeps logrus until the migration", store.ScopeRepo)
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	searched := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?search="+url.QueryEscape("legacy worker"), adminToken, nil, "text/html")
+	if searched.Code != http.StatusOK {
+		t.Fatalf("search status = %d, want 200 (body: %s)", searched.Code, searched.Body.String())
+	}
+	body := searched.Body.String()
+	if !strings.Contains(body, repoRule.RuleText) || strings.Contains(body, orgRule.RuleText) {
+		t.Errorf("the search did not narrow the table:\n%s", body)
+	}
+
+	scoped := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?scope=ORG", adminToken, nil, "text/html")
+	if scoped.Code != http.StatusOK {
+		t.Fatalf("scope status = %d, want 200 (body: %s)", scoped.Code, scoped.Body.String())
+	}
+	body = scoped.Body.String()
+	if !strings.Contains(body, orgRule.RuleText) || strings.Contains(body, repoRule.RuleText) {
+		t.Errorf("the scope filter did not narrow the table:\n%s", body)
+	}
+
+	refused := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?scope=GLOBAL", adminToken, nil, "text/html")
+	if refused.Code != http.StatusBadRequest {
+		t.Errorf("an unknown scope = %d, want 400", refused.Code)
+	}
+}
+
 // The token doubles as the password of a basic credential so a browser can use
 // the page, and a browser sends a cached basic credential to any request to
 // this origin — including a form on somebody else's page. A decision therefore
@@ -583,16 +729,29 @@ func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
 		t.Errorf("the repository rule does not name the repository it applies to:\n%s", body)
 	}
 
-	// Only the organization rule's form offers a scope: a repository rule has
-	// nothing to narrow, and the page is not where one is widened.
-	if !strings.Contains(body, `<option value="ORG" selected>`) {
-		t.Errorf("the organization rule's form does not offer the scope it has:\n%s", body)
+	// Only the organization rule's details screen offers a scope: a repository
+	// rule has nothing to narrow, and the surface is not where one is widened.
+	orgDetail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+orgRule.ID, adminToken, nil, "text/html")
+	if orgDetail.Code != http.StatusOK {
+		t.Fatalf("the organization rule details = %d, want 200 (body: %s)", orgDetail.Code, orgDetail.Body.String())
 	}
-	if !strings.Contains(body, `<option value="REPO">REPO — this repository, payments</option>`) {
-		t.Errorf("the organization rule's form does not offer the narrower scope:\n%s", body)
+	orgBody := orgDetail.Body.String()
+	if !strings.Contains(orgBody, `<option value="ORG" selected>`) {
+		t.Errorf("the organization rule's form does not offer the scope it has:\n%s", orgBody)
 	}
-	if count := strings.Count(body, `name="scope"`); count != 1 {
-		t.Errorf("the page carries %d scope controls, want one, on the organization rule:\n%s", count, body)
+	if !strings.Contains(orgBody, `<option value="REPO">REPO — this repository, payments</option>`) {
+		t.Errorf("the organization rule's form does not offer the narrower scope:\n%s", orgBody)
+	}
+	if count := strings.Count(orgBody, `name="scope"`); count != 1 {
+		t.Errorf("the details screen carries %d scope controls, want one, on the organization rule:\n%s", count, orgBody)
+	}
+
+	repoDetail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+repoRule.ID, adminToken, nil, "text/html")
+	if repoDetail.Code != http.StatusOK {
+		t.Fatalf("the repository rule details = %d, want 200 (body: %s)", repoDetail.Code, repoDetail.Body.String())
+	}
+	if strings.Contains(repoDetail.Body.String(), `name="scope"`) {
+		t.Errorf("the repository rule offers a scope to change:\n%s", repoDetail.Body.String())
 	}
 
 	// A scope the enum does not have is refused before the write.
@@ -783,27 +942,35 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	rule := seedMemory(t, h, "This service keeps its own hand-rolled clock skew allowance")
 	orgRule := seedScopedMemory(t, h, "Every service in the organization logs with log/slog", store.ScopeOrg)
 
-	// Both forms offer the choice, and neither row carries the badge yet.
+	// Both details screens offer the choice, and neither row carries the badge
+	// yet.
 	page := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html")
 	if page.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
 	}
 	body := page.Body.String()
-	if count := strings.Count(body, `name="authority"`); count != 2 {
-		t.Errorf("the page carries %d authority controls, want one per rule:\n%s", count, body)
-	}
-	if !strings.Contains(body, `<option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>`) {
-		t.Errorf("the page does not show a recorded rule as context:\n%s", body)
-	}
-	// The badge in the page's own legend is not a rule carrying the authority,
-	// so both of these look for the one a row renders.
 	if strings.Contains(body, `data-authority="DIRECTIVE"`) {
 		t.Errorf("a rule that was never promoted is badged as a directive:\n%s", body)
 	}
+	detail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+rule.ID, adminToken, nil, "text/html")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("the rule details = %d, want 200 (body: %s)", detail.Code, detail.Body.String())
+	}
+	detailBody := detail.Body.String()
+	if count := strings.Count(detailBody, `name="authority"`); count != 1 {
+		t.Errorf("the details screen carries %d authority controls, want one:\n%s", count, detailBody)
+	}
+	if !strings.Contains(detailBody, `<option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>`) {
+		t.Errorf("the page does not show a recorded rule as context:\n%s", detailBody)
+	}
 	// The organization rule's promotion option says what it needs, because the
 	// refusal is about the pair rather than about the authority alone.
-	if !strings.Contains(body, "DIRECTIVE — above the guidelines; needs REPO scope") {
-		t.Errorf("the organization rule's promotion option does not say what it needs:\n%s", body)
+	orgDetail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+orgRule.ID, adminToken, nil, "text/html")
+	if orgDetail.Code != http.StatusOK {
+		t.Fatalf("the organization rule details = %d, want 200 (body: %s)", orgDetail.Code, orgDetail.Body.String())
+	}
+	if !strings.Contains(orgDetail.Body.String(), "DIRECTIVE — above the guidelines; needs REPO scope") {
+		t.Errorf("the organization rule's promotion option does not say what it needs:\n%s", orgDetail.Body.String())
 	}
 
 	// An authority the enum does not have is refused before the write.
@@ -851,8 +1018,12 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	if !strings.Contains(body, `data-authority="DIRECTIVE"`) {
 		t.Errorf("the promoted rule is not badged:\n%s", body)
 	}
-	if !strings.Contains(body, `<option value="DIRECTIVE" selected>`) {
-		t.Errorf("the promoted rule's form does not show the authority it has:\n%s", body)
+	detailBody = moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+rule.ID, adminToken, nil, "text/html").Body.String()
+	if !strings.Contains(detailBody, `class="pill authority-directive">DIRECTIVE`) {
+		t.Errorf("the promoted rule's details screen does not show the authority it has:\n%s", detailBody)
+	}
+	if strings.Contains(detailBody, `name="authority"`) {
+		t.Errorf("the decided rule still offers a decision form:\n%s", detailBody)
 	}
 
 	// The promotion applies to one repository, so an organization-wide rule is

@@ -365,6 +365,42 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 	return sessions, nil
 }
 
+// RecentCompletedReviewSessions returns the sessions that ended most recently,
+// newest finish first. Running sessions are left out: the Home page shows them
+// in a section of their own.
+func (d *DB) RecentCompletedReviewSessions(ctx context.Context, limit int) ([]ReviewSession, error) {
+	switch {
+	case limit <= 0:
+		limit = ReviewListDefault
+	case limit > ReviewListMax:
+		limit = ReviewListMax
+	}
+
+	rows, err := d.pool.Query(ctx, `
+		SELECT `+reviewSessionColumns+`
+		FROM review_sessions
+		WHERE status <> $1
+		ORDER BY coalesce(finished_at, started_at) DESC, id DESC
+		LIMIT $2`, ReviewRunning, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing completed review sessions: %w", err)
+	}
+	defer rows.Close()
+
+	sessions := make([]ReviewSession, 0, limit)
+	for rows.Next() {
+		session, err := scanReviewSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning a completed review session: %w", err)
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing completed review sessions: %w", err)
+	}
+	return sessions, nil
+}
+
 // ReviewSessionUsage aggregates the sessions a filter matches, which is what
 // the list's header totals. It is a full scan of the filter, not of the page
 // the list happens to show.

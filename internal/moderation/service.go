@@ -80,9 +80,27 @@ func (s *Service) List(ctx context.Context, filter store.MemoryFilter) ([]store.
 	if err != nil {
 		return nil, err
 	}
+	scope, err := normalizeScope(filter.Scope)
+	if err != nil {
+		return nil, err
+	}
 	filter.Status = status
+	filter.Scope = scope
 	filter.InstallationID = s.installationID
 	return s.store.ListMemories(ctx, filter)
+}
+
+// Get returns one rule of this installation. The details page reads the row it
+// is about to decide on, so the id is resolved by the same rules a decision
+// uses: a full id, or the short one a confirmation reply names.
+func (s *Service) Get(ctx context.Context, id string) (store.Memory, error) {
+	return s.store.MemoryByID(ctx, s.installationID, id)
+}
+
+// Stats counts this installation's rules by status, which is what the Home page
+// summarizes.
+func (s *Service) Stats(ctx context.Context) (store.MemoryStats, error) {
+	return s.store.MemoryStats(ctx, s.installationID)
 }
 
 // normalizeStatus turns a moderator's filter into one of the three statuses, or

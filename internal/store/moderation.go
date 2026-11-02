@@ -50,6 +50,12 @@ type MemoryFilter struct {
 	// every repository otherwise.
 	OrgName  string
 	RepoName string
+	// Scope filters on memory_scope when it is set, and lists both scopes
+	// otherwise.
+	Scope string
+	// Search matches the rule text or its rationale case-insensitively when it
+	// is set, and drops nothing otherwise.
+	Search string
 	// Limit is clamped to [MemoryListDefault, MemoryListMax].
 	Limit int
 }
@@ -79,9 +85,13 @@ func (d *DB) ListMemories(ctx context.Context, filter MemoryFilter) ([]Memory, e
 		  AND status = coalesce(nullif($2, '')::memory_status, status)
 		  AND org_name = coalesce(nullif($3, ''), org_name)
 		  AND coalesce(repo_name, '') = coalesce(nullif($4, ''), coalesce(repo_name, ''))
+		  AND scope = coalesce(nullif($5, '')::memory_scope, scope)
+		  AND ($6 = ''
+		       OR strpos(lower(rule_text), lower($6)) > 0
+		       OR strpos(lower(coalesce(rationale, '')), lower($6)) > 0)
 		ORDER BY created_at DESC, id DESC
-		LIMIT $5`,
-		filter.InstallationID, filter.Status, filter.OrgName, filter.RepoName, limit)
+		LIMIT $7`,
+		filter.InstallationID, filter.Status, filter.OrgName, filter.RepoName, filter.Scope, filter.Search, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing memories: %w", err)
 	}
@@ -99,6 +109,35 @@ func (d *DB) ListMemories(ctx context.Context, filter MemoryFilter) ([]Memory, e
 		memories = append(memories, *memory)
 	}
 	return memories, nil
+}
+
+// MemoryStats counts the tenant's rules by status. It is what the Home page
+// summarizes and what tells a maintainer whether anything is waiting.
+type MemoryStats struct {
+	Total    int
+	Pending  int
+	Approved int
+	Rejected int
+}
+
+// MemoryStats counts every rule of the installation, whatever filter a list
+// page happens to carry.
+func (d *DB) MemoryStats(ctx context.Context, installationID int64) (MemoryStats, error) {
+	if installationID == 0 {
+		return MemoryStats{}, fmt.Errorf("counting memories needs an installation")
+	}
+	var stats MemoryStats
+	if err := d.pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE status = 'PENDING'),
+		       count(*) FILTER (WHERE status = 'APPROVED'),
+		       count(*) FILTER (WHERE status = 'REJECTED')
+		FROM memories
+		WHERE installation_id = $1`, installationID).Scan(
+		&stats.Total, &stats.Pending, &stats.Approved, &stats.Rejected); err != nil {
+		return MemoryStats{}, fmt.Errorf("counting memories: %w", err)
+	}
+	return stats, nil
 }
 
 // MemoryByID returns one row of this tenant. The reference may be the full id
