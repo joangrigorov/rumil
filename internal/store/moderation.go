@@ -111,13 +111,19 @@ func (d *DB) ListMemories(ctx context.Context, filter MemoryFilter) ([]Memory, e
 	return memories, nil
 }
 
-// MemoryStats counts the tenant's rules by status. It is what the Home page
-// summarizes and what tells a maintainer whether anything is waiting.
+// MemoryStats counts the tenant's rules by status, authority and scope. It is
+// what the Home page summarizes and what the rules page shows beside the table.
 type MemoryStats struct {
 	Total    int
 	Pending  int
 	Approved int
 	Rejected int
+	// ContextRules and Directives split the rules by authority, and
+	// RepositoryScoped and OrgScoped split them by reach.
+	ContextRules     int
+	Directives       int
+	RepositoryScoped int
+	OrgScoped        int
 }
 
 // MemoryStats counts every rule of the installation, whatever filter a list
@@ -131,10 +137,15 @@ func (d *DB) MemoryStats(ctx context.Context, installationID int64) (MemoryStats
 		SELECT count(*),
 		       count(*) FILTER (WHERE status = 'PENDING'),
 		       count(*) FILTER (WHERE status = 'APPROVED'),
-		       count(*) FILTER (WHERE status = 'REJECTED')
+		       count(*) FILTER (WHERE status = 'REJECTED'),
+		       count(*) FILTER (WHERE authority = 'CONTEXT'),
+		       count(*) FILTER (WHERE authority = 'DIRECTIVE'),
+		       count(*) FILTER (WHERE scope = 'REPO'),
+		       count(*) FILTER (WHERE scope = 'ORG')
 		FROM memories
 		WHERE installation_id = $1`, installationID).Scan(
-		&stats.Total, &stats.Pending, &stats.Approved, &stats.Rejected); err != nil {
+		&stats.Total, &stats.Pending, &stats.Approved, &stats.Rejected,
+		&stats.ContextRules, &stats.Directives, &stats.RepositoryScoped, &stats.OrgScoped); err != nil {
 		return MemoryStats{}, fmt.Errorf("counting memories: %w", err)
 	}
 	return stats, nil

@@ -365,6 +365,34 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 	return sessions, nil
 }
 
+// ReviewSessionRepositories lists the repositories this deck has sessions for,
+// as owner/name, sorted. The session list offers them as a filter so a
+// maintainer picks a real repository rather than typing one from memory.
+func (d *DB) ReviewSessionRepositories(ctx context.Context) ([]string, error) {
+	rows, err := d.pool.Query(ctx, `
+		SELECT DISTINCT org_name, repo_name
+		FROM review_sessions
+		WHERE coalesce(org_name, '') <> '' AND coalesce(repo_name, '') <> ''
+		ORDER BY org_name, repo_name`)
+	if err != nil {
+		return nil, fmt.Errorf("listing review session repositories: %w", err)
+	}
+	defer rows.Close()
+
+	repositories := make([]string, 0)
+	for rows.Next() {
+		var org, repo string
+		if err := rows.Scan(&org, &repo); err != nil {
+			return nil, fmt.Errorf("scanning a review session repository: %w", err)
+		}
+		repositories = append(repositories, org+"/"+repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing review session repositories: %w", err)
+	}
+	return repositories, nil
+}
+
 // RecentCompletedReviewSessions returns the sessions that ended most recently,
 // newest finish first. Running sessions are left out: the Home page shows them
 // in a section of their own.

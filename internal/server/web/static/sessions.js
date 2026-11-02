@@ -344,6 +344,16 @@
     if (payload.status !== "FAILED") {
       marker("review", "Session complete", payload.status || "");
     }
+    if (!timeline.querySelector(".event, .tool, .thinking, .output, .usage-line")) {
+      // A session that failed before its first event still deserves a
+      // transcript that says so rather than an empty console.
+      var empty = document.createElement("div");
+      empty.className = "timeline-empty timeline-none";
+      var glyph = span("icon", "history_toggle_off");
+      glyph.setAttribute("aria-hidden", "true");
+      empty.append(glyph, document.createTextNode("No transcript events were recorded for this session."));
+      timeline.append(empty);
+    }
     source.close();
     follow();
     // The final layout can settle just after the last event. Scroll once more
@@ -371,10 +381,14 @@
     details.dataset.state = "streaming";
 
     var summaryNode = document.createElement("summary");
-    var glyph = span("glyph", "✦");
+    var head = document.createElement("div");
+    head.className = "thinking-head";
+    var glyph = span("glyph", "psychology");
+    glyph.setAttribute("aria-hidden", "true");
     var label = span("label", "Thinking…");
     var meta = span("meta", "");
-    summaryNode.append(glyph, label, meta);
+    head.append(glyph, label);
+    summaryNode.append(head, meta);
 
     var body = document.createElement("div");
     body.className = "thinking-text";
@@ -416,14 +430,18 @@
     var box = document.createElement("div");
     box.className = "output";
 
-    var glyph = span("glyph", "●");
+    var head = document.createElement("div");
+    head.className = "output-head";
+    var glyph = span("glyph", "smart_toy");
     glyph.setAttribute("aria-hidden", "true");
+    var label = span("label", "Assistant analysis");
+    head.append(glyph, label);
 
     var body = document.createElement("div");
     body.className = "output-text";
     body.setAttribute("dir", "auto");
 
-    box.append(glyph, body);
+    box.append(head, body);
     timeline.append(box);
 
     activeOutput = { box: box, body: body };
@@ -471,10 +489,11 @@
     details.dataset.toolName = payload.name || "";
 
     var summaryNode = document.createElement("summary");
-    var glyph = span("glyph", "●");
+    var glyph = span("glyph", "terminal");
+    glyph.setAttribute("aria-hidden", "true");
     var label = span("tool-label", humanTool(payload.name || "", null));
     var state = span("tool-state", "queued");
-    var chev = span("chev", "›");
+    var chev = span("chev", "chevron_right");
     chev.setAttribute("aria-hidden", "true");
     summaryNode.append(glyph, label, state, chev);
 
@@ -496,7 +515,8 @@
     result.className = "tool-result";
     result.hidden = true;
 
-    var resultGlyph = span("glyph", "⎿");
+    var resultGlyph = span("glyph", "subdirectory_arrow_right");
+    resultGlyph.setAttribute("aria-hidden", "true");
     var resultText = span("result-text", "");
     var raw = document.createElement("details");
     raw.className = "result-raw";
@@ -602,7 +622,9 @@
     var body = document.createElement("div");
     body.className = "event-body";
 
-    var line = span("event-text", textValue);
+    var line = document.createElement("div");
+    line.className = "event-line";
+    line.append(span("event-kind", kindLabel(kind)), span("event-text", textValue));
     body.append(line);
 
     if (detail) {
@@ -624,9 +646,10 @@
 
   function storedThinking() {
     try {
-      return window.localStorage.getItem(THINKING_KEY) !== "off";
+      // Thinking transcripts are hidden until the operator asks for them.
+      return window.localStorage.getItem(THINKING_KEY) === "on";
     } catch (error) {
-      return true;
+      return false;
     }
   }
 
@@ -637,6 +660,10 @@
     }
     thinkingToggle.setAttribute("aria-pressed", thinkingOn ? "true" : "false");
     thinkingToggle.title = thinkingOn ? "Hide the model's thinking" : "Show the model's thinking";
+    var badge = thinkingToggle.querySelector(".badge");
+    if (badge) {
+      badge.textContent = thinkingOn ? "SHOW" : "HIDE";
+    }
   }
 
   function follow() {
@@ -958,18 +985,33 @@
     return parts.join(" · ");
   }
 
+  function kindLabel(kind) {
+    switch (kind) {
+      case "turn":
+        return "Turn";
+      case "review":
+        return "Event / Review";
+      case "warn":
+        return "Event / Warning";
+      case "error":
+        return "Event / Error";
+      default:
+        return "Event / Info";
+    }
+  }
+
   function glyphFor(kind) {
     switch (kind) {
       case "turn":
-        return "▸";
+        return "subdirectory_arrow_right";
       case "review":
-        return "✔";
+        return "task_alt";
       case "warn":
-        return "!";
+        return "warning";
       case "error":
-        return "✖";
+        return "error";
       default:
-        return "●";
+        return "info";
     }
   }
 

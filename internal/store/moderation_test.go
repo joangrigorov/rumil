@@ -187,8 +187,16 @@ func TestMemoryStatsCountsByStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MemoryStats returned error: %v", err)
 	}
-	if stats != (MemoryStats{Total: 3, Pending: 1, Approved: 1, Rejected: 1}) {
-		t.Errorf("stats = %+v, want one of each and three in total", stats)
+	want := MemoryStats{
+		Total:            3,
+		Pending:          1,
+		Approved:         1,
+		Rejected:         1,
+		ContextRules:     3,
+		RepositoryScoped: 3,
+	}
+	if stats != want {
+		t.Errorf("stats = %+v, want %+v", stats, want)
 	}
 
 	other, err := db.MemoryStats(ctx, pending.InstallationID+1)

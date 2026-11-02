@@ -1,72 +1,82 @@
 {{define "content"}}
+<div class="page-body">
 <header class="page-head">
   <div class="page-head-text">
-    <p class="eyebrow">rumil / home</p>
+    <p class="eyebrow">Rumil / Home</p>
     <h1>Home</h1>
     <p class="lede">What the reviewer is working on, what it finished last, and whether any recorded rule is waiting for a decision.</p>
   </div>
+
 </header>
 
 {{if .Stats}}
 <section class="home-summary" aria-label="Rules at a glance">
   <div class="stat-grid">
     <a class="stat" href="/ui/moderation">
-      <span class="stat-label">Rules</span>
-      <span class="stat-value">{{.Stats.Total}}</span>
-      <span class="stat-note">recorded</span>
+      <span class="stat-head"><span class="stat-label">Rules</span><span class="icon" aria-hidden="true">rule</span></span>
+      <span class="stat-body"><span class="stat-value">{{.Stats.Total}}</span><span class="stat-note">Total recorded count</span></span>
     </a>
     <a class="stat{{if gt .Stats.Pending 0}} stat-pending{{end}}" href="/ui/moderation?status=PENDING">
-      <span class="stat-label">Pending</span>
-      <span class="stat-value">{{.Stats.Pending}}</span>
-      <span class="stat-note">need a decision</span>
+      <span class="stat-head"><span class="stat-label">Pending</span><span class="icon" aria-hidden="true">pending_actions</span></span>
+      <span class="stat-body"><span class="stat-value">{{.Stats.Pending}}</span><span class="stat-note">Need a decision</span></span>
     </a>
-    <a class="stat" href="/ui/moderation?status=APPROVED">
-      <span class="stat-label">Approved</span>
-      <span class="stat-value">{{.Stats.Approved}}</span>
-      <span class="stat-note">reaching reviews</span>
+    <a class="stat stat-approved" href="/ui/moderation?status=APPROVED">
+      <span class="stat-head"><span class="stat-label">Approved</span><span class="icon" aria-hidden="true">verified</span></span>
+      <span class="stat-body"><span class="stat-value">{{.Stats.Approved}}</span><span class="stat-note">Reaching reviews</span></span>
     </a>
     <a class="stat" href="/ui/moderation?status=REJECTED">
-      <span class="stat-label">Rejected</span>
-      <span class="stat-value">{{.Stats.Rejected}}</span>
-      <span class="stat-note">kept for the record</span>
+      <span class="stat-head"><span class="stat-label">Rejected</span><span class="icon" aria-hidden="true">archive</span></span>
+      <span class="stat-body"><span class="stat-value">{{.Stats.Rejected}}</span><span class="stat-note">Kept for the record</span></span>
     </a>
   </div>
 
   {{if gt .Stats.Pending 0}}
   <a class="home-alert" href="/ui/moderation?status=PENDING">
-    <span class="home-alert-title">{{.Stats.Pending}} {{if eq .Stats.Pending 1}}rule needs{{else}}rules need{{end}} a decision</span>
-    <span class="home-alert-sub">Open the pending rules to approve, edit or reject them.</span>
-    <span class="home-alert-go" aria-hidden="true">→</span>
+    <span class="home-alert-main">
+      <span class="home-alert-icon"><span class="icon" aria-hidden="true">gavel</span></span>
+      <span class="home-alert-copy">
+        <span class="home-alert-title">{{.Stats.Pending}} {{if eq .Stats.Pending 1}}rule needs{{else}}rules need{{end}} a decision</span>
+        <span class="home-alert-sub">Opens the pending rules to approve, edit or reject them.</span>
+      </span>
+    </span>
+    <span class="home-alert-go">Review pending rules</span>
   </a>
   {{else}}
-  <p class="home-clear">No rules are waiting for a decision.</p>
+  <p class="home-clear">
+    <span class="home-clear-icon"><span class="icon" aria-hidden="true">check_circle</span></span>
+    <span><strong>No rules are waiting for a decision.</strong> Every recorded rule has been approved or kept for the record.</span>
+  </p>
   {{end}}
 </section>
 {{end}}
 
 <div class="home-grid">
-  <section class="panel">
-    <div class="panel-head">
-      <h2 class="panel-title">Running now</h2>
-      <a class="panel-link" href="/ui/sessions?status=RUNNING">View all</a>
+  <section class="home-section">
+    <div class="home-section-head">
+      <h2 class="home-section-title">Running now {{if .Running}}<span class="section-count">{{len .Running}}</span>{{end}}</h2>
+      <a class="home-link" href="/ui/sessions?status=RUNNING">View all <span class="icon" aria-hidden="true">arrow_forward</span></a>
     </div>
     {{if .Running}}
     <ol class="home-sessions">
       {{range .Running}}
       <li>
         <a class="session-row" href="/ui/sessions/{{.ID}}">
-          <div class="session-row-top">
-            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
-            <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
-            <span class="session-when">{{date .StartedAt}}</span>
-          </div>
-          <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
-          <div class="session-meta">
-            {{if .Model}}<code>{{.Model}}</code>{{end}}
-            <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
-            {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
-            <span>{{duration .StartedAt .FinishedAt}}</span>
-          </div>
+          <span class="session-row-top">
+            <span class="session-row-lead">
+              <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+              <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+              <span class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}No title recorded{{end}}</span>
+            </span>
+            <span class="session-row-side">
+              <span class="session-when">started {{age .StartedAt}} ago</span>
+            </span>
+          </span>
+          <span class="session-meta">
+            {{if .Model}}<span class="meta-item"><span class="icon" aria-hidden="true">psychology</span>{{.Model}}</span>{{end}}
+            <span class="meta-item"><span class="icon" aria-hidden="true">terminal</span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+            {{if .Usage}}<span class="meta-item"><span class="icon" aria-hidden="true">data_usage</span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
+            <span class="meta-item"><span class="icon" aria-hidden="true">timer</span>{{duration .StartedAt .FinishedAt}}</span>
+          </span>
         </a>
       </li>
       {{end}}
@@ -76,29 +86,33 @@
     {{end}}
   </section>
 
-  <section class="panel">
-    <div class="panel-head">
-      <h2 class="panel-title">Recently completed</h2>
-      <a class="panel-link" href="/ui/sessions">View all</a>
+  <section class="home-section">
+    <div class="home-section-head">
+      <h2 class="home-section-title">Recently completed {{if .Recent}}<span class="section-count">{{len .Recent}}</span>{{end}}</h2>
+      <a class="home-link" href="/ui/sessions">View all <span class="icon" aria-hidden="true">arrow_forward</span></a>
     </div>
     {{if .Recent}}
     <ol class="home-sessions">
       {{range .Recent}}
       <li>
         <a class="session-row" href="/ui/sessions/{{.ID}}">
-          <div class="session-row-top">
-            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
-            <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
-            <span class="session-when">{{datePtr .FinishedAt}}{{if not .FinishedAt}}{{date .StartedAt}}{{end}}</span>
-          </div>
-          <p class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}<span class="muted">No title recorded</span>{{end}}</p>
-          <div class="session-meta">
-            {{if .Model}}<code>{{.Model}}</code>{{end}}
-            <span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
-            {{if .Usage}}<span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
-            <span>{{duration .StartedAt .FinishedAt}}</span>
-            {{if .ReviewEvent}}<span class="review-event">{{.ReviewEvent}}</span>{{end}}
-          </div>
+          <span class="session-row-top">
+            <span class="session-row-lead">
+              <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+              <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
+              <span class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}No title recorded{{end}}</span>
+            </span>
+            <span class="session-row-side">
+              <span class="session-when">{{if .FinishedAt}}finished {{agePtr .FinishedAt}} ago{{else}}started {{age .StartedAt}} ago{{end}}</span>
+              <span class="session-when">{{duration .StartedAt .FinishedAt}}</span>
+            </span>
+          </span>
+          <span class="session-meta">
+            {{if .Model}}<span class="meta-item"><span class="icon" aria-hidden="true">psychology</span>{{.Model}}</span>{{end}}
+            <span class="meta-item"><span class="icon" aria-hidden="true">terminal</span>{{.ToolCalls}} tool {{if eq .ToolCalls 1}}call{{else}}calls{{end}}</span>
+            {{if .Usage}}<span class="meta-item"><span class="icon" aria-hidden="true">data_usage</span>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}
+            {{if .ReviewEvent}}<span class="session-meta-end"><span class="review-badge{{if or (eq .ReviewEvent "REQUEST_CHANGES") (eq .ReviewEvent "COMMENT")}} is-negative{{end}}">{{.ReviewEvent}}</span></span>{{end}}
+          </span>
         </a>
       </li>
       {{end}}
@@ -107,5 +121,6 @@
     <p class="panel-empty">No review has finished yet.</p>
     {{end}}
   </section>
+</div>
 </div>
 {{end}}

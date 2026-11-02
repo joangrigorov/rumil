@@ -111,7 +111,7 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
-		`<body class="console">`,
+		`<body class="console" data-section="sessions"`,
 		"Review sessions",
 		"acme/payments#42",
 		"acme/ledger#7",
@@ -232,6 +232,54 @@ func TestHomeShowsRunningRecentAndRuleStats(t *testing.T) {
 	}
 }
 
+// The repository filter is a dropdown of the repositories the deck has
+// sessions for, and choosing one narrows the list.
+func TestObservationDeckFiltersSessionsByRepository(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	newReviewSession(t, h, "payments", 42, "Fix the flap", "The change is sound.", store.ReviewSucceeded)
+	newReviewSession(t, h, "ledger", 7, "Add a retry", "", store.ReviewFailed)
+	handler, _ := sessionsHandler(t, h)
+
+	body := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions", adminToken, nil, "text/html").Body.String()
+	for _, want := range []string{
+		`<select name="repo">`,
+		`<option value="">Any repository</option>`,
+		`<option value="acme/ledger">acme/ledger</option>`,
+		`<option value="acme/payments">acme/payments</option>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the list does not contain %q:\n%s", want, body)
+		}
+	}
+
+	filtered := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?repo=acme/payments", adminToken, nil, "text/html")
+	if filtered.Code != http.StatusOK {
+		t.Fatalf("a filtered list = %d, want 200 (body: %s)", filtered.Code, filtered.Body.String())
+	}
+	filteredBody := filtered.Body.String()
+	if !strings.Contains(filteredBody, "acme/payments#42") {
+		t.Errorf("the filtered list lost the matching session:\n%s", filteredBody)
+	}
+	if strings.Contains(filteredBody, "acme/ledger#7") {
+		t.Errorf("the filtered list kept another repository's session:\n%s", filteredBody)
+	}
+	if !strings.Contains(filteredBody, `<option value="acme/payments" selected>`) {
+		t.Errorf("the filtered list does not select the repository it filters on:\n%s", filteredBody)
+	}
+
+	// A bookmarked repository that has no sessions yet stays visible so the
+	// filter reads back as it was saved.
+	bookmarked := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions?repo=acme/archive", adminToken, nil, "text/html")
+	if bookmarked.Code != http.StatusOK {
+		t.Fatalf("a bookmarked repository = %d, want 200 (body: %s)", bookmarked.Code, bookmarked.Body.String())
+	}
+	if !strings.Contains(bookmarked.Body.String(), `<option value="acme/archive" selected>`) {
+		t.Errorf("the bookmarked repository is not offered back:\n%s", bookmarked.Body.String())
+	}
+}
+
 // The list is a page: the newest fifty sessions, with links that keep the
 // filters and move through the rest.
 func TestObservationDeckPaginatesSessions(t *testing.T) {
@@ -248,14 +296,15 @@ func TestObservationDeckPaginatesSessions(t *testing.T) {
 		t.Fatalf("first page = %d, want 200 (body: %s)", first.Code, first.Body.String())
 	}
 	body := first.Body.String()
-	if rows := strings.Count(body, `class="session-row"`); rows != store.ReviewListDefault {
+	if rows := strings.Count(body, `class="session-link"`); rows != store.ReviewListDefault {
 		t.Errorf("the first page has %d session rows, want %d", rows, store.ReviewListDefault)
 	}
 	for _, want := range []string{
 		fmt.Sprintf("<strong>%d</strong> sessions", store.ReviewListDefault+1),
 		"Page 1 of 2",
 		`href="/ui/sessions?page=2" rel="next"`,
-		`aria-disabled="true">← Newer</span>`,
+		`aria-disabled="true"`,
+		">Newer</span>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the first page does not contain %q:\n%s", want, body)
@@ -267,13 +316,14 @@ func TestObservationDeckPaginatesSessions(t *testing.T) {
 		t.Fatalf("second page = %d, want 200 (body: %s)", second.Code, second.Body.String())
 	}
 	secondBody := second.Body.String()
-	if rows := strings.Count(secondBody, `class="session-row"`); rows != 1 {
+	if rows := strings.Count(secondBody, `class="session-link"`); rows != 1 {
 		t.Errorf("the second page has %d session rows, want 1", rows)
 	}
 	for _, want := range []string{
 		"Page 2 of 2",
 		`href="/ui/sessions" rel="prev"`,
-		`aria-disabled="true">Older →</span>`,
+		`aria-disabled="true"`,
+		">Older<span",
 	} {
 		if !strings.Contains(secondBody, want) {
 			t.Errorf("the second page does not contain %q:\n%s", want, secondBody)
@@ -324,7 +374,7 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
-		`<body class="console console-fixed">`,
+		`<body class="console console-fixed" data-section="sessions"`,
 		"acme/payments#42",
 		"Fix the flap",
 		"data-session-id=\"" + session.ID + "\"",
@@ -338,7 +388,7 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		"/static/theme.js",
 		`id="theme-toggle"`,
 		`id="thinking-toggle"`,
-		`aria-pressed="true"`,
+		`aria-pressed="false"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)
@@ -840,7 +890,7 @@ func TestObservationDeckShowsUsage(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body: %s)", detail.Code, detail.Body.String())
 	}
 	body := detail.Body.String()
-	for _, want := range []string{"1,234 in", "567 out", "89 cache read", "10 cache write", "est. $0.0012"} {
+	for _, want := range []string{"1,234", "567", "89 / 10", "$0.0012", "Est. cost"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the session page lost %q:\n%s", want, body)
 		}

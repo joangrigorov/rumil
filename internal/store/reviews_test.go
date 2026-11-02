@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 )
@@ -253,6 +254,38 @@ func TestListReviewSessionsIsNewestFirstAndBounded(t *testing.T) {
 	}
 	if sessions[0].PRNumber != 3 || sessions[1].PRNumber != 2 {
 		t.Errorf("order = #%d, #%d, want #3, #2", sessions[0].PRNumber, sessions[1].PRNumber)
+	}
+}
+
+// The session list's repository picker offers each repository once, sorted by
+// owner then name.
+func TestReviewSessionRepositoriesListsDistinctRepositories(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	for _, repository := range [][2]string{
+		{"acme", "payments"},
+		{"acme", "payments"},
+		{"acme", "ledger"},
+		{"zeta", "worker"},
+	} {
+		if _, err := db.CreateReviewSession(ctx, NewReviewSession{
+			InstallationID: 98765432,
+			OrgName:        repository[0],
+			RepoName:       repository[1],
+			PRNumber:       1,
+		}); err != nil {
+			t.Fatalf("creating a session for %s/%s: %v", repository[0], repository[1], err)
+		}
+	}
+
+	repositories, err := db.ReviewSessionRepositories(ctx)
+	if err != nil {
+		t.Fatalf("ReviewSessionRepositories returned error: %v", err)
+	}
+	want := []string{"acme/ledger", "acme/payments", "zeta/worker"}
+	if !slices.Equal(repositories, want) {
+		t.Errorf("repositories = %v, want %v", repositories, want)
 	}
 }
 

@@ -659,7 +659,7 @@ func TestRulesTableRepositoryFilterIsADropdown(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
 	}
 	body := page.Body.String()
-	if !strings.Contains(body, `<select name="repo">`) {
+	if !strings.Contains(body, `<select name="repo" aria-label="Repository">`) {
 		t.Errorf("the repository filter is not a dropdown:\n%s", body)
 	}
 	if strings.Contains(body, `<input type="text" name="repo"`) {
@@ -814,8 +814,8 @@ func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
 		t.Errorf("Content-Security-Policy = %q, want the operator policy", got)
 	}
 
-	// The controls are a filter, and the page says so.
-	if !strings.Contains(body, `aria-label="Filter rules"`) || !strings.Contains(body, `class="filters-title">Filter</span>`) {
+	// The controls are a filter, and the page says how rules rank.
+	if !strings.Contains(body, `aria-label="Filter rules"`) || !strings.Contains(body, `RUMIL.md overrides all context rules unless promoted to directive`) {
 		t.Errorf("the filter form is not labelled as a filter:\n%s", body)
 	}
 
@@ -841,14 +841,14 @@ func TestT040_04_ModerationPageBadgesAndNarrowsTheScope(t *testing.T) {
 		t.Fatalf("the organization rule details = %d, want 200 (body: %s)", orgDetail.Code, orgDetail.Body.String())
 	}
 	orgBody := orgDetail.Body.String()
-	if !strings.Contains(orgBody, `<option value="ORG" selected>`) {
+	if !strings.Contains(orgBody, `name="scope" value="ORG" checked`) {
 		t.Errorf("the organization rule's form does not offer the scope it has:\n%s", orgBody)
 	}
-	if !strings.Contains(orgBody, `<option value="REPO">REPO — this repository, payments</option>`) {
+	if !strings.Contains(orgBody, `name="scope" value="REPO"`) || !strings.Contains(orgBody, "REPO — this repository, payments") {
 		t.Errorf("the organization rule's form does not offer the narrower scope:\n%s", orgBody)
 	}
-	if count := strings.Count(orgBody, `name="scope"`); count != 1 {
-		t.Errorf("the details screen carries %d scope controls, want one, on the organization rule:\n%s", count, orgBody)
+	if count := strings.Count(orgBody, `name="scope"`); count != 2 {
+		t.Errorf("the details screen carries %d scope controls, want two, on the organization rule:\n%s", count, orgBody)
 	}
 
 	repoDetail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+repoRule.ID, adminToken, nil, "text/html")
@@ -1062,10 +1062,10 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 		t.Fatalf("the rule details = %d, want 200 (body: %s)", detail.Code, detail.Body.String())
 	}
 	detailBody := detail.Body.String()
-	if count := strings.Count(detailBody, `name="authority"`); count != 1 {
-		t.Errorf("the details screen carries %d authority controls, want one:\n%s", count, detailBody)
+	if count := strings.Count(detailBody, `name="authority"`); count != 2 {
+		t.Errorf("the details screen carries %d authority controls, want two:\n%s", count, detailBody)
 	}
-	if !strings.Contains(detailBody, `<option value="CONTEXT" selected>CONTEXT — the guidelines outrank it</option>`) {
+	if !strings.Contains(detailBody, `name="authority" value="CONTEXT" checked`) {
 		t.Errorf("the page does not show a recorded rule as context:\n%s", detailBody)
 	}
 	// The organization rule's promotion option says what it needs, because the
@@ -1127,7 +1127,7 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	if !strings.Contains(detailBody, `class="pill authority-directive">DIRECTIVE`) {
 		t.Errorf("the promoted rule's details screen does not show the authority it has:\n%s", detailBody)
 	}
-	if !strings.Contains(detailBody, `<option value="DIRECTIVE" selected>`) {
+	if !strings.Contains(detailBody, `name="authority" value="DIRECTIVE" checked`) {
 		t.Errorf("the promoted rule's edit form does not show the authority it has:\n%s", detailBody)
 	}
 

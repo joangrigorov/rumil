@@ -1,66 +1,80 @@
 {{define "content"}}
+<div class="page-body">
 <header class="page-head">
   <div class="page-head-text">
-    <p class="eyebrow">Memory</p>
+    <p class="eyebrow">Rumil / Memory</p>
     <h1>Recorded rules</h1>
     <p class="lede">Every rule a comment proposed. Only an approved rule reaches a review; open one to read the whole rule and decide on it.</p>
   </div>
-  <p class="count"><strong>{{.Count}}</strong> {{if eq .Count 1}}rule{{else}}rules{{end}}</p>
+  <div class="count">
+    <span class="count-chip"><span class="icon icon-sm" aria-hidden="true">data_thresholding</span><strong>{{.Count}}</strong> {{if eq .Count 1}}rule{{else}}rules{{end}} matching current filters</span>
+  </div>
 </header>
-
-{{if .Stats}}
-<nav class="rule-tabs" aria-label="Rules by status">
-  <a href="/ui/moderation" {{if not .Status}}aria-current="page"{{end}}>All <span>{{.Stats.Total}}</span></a>
-  <a href="/ui/moderation?status=PENDING" {{if eq .Status "PENDING"}}aria-current="page"{{end}}>Pending <span>{{.Stats.Pending}}</span></a>
-  <a href="/ui/moderation?status=APPROVED" {{if eq .Status "APPROVED"}}aria-current="page"{{end}}>Approved <span>{{.Stats.Approved}}</span></a>
-  <a href="/ui/moderation?status=REJECTED" {{if eq .Status "REJECTED"}}aria-current="page"{{end}}>Rejected <span>{{.Stats.Rejected}}</span></a>
-</nav>
-{{end}}
 
 {{if .Decided}}<p class="notice" role="status">{{.Decided}}</p>{{end}}
 
-<form class="filters" method="get" action="/ui/moderation" aria-label="Filter rules">
+{{if .Stats}}
+<div class="stat-grid">
+  <div class="stat">
+    <span class="stat-head"><span class="stat-label">Context rules</span><span class="icon" aria-hidden="true">source_notes</span></span>
+    <span class="stat-body"><span class="stat-value">{{.Stats.ContextRules}}</span><span class="stat-note">Guidelines outrank them</span></span>
+  </div>
+  <div class="stat">
+    <span class="stat-head"><span class="stat-label">Maintainer directives</span><span class="icon" aria-hidden="true">gavel</span></span>
+    <span class="stat-body"><span class="stat-value is-primary">{{.Stats.Directives}}</span><span class="stat-note">Above the guidelines</span></span>
+  </div>
+  <div class="stat">
+    <span class="stat-head"><span class="stat-label">Repository scoped</span><span class="icon" aria-hidden="true">folder_copy</span></span>
+    <span class="stat-body"><span class="stat-value">{{.Stats.RepositoryScoped}}</span><span class="stat-note">One repository</span></span>
+  </div>
+  <div class="stat">
+    <span class="stat-head"><span class="stat-label">Org wide scoped</span><span class="icon" aria-hidden="true">corporate_fare</span></span>
+    <span class="stat-body"><span class="stat-value is-secondary">{{.Stats.OrgScoped}}</span><span class="stat-note">Every repository</span></span>
+  </div>
+</div>
+{{end}}
+
+<div class="filters">
   <div class="filters-head">
-    <span class="filters-title">Filter</span>
-    <span class="filters-sub">Narrow the table by status, scope, repository or text.</span>
+    {{if .Stats}}
+    <nav class="rule-tabs" aria-label="Rules by status">
+      <a href="/ui/moderation" {{if not .Status}}aria-current="page"{{end}}>All <span>{{.Stats.Total}}</span></a>
+      <a href="/ui/moderation?status=PENDING" {{if eq .Status "PENDING"}}aria-current="page"{{end}}>Pending <span>{{.Stats.Pending}}</span></a>
+      <a href="/ui/moderation?status=APPROVED" {{if eq .Status "APPROVED"}}aria-current="page"{{end}}>Approved <span>{{.Stats.Approved}}</span></a>
+      <a href="/ui/moderation?status=REJECTED" {{if eq .Status "REJECTED"}}aria-current="page"{{end}}>Rejected <span>{{.Stats.Rejected}}</span></a>
+    </nav>
+    {{end}}
+    <span class="filters-note"><span class="icon" aria-hidden="true">info</span><span class="filters-sub">RUMIL.md overrides all context rules unless promoted to directive</span></span>
   </div>
-  <div class="filters-fields">
-    <label class="field field-grow">
-      <span class="field-label">Search</span>
-      <input type="search" name="search" value="{{.Search}}" placeholder="rule text or rationale" autocomplete="off" spellcheck="false">
-    </label>
-    <label class="field">
-      <span class="field-label">Status</span>
-      <select name="status">
-        <option value="">Any status</option>
-        <option value="PENDING" {{if eq .Status "PENDING"}}selected{{end}}>Pending</option>
-        <option value="APPROVED" {{if eq .Status "APPROVED"}}selected{{end}}>Approved</option>
-        <option value="REJECTED" {{if eq .Status "REJECTED"}}selected{{end}}>Rejected</option>
-      </select>
-    </label>
-    <label class="field">
-      <span class="field-label">Scope</span>
-      <select name="scope">
-        <option value="">Any scope</option>
-        <option value="REPO" {{if eq .Scope "REPO"}}selected{{end}}>Repository</option>
-        <option value="ORG" {{if eq .Scope "ORG"}}selected{{end}}>Organization</option>
-      </select>
-    </label>
-    <label class="field field-repo">
-      <span class="field-label">Repository</span>
-      <select name="repo">
-        <option value="">Any repository</option>
-        {{range .Repositories}}
-        <option value="{{.}}" {{if eq . $.Repo}}selected{{end}}>{{.}}</option>
-        {{end}}
-      </select>
-    </label>
+
+  <form class="filters-fields filters-grid" method="get" action="/ui/moderation" aria-label="Filter rules">
+    <span class="input-with-icon">
+      <span class="icon" aria-hidden="true">search</span>
+      <input type="search" name="search" value="{{.Search}}" placeholder="Search rule text or rationale…" aria-label="Search rule text or rationale" autocomplete="off" spellcheck="false">
+    </span>
+    <select name="status" aria-label="Status">
+      <option value="">Any status</option>
+      <option value="PENDING" {{if eq .Status "PENDING"}}selected{{end}}>Pending</option>
+      <option value="APPROVED" {{if eq .Status "APPROVED"}}selected{{end}}>Approved</option>
+      <option value="REJECTED" {{if eq .Status "REJECTED"}}selected{{end}}>Rejected</option>
+    </select>
+    <select name="scope" aria-label="Scope">
+      <option value="">Any scope</option>
+      <option value="REPO" {{if eq .Scope "REPO"}}selected{{end}}>Repository</option>
+      <option value="ORG" {{if eq .Scope "ORG"}}selected{{end}}>Organization</option>
+    </select>
+    <select name="repo" aria-label="Repository">
+      <option value="">Any repository</option>
+      {{range .Repositories}}
+      <option value="{{.}}"{{if eq . $.Repo}} selected{{end}}>{{.}}</option>
+      {{end}}
+    </select>
     <div class="filters-actions">
-      <button class="btn btn-primary" type="submit">Apply</button>
-      <a class="btn btn-quiet" href="/ui/moderation">Clear</a>
+      <button class="btn btn-primary" type="submit"><span class="icon" aria-hidden="true">filter_alt</span>Apply</button>
+      <a class="link-quiet" href="/ui/moderation">Clear</a>
     </div>
-  </div>
-</form>
+  </form>
+</div>
 
 {{if .Rules}}
 <div class="table-wrap">
@@ -73,7 +87,7 @@
         <th scope="col">Repository</th>
         <th scope="col">Authority</th>
         <th scope="col">Proposed</th>
-        <th scope="col"><span class="visually-hidden">Actions</span></th>
+        <th scope="col" class="cell-actions">Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -88,25 +102,27 @@
         <td class="cell-repo">
           {{if eq .Scope "ORG"}}
           <span>{{.OrgName}}</span>
-          <span class="cell-sub">proposed in {{.RepoName}}</span>
+          <span class="cell-sub">(proposed in {{.RepoName}})</span>
           {{else}}
           <span>{{.OrgName}}/{{.RepoName}}</span>
           {{end}}
         </td>
         <td>
-          {{if eq .Authority "DIRECTIVE"}}<span class="pill authority-directive">DIRECTIVE</span>{{else}}<span class="cell-muted">Context</span>{{end}}
+          {{if eq .Authority "DIRECTIVE"}}<span class="pill authority-directive">DIRECTIVE</span>{{else}}<span class="cell-muted">CONTEXT</span>{{end}}
         </td>
-        <td class="cell-when">{{date .CreatedAt}}</td>
+        <td class="cell-when">{{age .CreatedAt}} ago</td>
         <td class="cell-actions">
           {{if eq .Status "PENDING"}}
           <form method="post" action="/api/moderation/{{.ID}}/approve">
             <input type="hidden" name="status_filter" value="{{$.Status}}">
-            <button class="btn btn-primary btn-sm" type="submit">Approve</button>
+            <button class="btn btn-approve btn-sm" type="submit">Approve</button>
           </form>
           <form method="post" action="/api/moderation/{{.ID}}/reject">
             <input type="hidden" name="status_filter" value="{{$.Status}}">
             <button class="btn btn-danger btn-sm" type="submit">Reject</button>
           </form>
+          {{else}}
+          <span class="cell-muted">—</span>
           {{end}}
         </td>
       </tr>
@@ -116,9 +132,11 @@
 </div>
 {{else}}
 <div class="empty">
+  <span class="empty-icon"><span class="icon" aria-hidden="true">filter_alt_off</span></span>
   <p class="empty-title">No rules match.</p>
   <p>{{if or .Status .Scope .Search .Repo}}Try another filter, or clear them.{{else}}When a comment asks Rumil to remember something, the proposal lands here for a decision.{{end}}</p>
   <a class="btn btn-quiet" href="/ui/moderation">Clear filters</a>
 </div>
 {{end}}
+</div>
 {{end}}
