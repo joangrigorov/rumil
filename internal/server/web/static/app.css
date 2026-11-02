@@ -608,32 +608,6 @@ h1 {
   color: var(--faint);
 }
 
-.live-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
-  border-radius: var(--radius);
-  background: var(--surface-container);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.live-note .live-dot {
-  color: var(--secondary);
-}
-
-.live-note .live-dot::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0.4;
-  animation: ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
-
 /* ---- notices ---------------------------------------------------------- */
 
 .notice {
@@ -2185,7 +2159,7 @@ textarea:focus {
 .list-note {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 4px;
@@ -3794,10 +3768,6 @@ body.console-fixed .session-facts {
 
   .count-row {
     justify-content: flex-start;
-  }
-
-  .live-note {
-    align-self: flex-start;
   }
 
   .filters-fields {

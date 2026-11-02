@@ -8,7 +8,6 @@
   </div>
   <div class="count">
     <span class="count-chip"><strong>{{.Total}}</strong> {{if eq .Total 1}}session{{else}}sessions{{end}} matching filters</span>
-    {{if .Live}}<span class="live-badge" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">running now</span></span>{{end}}
     {{if .Usage.Reported}}<span class="count-chip">{{tokens .Usage.TotalTokens}} tokens{{if .Usage.CostReported}} <span aria-hidden="true">·</span> ~{{usd .Usage.CostUSD}}{{end}}</span>{{end}}
   </div>
 </header>
@@ -44,7 +43,6 @@
 </form>
 
 <div class="list-note">
-  <span><span class="icon" aria-hidden="true">autorenew</span>While any visible session is running, the page refreshes automatically.</span>
   <span>50 sessions per page <span aria-hidden="true">·</span> newest first</span>
 </div>
 
