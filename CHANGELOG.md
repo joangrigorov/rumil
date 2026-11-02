@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.29](https://github.com/joangrigorov/rumil/compare/v0.0.28...v0.0.29) (2026-11-02)
+
+
+### Features
+
+* **deck:** add a home page and rebuild the rules table ([#114](https://github.com/joangrigorov/rumil/issues/114)) ([0c7d85a](https://github.com/joangrigorov/rumil/commit/0c7d85a3a1550fb48327f05f1d6c723fd16bc23b))
+
 ## [0.0.28](https://github.com/joangrigorov/rumil/compare/v0.0.27...v0.0.28) (2026-11-01)
 
 
