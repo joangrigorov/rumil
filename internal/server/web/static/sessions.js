@@ -646,9 +646,10 @@
 
   function storedThinking() {
     try {
-      return window.localStorage.getItem(THINKING_KEY) !== "off";
+      // Thinking transcripts are hidden until the operator asks for them.
+      return window.localStorage.getItem(THINKING_KEY) === "on";
     } catch (error) {
-      return true;
+      return false;
     }
   }
 

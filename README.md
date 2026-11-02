@@ -12,6 +12,20 @@ Rumil is a self-hosted GitHub App that reviews pull requests. It reads the chang
 
 It is read-only in what it does: the review, the replies in the threads it opened, the resolution of its own threads, and the confirmation it posts for a recorded rule are everything its code writes. One permission is wider than that use — GitHub maps closing a review thread to **Contents: Read and write**, so an App whose threads close themselves holds a token that could also write files. An operator who would rather not grant it keeps Contents at Read, and closes the threads a round says are fixed.
 
+## The deck
+
+The operator deck is served at `/ui`: a home view, the review sessions, the recorded rules, and the queue. It opens in dark and can be switched to light or follow the system theme.
+
+|                     Home                      |                       Sessions                        |
+| :-------------------------------------------: | :---------------------------------------------------: |
+| ![Rumil Deck home](docs/images/deck-home.png) | ![Rumil Deck sessions](docs/images/deck-sessions.png) |
+
+|                       Session transcript                       |                      Recorded rules                      |
+| :------------------------------------------------------------: | :------------------------------------------------------: |
+| ![Rumil Deck session transcript](docs/images/deck-session.png) | ![Rumil Deck recorded rules](docs/images/deck-rules.png) |
+
+The screenshots use generated demo data.
+
 | Command | What it does |
 | :--- | :--- |
 | `rumil init` | Write a configuration file, one question at a time. |

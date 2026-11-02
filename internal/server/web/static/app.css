@@ -2219,13 +2219,6 @@ textarea:focus {
 
 /* ---- session detail header -------------------------------------------- */
 
-.session-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .thinking-toggle {
   display: inline-flex;
   align-items: center;
@@ -2512,7 +2505,8 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding-bottom: 8px;
 }
 

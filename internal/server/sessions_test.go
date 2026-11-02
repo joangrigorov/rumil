@@ -388,7 +388,7 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		"/static/theme.js",
 		`id="theme-toggle"`,
 		`id="thinking-toggle"`,
-		`aria-pressed="true"`,
+		`aria-pressed="false"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)
