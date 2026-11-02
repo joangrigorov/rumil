@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.30](https://github.com/joangrigorov/rumil/compare/v0.0.29...v0.0.30) (2026-11-02)
+
+
+### Features
+
+* **rules:** filter by repository and edit approved rules ([#116](https://github.com/joangrigorov/rumil/issues/116)) ([1e31454](https://github.com/joangrigorov/rumil/commit/1e3145468eee2a481b636c21052b4d6d2fa26fe0))
+
 ## [0.0.29](https://github.com/joangrigorov/rumil/compare/v0.0.28...v0.0.29) (2026-11-02)
 
 
