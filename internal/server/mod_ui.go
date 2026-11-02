@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -104,21 +105,33 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 		stats = &counts
 	}
 
+	// The repository filter is a dropdown of the repositories that actually
+	// have rules. A repository named in the URL is kept even when the last rule
+	// in it is gone, so a bookmarked filter still says what it is.
+	repositories, reposErr := m.service.Repositories(r.Context())
+	if reposErr != nil {
+		m.logger.Warn("listing the rule repositories failed", "error", reposErr)
+	}
+	if rawRepo != "" && !slices.Contains(repositories, rawRepo) {
+		repositories = append([]string{rawRepo}, repositories...)
+	}
+
 	// The page renders text a commenter wrote, so it is not framed: an approve
 	// button under someone else's overlay would otherwise be a decision taken
 	// by whoever drew the overlay, from this origin, which the same-site check
 	// on the post cannot see.
 	m.render(w, moderationTemplates, moderationPage{
-		Title:   "Recorded rules",
-		Section: "rules",
-		Rules:   memories,
-		Count:   len(memories),
-		Stats:   stats,
-		Status:  status,
-		Scope:   scope,
-		Search:  search,
-		Repo:    rawRepo,
-		Decided: query.Get("decided"),
+		Title:        "Recorded rules",
+		Section:      "rules",
+		Rules:        memories,
+		Count:        len(memories),
+		Stats:        stats,
+		Status:       status,
+		Scope:        scope,
+		Search:       search,
+		Repo:         rawRepo,
+		Repositories: repositories,
+		Decided:      query.Get("decided"),
 	})
 }
 
@@ -164,7 +177,13 @@ func (m *ModerationUI) approve(w http.ResponseWriter, r *http.Request) {
 		m.fail(w, r, err)
 		return
 	}
-	m.decide(w, r, memory, "approved")
+	decision := "approved"
+	if r.PostFormValue("intent") == "edit" {
+		// Saving an approved rule keeps its status; the notice says what the
+		// moderator did rather than calling it a fresh approval.
+		decision = "updated"
+	}
+	m.decide(w, r, memory, decision)
 }
 
 func (m *ModerationUI) reject(w http.ResponseWriter, r *http.Request) {
@@ -323,18 +342,19 @@ func moderatorOf(r *http.Request) string {
 // moderationPage is what the rules table renders. Stats is nil when the counts
 // could not be read, which only costs the status summary.
 type moderationPage struct {
-	Title   string
-	Section string
-	Refresh string
-	Fixed   bool
-	Rules   []store.Memory
-	Count   int
-	Stats   *store.MemoryStats
-	Status  string
-	Scope   string
-	Search  string
-	Repo    string
-	Decided string
+	Title        string
+	Section      string
+	Refresh      string
+	Fixed        bool
+	Rules        []store.Memory
+	Count        int
+	Stats        *store.MemoryStats
+	Status       string
+	Scope        string
+	Search       string
+	Repo         string
+	Repositories []string
+	Decided      string
 }
 
 // moderationDetailPage is the view model of one rule: everything the table has

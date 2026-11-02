@@ -140,6 +140,37 @@ func (d *DB) MemoryStats(ctx context.Context, installationID int64) (MemoryStats
 	return stats, nil
 }
 
+// MemoryRepositories lists the repositories this installation has rules for,
+// as owner/name, sorted. The rules page offers them as a filter so a maintainer
+// picks a real repository rather than typing one from memory.
+func (d *DB) MemoryRepositories(ctx context.Context, installationID int64) ([]string, error) {
+	if installationID == 0 {
+		return nil, fmt.Errorf("listing memory repositories needs an installation")
+	}
+	rows, err := d.pool.Query(ctx, `
+		SELECT DISTINCT org_name, repo_name
+		FROM memories
+		WHERE installation_id = $1 AND coalesce(repo_name, '') <> ''
+		ORDER BY org_name, repo_name`, installationID)
+	if err != nil {
+		return nil, fmt.Errorf("listing memory repositories: %w", err)
+	}
+	defer rows.Close()
+
+	repositories := make([]string, 0)
+	for rows.Next() {
+		var org, repo string
+		if err := rows.Scan(&org, &repo); err != nil {
+			return nil, fmt.Errorf("scanning a memory repository: %w", err)
+		}
+		repositories = append(repositories, org+"/"+repo)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing memory repositories: %w", err)
+	}
+	return repositories, nil
+}
+
 // MemoryByID returns one row of this tenant. The reference may be the full id
 // or the leading group the confirmation reply names, because that is what a
 // maintainer has in front of them on the pull request.

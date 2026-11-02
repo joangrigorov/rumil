@@ -46,9 +46,14 @@
         <option value="ORG" {{if eq .Scope "ORG"}}selected{{end}}>Organization</option>
       </select>
     </label>
-    <label class="field field-grow">
+    <label class="field field-repo">
       <span class="field-label">Repository</span>
-      <input type="text" name="repo" value="{{.Repo}}" placeholder="owner/name" autocomplete="off" spellcheck="false">
+      <select name="repo">
+        <option value="">Any repository</option>
+        {{range .Repositories}}
+        <option value="{{.}}" {{if eq . $.Repo}}selected{{end}}>{{.}}</option>
+        {{end}}
+      </select>
     </label>
     <div class="filters-actions">
       <button class="btn btn-primary" type="submit">Apply</button>
@@ -93,7 +98,6 @@
         </td>
         <td class="cell-when">{{date .CreatedAt}}</td>
         <td class="cell-actions">
-          <a class="btn btn-quiet btn-sm" href="/ui/moderation/{{.ID}}">View</a>
           {{if eq .Status "PENDING"}}
           <form method="post" action="/api/moderation/{{.ID}}/approve">
             <input type="hidden" name="status_filter" value="{{$.Status}}">

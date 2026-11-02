@@ -63,6 +63,26 @@ func seedMemory(t *testing.T, h *harness, rule string) store.Memory {
 	return seedScopedMemory(t, h, rule, store.ScopeRepo)
 }
 
+// seedRepoMemory records a pending repository rule in a named repository.
+func seedRepoMemory(t *testing.T, h *harness, repo, rule string) store.Memory {
+	t.Helper()
+
+	memory, _, err := h.db.ProposeMemory(context.Background(), store.Proposal{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       repo,
+		Scope:          store.ScopeRepo,
+		RuleText:       rule,
+		Rationale:      "the author confirmed it in review",
+		RequestedBy:    "octocat",
+		Embedding:      vectorFor(rule),
+	})
+	if err != nil {
+		t.Fatalf("seeding a rule for %s: %v", repo, err)
+	}
+	return memory
+}
+
 // seedScopedMemory records a pending rule in one of the two scopes, with the
 // repository it was proposed from on the row either way.
 func seedScopedMemory(t *testing.T, h *harness, rule, scope string) store.Memory {
@@ -471,6 +491,9 @@ func TestRulesTableOffersDecisionsOnlyForPendingRules(t *testing.T) {
 	if !strings.Contains(body, approvePath) || !strings.Contains(body, rejectPath) {
 		t.Errorf("the pending rule has no decision actions:\n%s", body)
 	}
+	if strings.Contains(body, ">View</a>") {
+		t.Errorf("the table still carries a separate View action:\n%s", body)
+	}
 	for _, rule := range []store.Memory{approved, rejected} {
 		if strings.Contains(body, "/api/moderation/"+rule.ID+"/approve") ||
 			strings.Contains(body, "/api/moderation/"+rule.ID+"/reject") {
@@ -478,13 +501,29 @@ func TestRulesTableOffersDecisionsOnlyForPendingRules(t *testing.T) {
 		}
 	}
 
-	// The details screen of a decided rule has no decision form either.
+	// An approved rule is not pending any more, but it stays editable on its
+	// own screen.
 	decided := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+approved.ID, adminToken, nil, "text/html")
 	if decided.Code != http.StatusOK {
 		t.Fatalf("the decided rule details = %d, want 200 (body: %s)", decided.Code, decided.Body.String())
 	}
-	if strings.Contains(decided.Body.String(), "Approve rule") || strings.Contains(decided.Body.String(), `name="rule_text"`) {
-		t.Errorf("a decided rule still offers a decision:\n%s", decided.Body.String())
+	decidedBody := decided.Body.String()
+	for _, want := range []string{"Edit rule", "Save changes", `name="rule_text"`, `name="intent" value="edit"`} {
+		if !strings.Contains(decidedBody, want) {
+			t.Errorf("the approved rule's details do not contain %q:\n%s", want, decidedBody)
+		}
+	}
+	if strings.Contains(decidedBody, "Approve rule") {
+		t.Errorf("the approved rule still shows the pending approval action:\n%s", decidedBody)
+	}
+
+	// A rejected rule is inert and stays read-only.
+	rejectedDetail := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/"+rejected.ID, adminToken, nil, "text/html")
+	if rejectedDetail.Code != http.StatusOK {
+		t.Fatalf("the rejected rule details = %d, want 200 (body: %s)", rejectedDetail.Code, rejectedDetail.Body.String())
+	}
+	if strings.Contains(rejectedDetail.Body.String(), `name="rule_text"`) {
+		t.Errorf("a rejected rule still offers an edit form:\n%s", rejectedDetail.Body.String())
 	}
 }
 
@@ -537,11 +576,31 @@ func TestRuleDetailsShowsTheWholeRuleAndDecidesInPlace(t *testing.T) {
 	if !strings.Contains(decidedBody, "APPROVED") {
 		t.Errorf("the rule does not show its new status:\n%s", decidedBody)
 	}
-	if strings.Contains(decidedBody, "Approve rule") || strings.Contains(decidedBody, `name="rule_text"`) {
-		t.Errorf("the decided rule still offers a decision:\n%s", decidedBody)
+	if !strings.Contains(decidedBody, "Save changes") || !strings.Contains(decidedBody, `name="rule_text"`) {
+		t.Errorf("the approved rule is no longer editable:\n%s", decidedBody)
+	}
+	if strings.Contains(decidedBody, "Approve rule") {
+		t.Errorf("the decided rule still offers the pending approval action:\n%s", decidedBody)
 	}
 	if !strings.Contains(decidedBody, "pkg/auth/**") {
 		t.Errorf("the details screen does not show the glob that was recorded:\n%s", decidedBody)
+	}
+
+	// Saving an approved rule keeps its status and records the new wording.
+	edited := "Clock skew up to 60 seconds is intentional in the JWT validator only"
+	saved := moderatedRequest(t, handler, http.MethodPost, "/api/moderation/"+rule.ID+"/approve", adminToken,
+		url.Values{"next": {"detail"}, "intent": {"edit"}, "rule_text": {edited}, "path_glob": {"pkg/auth/**"}}, "text/html")
+	if saved.Code != http.StatusSeeOther {
+		t.Fatalf("save status = %d, want 303 (body: %s)", saved.Code, saved.Body.String())
+	}
+	savedLocation := saved.Header().Get("Location")
+	if !strings.HasPrefix(savedLocation, "/ui/moderation/"+rule.ID) || !strings.Contains(savedLocation, "decided=updated") {
+		t.Errorf("Location = %q, want the rule's details page and an update notice", savedLocation)
+	}
+	savedDetail := moderatedRequest(t, handler, http.MethodGet, savedLocation, adminToken, nil, "text/html")
+	savedBody := savedDetail.Body.String()
+	if !strings.Contains(savedBody, edited) || !strings.Contains(savedBody, "APPROVED") {
+		t.Errorf("the saved rule does not show its new wording and status:\n%s", savedBody)
 	}
 
 	notFound := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation/00000000-0000-0000-0000-000000000000", adminToken, nil, "text/html")
@@ -581,6 +640,52 @@ func TestRulesTableFiltersBySearchAndScope(t *testing.T) {
 	refused := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?scope=GLOBAL", adminToken, nil, "text/html")
 	if refused.Code != http.StatusBadRequest {
 		t.Errorf("an unknown scope = %d, want 400", refused.Code)
+	}
+}
+
+// The repository filter is a dropdown of the repositories that have rules, so
+// a maintainer picks a real one and does not type a name from memory.
+func TestRulesTableRepositoryFilterIsADropdown(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
+	paymentsA := seedRepoMemory(t, h, "payments", "Clock skew up to 60 seconds is intentional")
+	paymentsB := seedRepoMemory(t, h, "payments", "Settlements are idempotent upserts")
+	checkout := seedRepoMemory(t, h, "checkout", "The worker pool drains on SIGTERM")
+	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
+
+	page := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", adminToken, nil, "text/html")
+	if page.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", page.Code, page.Body.String())
+	}
+	body := page.Body.String()
+	if !strings.Contains(body, `<select name="repo">`) {
+		t.Errorf("the repository filter is not a dropdown:\n%s", body)
+	}
+	if strings.Contains(body, `<input type="text" name="repo"`) {
+		t.Errorf("the repository filter is still a text field:\n%s", body)
+	}
+	for _, repo := range []string{"acme/payments", "acme/checkout"} {
+		if count := strings.Count(body, `<option value="`+repo+`"`); count != 1 {
+			t.Errorf("the dropdown carries %d options for %s, want one:\n%s", count, repo, body)
+		}
+	}
+
+	filtered := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation?repo=acme/checkout", adminToken, nil, "text/html")
+	if filtered.Code != http.StatusOK {
+		t.Fatalf("filtered status = %d, want 200 (body: %s)", filtered.Code, filtered.Body.String())
+	}
+	filteredBody := filtered.Body.String()
+	if !strings.Contains(filteredBody, checkout.RuleText) {
+		t.Errorf("the repository filter dropped the checkout rule:\n%s", filteredBody)
+	}
+	for _, rule := range []store.Memory{paymentsA, paymentsB} {
+		if strings.Contains(filteredBody, rule.RuleText) {
+			t.Errorf("the repository filter kept a payments rule:\n%s", filteredBody)
+		}
+	}
+	if !strings.Contains(filteredBody, `<option value="acme/checkout" selected>`) {
+		t.Errorf("the dropdown does not show the selected repository:\n%s", filteredBody)
 	}
 }
 
@@ -1022,8 +1127,8 @@ func TestModerationPromotesARuleAboveTheGuidelines(t *testing.T) {
 	if !strings.Contains(detailBody, `class="pill authority-directive">DIRECTIVE`) {
 		t.Errorf("the promoted rule's details screen does not show the authority it has:\n%s", detailBody)
 	}
-	if strings.Contains(detailBody, `name="authority"`) {
-		t.Errorf("the decided rule still offers a decision form:\n%s", detailBody)
+	if !strings.Contains(detailBody, `<option value="DIRECTIVE" selected>`) {
+		t.Errorf("the promoted rule's edit form does not show the authority it has:\n%s", detailBody)
 	}
 
 	// The promotion applies to one repository, so an organization-wide rule is
