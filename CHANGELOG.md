@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.32](https://github.com/joangrigorov/rumil/compare/v0.0.31...v0.0.32) (2026-11-06)
+
+
+### Features
+
+* **deck:** require a login and remove token authentication ([#121](https://github.com/joangrigorov/rumil/issues/121)) ([9613483](https://github.com/joangrigorov/rumil/commit/96134839032b7f86129159c7bda02554e188b9ee))
+
 ## [0.0.31](https://github.com/joangrigorov/rumil/compare/v0.0.30...v0.0.31) (2026-11-02)
 
 
