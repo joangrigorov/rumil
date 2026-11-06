@@ -13,6 +13,7 @@ type queuePage struct {
 	Section string
 	Refresh string
 	Fixed   bool
+	User    string
 	Entries []store.QueueEntry
 	Count   int
 	Running int
@@ -25,6 +26,7 @@ type queueConfirmPage struct {
 	Section string
 	Refresh string
 	Fixed   bool
+	User    string
 	Job     *store.Job
 }
 
@@ -41,6 +43,7 @@ func (s *SessionsUI) queue(w http.ResponseWriter, r *http.Request) {
 	page := queuePage{
 		Title:   "Queue",
 		Section: "queue",
+		User:    adminIdentity(r),
 		Entries: entries,
 		Count:   len(entries),
 	}
@@ -78,6 +81,7 @@ func (s *SessionsUI) cancelConfirm(w http.ResponseWriter, r *http.Request) {
 	s.writePage(w, r, queueConfirmTemplates, "queue_confirm.html", queueConfirmPage{
 		Title:   "Cancel job",
 		Section: "cancel",
+		User:    adminIdentity(r),
 		Job:     job,
 	})
 }

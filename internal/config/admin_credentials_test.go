@@ -6,99 +6,100 @@ import (
 	"testing"
 )
 
-// A lone admin_token keeps working, and it is one named entry rather than a
-// separate code path.
-func TestAdminTokenIsALegacyCredential(t *testing.T) {
-	cfg := mustParse(t, twoChatOneEmbedding+`
-moderation:
-  admin_token: "one-token"
-`)
-	credentials := cfg.Moderation.AdminCredentials()
-	if len(credentials) != 1 {
-		t.Fatalf("credentials = %+v, want one", credentials)
-	}
-	if credentials[0].Name != "legacy" || credentials[0].Token != "one-token" {
-		t.Errorf("credential = %+v, want legacy/one-token", credentials[0])
-	}
-}
+// testPasswordHash is the bcrypt digest of "test-admin-password". A hash starts
+// with $2a$, which the loader must leave intact while expanding ${VAR}
+// placeholders.
+const testPasswordHash = "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"
 
-// Named credentials are listed as configured, and the legacy token keeps its
-// place in front when both forms are present.
-func TestNamedAdminCredentials(t *testing.T) {
+// The deck users are named, and each carries a bcrypt hash rather than a
+// password.
+func TestAdminUsersAreNamed(t *testing.T) {
 	cfg := mustParse(t, twoChatOneEmbedding+`
 moderation:
-  admin_token: "one-token"
-  admin_tokens:
+  admin_users:
     - name: "alice"
-      token: "alice-token"
+      password_hash: "`+testPasswordHash+`"
     - name: "ci.bot-2"
-      token: "bot-token"
+      password_hash: "`+testPasswordHash+`"
 `)
-	credentials := cfg.Moderation.AdminCredentials()
-	want := []AdminCredential{
-		{Name: "legacy", Token: "one-token"},
-		{Name: "alice", Token: "alice-token"},
-		{Name: "ci.bot-2", Token: "bot-token"},
+	users := cfg.Moderation.Users()
+	if len(users) != 2 {
+		t.Fatalf("users = %+v, want two", users)
 	}
-	if len(credentials) != len(want) {
-		t.Fatalf("credentials = %+v, want %+v", credentials, want)
+	if users[0].Name != "alice" || users[1].Name != "ci.bot-2" {
+		t.Errorf("users = %+v, want alice and ci.bot-2", users)
 	}
-	for i := range want {
-		if credentials[i] != want[i] {
-			t.Errorf("credential %d = %+v, want %+v", i, credentials[i], want[i])
-		}
+	if users[0].PasswordHash != testPasswordHash {
+		t.Errorf("password hash = %q, want the configured hash", users[0].PasswordHash)
 	}
 }
 
-// An admin_tokens-only configuration is valid: the singular field is the
-// backward-compatible form, not the required one.
-func TestAdminTokensWithoutTheLegacyToken(t *testing.T) {
-	cfg := mustParse(t, twoChatOneEmbedding+`
-moderation:
-  admin_tokens:
-    - name: "alice"
-      token: "alice-token"
-`)
-	if got := cfg.Moderation.AdminCredentials(); len(got) != 1 || got[0].Name != "alice" {
-		t.Errorf("credentials = %+v, want alice only", got)
+// The old token fields are gone. A file that still carries one is refused at
+// load rather than quietly running without a login.
+func TestLegacyTokenFieldsAreRefused(t *testing.T) {
+	for _, field := range []string{"admin_token", "admin_tokens"} {
+		t.Run(field, func(t *testing.T) {
+			doc := twoChatOneEmbedding + "\nmoderation:\n  " + field + ":\n    - name: alice\n"
+			_, err := Parse([]byte(doc), "test.yaml")
+			if err == nil {
+				t.Fatalf("Parse accepted moderation.%s", field)
+			}
+			if !strings.Contains(err.Error(), field) {
+				t.Errorf("error does not name %s: %v", field, err)
+			}
+		})
 	}
 }
 
 // A set that cannot identify exactly one holder is refused at load, so an
 // ambiguous audit trail never reaches a request.
-func TestAdminCredentialValidation(t *testing.T) {
+func TestAdminUserValidation(t *testing.T) {
 	cases := []struct {
 		name       string
 		moderation string
 	}{
-		{"a missing name", "  admin_tokens:\n    - token: \"a-token\"\n"},
-		{"an empty name", "  admin_tokens:\n    - name: \"  \"\n      token: \"a-token\"\n"},
-		{"a name that is not a handle", "  admin_tokens:\n    - name: \"alice smith\"\n      token: \"a-token\"\n"},
-		{"a name over the length", "  admin_tokens:\n    - name: \"" + strings.Repeat("a", 65) + "\"\n      token: \"a-token\"\n"},
-		{"a missing token", "  admin_tokens:\n    - name: \"alice\"\n"},
-		{"a duplicate name", "  admin_tokens:\n    - name: \"alice\"\n      token: \"a-token\"\n    - name: \"alice\"\n      token: \"b-token\"\n"},
-		{"a duplicate token", "  admin_tokens:\n    - name: \"alice\"\n      token: \"same\"\n    - name: \"bob\"\n      token: \"same\"\n"},
-		{"a named duplicate of legacy", "  admin_token: \"one-token\"\n  admin_tokens:\n    - name: \"legacy\"\n      token: \"another\"\n"},
-		{"a named token equal to legacy", "  admin_token: \"one-token\"\n  admin_tokens:\n    - name: \"alice\"\n      token: \"one-token\"\n"},
+		{"a missing name", "  admin_users:\n    - password_hash: \"" + testPasswordHash + "\"\n"},
+		{"an empty name", "  admin_users:\n    - name: \"  \"\n      password_hash: \"" + testPasswordHash + "\"\n"},
+		{"a name that is not a handle", "  admin_users:\n    - name: \"alice smith\"\n      password_hash: \"" + testPasswordHash + "\"\n"},
+		{"a name over the length", "  admin_users:\n    - name: \"" + strings.Repeat("a", 65) + "\"\n      password_hash: \"" + testPasswordHash + "\"\n"},
+		{"a missing password hash", "  admin_users:\n    - name: \"alice\"\n"},
+		{"a password instead of a hash", "  admin_users:\n    - name: \"alice\"\n      password: \"plaintext\"\n"},
+		{"a hash that is not bcrypt", "  admin_users:\n    - name: \"alice\"\n      password_hash: \"not-a-hash\"\n"},
+		{"a duplicate name", "  admin_users:\n    - name: \"alice\"\n      password_hash: \"" + testPasswordHash + "\"\n    - name: \"alice\"\n      password_hash: \"" + testPasswordHash + "\"\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Parse([]byte(twoChatOneEmbedding+"\nmoderation:\n"+tc.moderation), "test.yaml"); err == nil {
-				t.Fatal("Parse accepted an ambiguous credential set")
+				t.Fatal("Parse accepted an invalid user set")
 			}
 		})
 	}
 
 	// One more than the cap is refused, and the cap itself is accepted.
 	var atCap strings.Builder
-	for i := 0; i < maxAdminCredentials; i++ {
-		fmt.Fprintf(&atCap, "    - name: \"holder-%d\"\n      token: \"token-%d\"\n", i, i)
+	for i := 0; i < maxAdminUsers; i++ {
+		fmt.Fprintf(&atCap, "    - name: \"holder-%d\"\n      password_hash: %q\n", i, testPasswordHash)
 	}
-	if _, err := Parse([]byte(twoChatOneEmbedding+"\nmoderation:\n  admin_tokens:\n"+atCap.String()), "test.yaml"); err != nil {
-		t.Errorf("the cap of %d credentials was refused: %v", maxAdminCredentials, err)
+	if _, err := Parse([]byte(twoChatOneEmbedding+"\nmoderation:\n  admin_users:\n"+atCap.String()), "test.yaml"); err != nil {
+		t.Errorf("the cap of %d users was refused: %v", maxAdminUsers, err)
 	}
-	tooMany := atCap.String() + "    - name: \"one-too-many\"\n      token: \"one-too-many-token\"\n"
-	if _, err := Parse([]byte(twoChatOneEmbedding+"\nmoderation:\n  admin_tokens:\n"+tooMany), "test.yaml"); err == nil {
-		t.Errorf("Parse accepted %d credentials, want at most %d", maxAdminCredentials+1, maxAdminCredentials)
+	tooMany := atCap.String() + "    - name: \"one-too-many\"\n      password_hash: \"" + testPasswordHash + "\"\n"
+	if _, err := Parse([]byte(twoChatOneEmbedding+"\nmoderation:\n  admin_users:\n"+tooMany), "test.yaml"); err == nil {
+		t.Errorf("Parse accepted %d users, want at most %d", maxAdminUsers+1, maxAdminUsers)
+	}
+}
+
+// Only the brace form is an environment placeholder, so a bcrypt hash and a
+// bare dollar sign reach the parser as written.
+func TestOnlyBraceEnvironmentPlaceholdersExpand(t *testing.T) {
+	t.Setenv("RUMIL_TEST_ADMIN_HASH", testPasswordHash)
+	cfg := mustParse(t, twoChatOneEmbedding+`
+moderation:
+  admin_users:
+    - name: "alice"
+      password_hash: "${RUMIL_TEST_ADMIN_HASH}"
+`)
+	if got := cfg.Moderation.Users()[0].PasswordHash; got != testPasswordHash {
+		t.Errorf("password_hash = %q, want the environment value", got)
 	}
 }

@@ -21,15 +21,21 @@ import (
 	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
-const adminToken = "test-admin-token"
+const (
+	adminUser     = "legacy"
+	adminPassword = "test-admin-password"
+	// adminToken is the password the older tests pass to moderatedRequest.
+	adminToken = adminPassword
+	// adminPasswordHash is the bcrypt digest of adminPassword.
+	adminPasswordHash = "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"
+)
 
-// credentialsFor wraps one token in the named shape the surfaces take now. The
-// name is "legacy", which is what a lone moderation.admin_token is called.
-func credentialsFor(token string) []config.AdminCredential {
-	if token == "" {
+// credentialsFor wraps one login in the shape the surfaces take.
+func credentialsFor(password string) []config.AdminUser {
+	if password == "" {
 		return nil
 	}
-	return []config.AdminCredential{{Name: "legacy", Token: token}}
+	return []config.AdminUser{{Name: adminUser, PasswordHash: adminPasswordHash}}
 }
 
 // textEmbedder is the embedding provider a moderation test edits rules with.
@@ -115,11 +121,13 @@ func moderationHandler(t *testing.T, h *harness, embedder moderation.Embedder, t
 
 // moderationHandlerWith mounts the surface with a caller-chosen credential set,
 // which is how a test names two holders.
-func moderationHandlerWith(t *testing.T, h *harness, embedder moderation.Embedder, credentials []config.AdminCredential) http.Handler {
+func moderationHandlerWith(t *testing.T, h *harness, embedder moderation.Embedder, credentials []config.AdminUser) http.Handler {
 	t.Helper()
 
 	service := moderation.NewService(h.db, embedder, h.cfg.GitHub.InstallationID, h.logger)
-	return server.Handler(h.webhook(), h.db, server.NewModerationUI(service, credentials, h.logger))
+	auth := server.NewAdminAuth(credentials, h.logger)
+	ui := server.NewModerationUI(service, nil, h.logger, server.WithModerationAuth(auth))
+	return server.WithLogin(server.Handler(h.webhook(), h.db, ui), auth)
 }
 
 func moderatedRequest(t *testing.T, handler http.Handler, method, path, token string, form url.Values, accept string) *httptest.ResponseRecorder {
@@ -142,7 +150,8 @@ func moderatedRequestWith(t *testing.T, handler http.Handler, method, path, toke
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if token != "" {
-		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Authorization", "Basic "+
+			base64.StdEncoding.EncodeToString([]byte(adminUser+":"+token)))
 	}
 	if accept != "" {
 		request.Header.Set("Accept", accept)
@@ -155,9 +164,8 @@ func moderatedRequestWith(t *testing.T, handler http.Handler, method, path, toke
 	return recorder
 }
 
-// T-030-06 (first half): the moderation surface answers nobody without the
-// configured token, and the comparison is what decides, not the caller's
-// framing of it.
+// T-030-06 (first half): the moderation surface sends a browser without a
+// session to the login form, and a wrong password does not create one.
 func TestT030_06_ModerationSurfaceNeedsTheToken(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
@@ -171,10 +179,10 @@ func TestT030_06_ModerationSurfaceNeedsTheToken(t *testing.T) {
 		header string
 		want   int
 	}{
-		{"no credential", "", "", http.StatusUnauthorized},
-		{"a wrong token", "nope", "", http.StatusUnauthorized},
-		{"a token that is a prefix", adminToken[:5], "", http.StatusUnauthorized},
-		{"the token", adminToken, "", http.StatusOK},
+		{"no credential", "", "", http.StatusSeeOther},
+		{"a wrong password", "nope", "", http.StatusSeeOther},
+		{"a password that is a prefix", adminToken[:5], "", http.StatusSeeOther},
+		{"the password", adminToken, "", http.StatusOK},
 	}
 
 	for _, tc := range cases {
@@ -202,32 +210,36 @@ func TestT030_06_ModerationSurfaceNeedsTheToken(t *testing.T) {
 	}
 }
 
-// Two named credentials both authorize, an unknown one does not, and the name
-// of the matching credential is what a decision records.
-func TestNamedAdminCredentialsAuthorizeAndNameTheHolder(t *testing.T) {
+// Two named users both authorize, an unknown one does not, and the name of the
+// matching user is what a decision records.
+func TestNamedAdminUsersAuthorizeAndNameTheHolder(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{embedding: true})
 	rule := seedMemory(t, h, "Money is decimal, never float")
 
-	credentials := []config.AdminCredential{
-		{Name: "alice", Token: "alice-token"},
-		{Name: "bob", Token: "bob-token"},
+	credentials := []config.AdminUser{
+		{Name: "alice", PasswordHash: adminPasswordHash},
+		{Name: "bob", PasswordHash: adminPasswordHash},
 	}
 	handler := moderationHandlerWith(t, h, &textEmbedder{}, credentials)
+	as := func(user string) map[string]string {
+		return map[string]string{"Authorization": "Basic " +
+			base64.StdEncoding.EncodeToString([]byte(user+":"+adminPassword))}
+	}
 
-	for _, token := range []string{"alice-token", "bob-token"} {
-		response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", token, nil, "text/html")
+	for _, user := range []string{"alice", "bob"} {
+		response := moderatedRequestWith(t, handler, http.MethodGet, "/ui/moderation", "", nil, "text/html", as(user))
 		if response.Code != http.StatusOK {
-			t.Errorf("token %q got status %d, want 200", token, response.Code)
+			t.Errorf("user %q got status %d, want 200", user, response.Code)
 		}
 	}
-	if response := moderatedRequest(t, handler, http.MethodGet, "/ui/moderation", "carol-token", nil, "text/html"); response.Code != http.StatusUnauthorized {
-		t.Errorf("an unknown token got status %d, want 401", response.Code)
+	if response := moderatedRequestWith(t, handler, http.MethodGet, "/ui/moderation", "", nil, "text/html", as("carol")); response.Code != http.StatusSeeOther {
+		t.Errorf("an unknown user got status %d, want a redirect to login", response.Code)
 	}
 
-	response := moderatedRequest(t, handler, http.MethodPost,
-		"/api/moderation/"+rule.ID+"/approve", "alice-token", url.Values{}, "")
+	response := moderatedRequestWith(t, handler, http.MethodPost,
+		"/api/moderation/"+rule.ID+"/approve", "", url.Values{}, "", as("alice"))
 	if response.Code != http.StatusOK {
 		t.Fatalf("approval status = %d, want 200 (body: %s)", response.Code, response.Body.String())
 	}
@@ -236,13 +248,13 @@ func TestNamedAdminCredentialsAuthorizeAndNameTheHolder(t *testing.T) {
 		t.Fatalf("MemoryByID returned error: %v", err)
 	}
 	if stored.ReviewedBy != "alice" {
-		t.Errorf("reviewed_by = %q, want the credential name %q", stored.ReviewedBy, "alice")
+		t.Errorf("reviewed_by = %q, want the user name %q", stored.ReviewedBy, "alice")
 	}
 
 	// Removing one entry stops it on the next request, with no other change.
 	removed := moderationHandlerWith(t, h, &textEmbedder{}, credentials[:1])
-	if response := moderatedRequest(t, removed, http.MethodGet, "/ui/moderation", "bob-token", nil, "text/html"); response.Code != http.StatusUnauthorized {
-		t.Errorf("a removed token got status %d, want 401", response.Code)
+	if response := moderatedRequestWith(t, removed, http.MethodGet, "/ui/moderation", "", nil, "text/html", as("bob")); response.Code != http.StatusSeeOther {
+		t.Errorf("a removed user got status %d, want a redirect to login", response.Code)
 	}
 }
 
@@ -260,9 +272,8 @@ func TestModerationSurfaceWithoutATokenRefuses(t *testing.T) {
 	}
 }
 
-// A browser cannot set an Authorization header of its own, so the token is also
-// accepted as the password of a basic credential. The HTML page is usable in a
-// browser without a login route, a cookie, or a line of JavaScript.
+// A script can sign in with the same user and password over HTTP Basic, which
+// is what the metrics scraper uses; the browser uses the form.
 func TestModerationPageAcceptsBasicCredentials(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
@@ -271,7 +282,7 @@ func TestModerationPageAcceptsBasicCredentials(t *testing.T) {
 	handler := moderationHandler(t, h, &textEmbedder{}, adminToken)
 
 	request := httptest.NewRequest(http.MethodGet, "/ui/moderation", nil)
-	request.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("maintainer:"+adminToken)))
+	request.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(adminUser+":"+adminPassword)))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
@@ -960,7 +971,8 @@ func TestModerationRefusesABodyItCannotRead(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/moderation/"+rule.ID+"/approve", &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
-	request.Header.Set("Authorization", "Bearer "+adminToken)
+	request.Header.Set("Authorization", "Basic "+
+		base64.StdEncoding.EncodeToString([]byte(adminUser+":"+adminPassword)))
 	request.Header.Set("Accept", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

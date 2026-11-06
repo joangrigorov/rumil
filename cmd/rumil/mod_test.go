@@ -427,23 +427,23 @@ func TestWarnAboutModeration(t *testing.T) {
 			unwanted: []string{"accept_all is on"},
 		},
 		{
-			name:  "serve with no admin credential",
+			name:  "serve with no admin user",
 			cfg:   config.Config{},
 			serve: true,
-			want:  []string{"no admin credential is set"},
+			want:  []string{"no admin user is set"},
 		},
 		{
-			name:     "a moderation command with no admin credential",
+			name:     "a moderation command with no admin user",
 			cfg:      config.Config{},
-			unwanted: []string{"no admin credential is set"},
+			unwanted: []string{"no admin user is set"},
 		},
 		{
-			name: "serve with a named credential",
+			name: "serve with a configured user",
 			cfg: config.Config{Moderation: config.Moderation{
-				AdminTokens: []config.AdminCredential{{Name: "alice", Token: "alice-token"}},
+				AdminUsers: []config.AdminUser{{Name: "alice", PasswordHash: "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"}},
 			}},
 			serve:    true,
-			unwanted: []string{"no admin credential is set"},
+			unwanted: []string{"no admin user is set"},
 		},
 	}
 

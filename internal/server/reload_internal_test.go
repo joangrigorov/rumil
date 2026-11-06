@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
@@ -13,34 +14,35 @@ import (
 	"github.com/joangrigorov/rumil/internal/reviewer"
 )
 
-// TestAdminAuthReadsCredentialsOnEachRequest proves that rotating an admin
-// token takes effect without rebuilding the surface.
-func TestAdminAuthReadsCredentialsOnEachRequest(t *testing.T) {
-	credentials := []config.AdminCredential{{Name: "first", Token: "first-token"}}
-	auth := newAdminAuthSource(func() []config.AdminCredential { return credentials }, "test", nil)
+// TestAdminAuthReadsUsersOnEachRequest proves that a reloaded user list takes
+// effect without rebuilding the surface.
+func TestAdminAuthReadsUsersOnEachRequest(t *testing.T) {
+	users := []config.AdminUser{{Name: "first", PasswordHash: "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"}}
+	auth := NewAdminAuthSource(func() []config.AdminUser { return users }, nil)
 	handler := auth.authorize(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	request := func(token string) *httptest.ResponseRecorder {
+	request := func(username, password string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)
-		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Authorization", "Basic "+
+			base64.StdEncoding.EncodeToString([]byte(username+":"+password)))
 		recorder := httptest.NewRecorder()
 		handler(recorder, r)
 		return recorder
 	}
 
-	if got := request("first-token").Code; got != http.StatusNoContent {
-		t.Fatalf("the first credential was refused with %d", got)
+	if got := request("first", "test-admin-password").Code; got != http.StatusNoContent {
+		t.Fatalf("the first user was refused with %d", got)
 	}
 
-	credentials = []config.AdminCredential{{Name: "second", Token: "second-token"}}
+	users = []config.AdminUser{{Name: "second", PasswordHash: "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"}}
 
-	if got := request("first-token").Code; got != http.StatusUnauthorized {
-		t.Errorf("the replaced credential still authenticated with %d", got)
+	if got := request("first", "test-admin-password").Code; got != http.StatusUnauthorized {
+		t.Errorf("the removed user still authenticated with %d", got)
 	}
-	if got := request("second-token").Code; got != http.StatusNoContent {
-		t.Errorf("the replacement credential was refused with %d", got)
+	if got := request("second", "test-admin-password").Code; got != http.StatusNoContent {
+		t.Errorf("the added user was refused with %d", got)
 	}
 }
 

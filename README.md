@@ -14,7 +14,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 
 ## The deck
 
-The operator deck is served at `/ui`: a home view, the review sessions, the recorded rules, and the queue. It opens in dark and can be switched to light or follow the system theme.
+The operator deck is served at `/ui`: a home view, the review sessions, the recorded rules, and the queue. It opens in dark and can be switched to light or follow the system theme. Every page is behind a sign-in form for the users in `moderation.admin_users`, with a remember-me option; the same user and password work over HTTP Basic for scripts and the metrics scraper.
 
 |                     Home                      |                       Sessions                        |
 | :-------------------------------------------: | :---------------------------------------------------: |
@@ -23,6 +23,10 @@ The operator deck is served at `/ui`: a home view, the review sessions, the reco
 |                       Session transcript                       |                      Recorded rules                      |
 | :------------------------------------------------------------: | :------------------------------------------------------: |
 | ![Rumil Deck session transcript](docs/images/deck-session.png) | ![Rumil Deck recorded rules](docs/images/deck-rules.png) |
+
+|                    Sign in                     |                     Queue                     |
+| :--------------------------------------------: | :-------------------------------------------: |
+| ![Rumil Deck sign-in](docs/images/deck-login.png) | ![Rumil Deck queue](docs/images/deck-queue.png) |
 
 The screenshots use generated demo data.
 
@@ -279,7 +283,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `worker.job_timeout` | `15m` | Wall-clock budget for one review or command job, as a Go duration such as `30m` or `1h`. It must be positive. `app.max_agent_turns: 0` removes the step cap, but this timeout still bounds the run |
 | `server.listen` | `:8080` | Address for the webhook server; `--listen` overrides it |
 | `server.public_url` | unset | Public base address of the deck, used as the details link on the review's GitHub check run. Unset leaves the check without a link |
-| `server.metrics_listen` | unset | Address for a separate Prometheus listener, such as `127.0.0.1:9090`. Unset leaves `/metrics` on the main listener behind `moderation.admin_token`; setting it moves the endpoint there without a credential, so bind it to loopback or a firewalled interface |
+| `server.metrics_listen` | unset | Address for a separate Prometheus listener, such as `127.0.0.1:9090`. Unset leaves `/metrics` on the main listener behind the deck login, with HTTP Basic for a scraper; setting it moves the endpoint there without a credential, so bind it to loopback or a firewalled interface |
 | `models.default_chat` | first non-embedding provider | Which provider reviews pull requests |
 | `models.default_embedding` | unset | The provider that turns memory on. A provider is an embedding provider when it sets `dimensions`, which is the width of the vectors its model returns (1536 for `text-embedding-3-small`, 768 for `embed-gemma`) |
 | `models.providers[].thinking_level` | unset | Reasoning effort for a chat provider: `off`, `none`, `minimal`, `low`, `medium`, `high` or `max`. Rumil sends it as `reasoning_effort` on the chat-completions request. `off` leaves the provider's default in place; `max` is for providers that expose it, such as DeepSeek V4 Flash |
@@ -291,8 +295,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `models.providers[].request_timeout` | `2m` | How long a chat provider may take to send its response headers, as a Go duration. Only a chat provider may set it. A provider that queues a request can sit silent for minutes; the attempt fails at this budget so the retry policy can try again, rather than holding a worker until `worker.job_timeout`. The streamed answer is not cut off, because only the wait before its first byte is bounded |
 | `moderation.accept_all` | `false` | The bypass for the rule approval gate. Leave it `false` |
 | `moderation.auto_approve_associations` | empty | GitHub `author_association` values whose comments record rules without approval, for example `["OWNER", "MEMBER"]` |
-| `moderation.admin_token` | unset | The single admin credential, kept for a configuration written before named credentials. It is accepted as an entry named `legacy`. A bearer token or basic-auth password for the moderation UI, the deck, cancellation and `/metrics`; the pages set a same-site cookie that authenticates reads only, so the session live stream can connect where `EventSource` cannot send a header. Unset, with no `admin_tokens`, means every operator surface refuses every request |
-| `moderation.admin_tokens` | empty | Named admin credentials: `[{name, token}]`. Every entry is accepted, and the name of the matching entry is what the audit trail records. Names are 1–64 letters, digits, `.`, `_` or `-`; names and tokens must be unique. At most 16 entries |
+| `moderation.admin_users` | empty | The people who may sign in to the deck: `[{name, password_hash}]`. `password_hash` is a bcrypt digest, never the password; the name is what the audit trail records. Names are 1–64 letters, digits, `.`, `_` or `-`; names must be unique. At most 16 users. `rumil serve` refuses to start without at least one. The old `moderation.admin_token` and `moderation.admin_tokens` fields are removed and a file that still has one is refused at load |
 
 ## Review one pull request from the command line
 
@@ -353,7 +356,7 @@ export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/your-app.pem
 export GITHUB_WEBHOOK_SECRET=...     # the secret you set on the App
 export OPENAI_API_KEY=...
 export DEEPSEEK_API_KEY=...
-export RUMIL_ADMIN_TOKEN=...         # optional: turns on the moderation page and API
+export RUMIL_ADMIN_PASSWORD_HASH=... # bcrypt hash of the deck password
 
 docker compose up
 ```
@@ -433,7 +436,7 @@ rumil sessions continue <session-id> --turns 25 --requested-by alice
 
 `--turns` is the new attempt's own step budget. Without it the attempt uses `app.max_agent_turns`, and a configured `0` still means unlimited. The command queues a job and prints the session it will continue; `rumil serve` runs it. The new attempt starts with the earlier attempt's tool results, partial summary and the same commit, and is recorded as a separate session that points at its parent, with who asked and when. A session that already submitted a review is refused, and so is one whose pull request has moved since the earlier attempt.
 
-The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears for any failed session that has not been continued yet, and uses the configured budget. It shares `moderation.admin_token` with the moderation surface, so the page records the credential as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
+The session page at `/ui/sessions/<session-id>` has the same action: **Continue review** appears for any failed session that has not been continued yet, and uses the configured budget. It shares the deck login with the moderation surface, so the page records the signed-in user as the requester and the CLI records `cli`; `--requested-by` and the API's `requested_by` field name somebody explicitly. The CLI needs the database; neither surface needs a GitHub credential of its own.
 
 ## Provider fallback
 
@@ -525,18 +528,18 @@ Rumil checks the budget between steps, after a step's usage is reported and befo
 
 Each row links to a confirmation page. Cancelling a **queued** job moves it to `CANCELLED` before a worker claims it, so nothing runs. Cancelling a **running review** sets a flag the worker polls; the engine checks it between steps and before a tool call, stops the session, records it as `CANCELLED`, and completes the GitHub check run as cancelled. A review that already reached GitHub before the flag was read stays posted and the session is recorded as a success: the cancel stops work that is still going, and does not retract a review.
 
-The same action appears on a running session's page. It needs an admin credential — `moderation.admin_token`, or any entry of `moderation.admin_tokens`: the pages may read with the same-site cookie, and every cancel POST needs the header and the same-site check, like the other decisions on the operator surfaces.
+The same action appears on a running session's page. It needs a signed-in user from `moderation.admin_users`; the session cookie authorizes the form, and every cancel POST also has to come from the deck's own origin.
 
 ## Metrics
 
-`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs an admin credential — `moderation.admin_token` or any entry of `moderation.admin_tokens` — as a bearer token or as the password of a basic credential, like the deck and the moderation page. A scraper that cannot hold the credential can use a separate listener instead:
+`rumil serve` exposes Prometheus metrics at `/metrics`. By default the endpoint sits on the main listener and needs a user from `moderation.admin_users`, presented as HTTP Basic (`username:password`). A browser session cookie works too. A scraper that cannot hold the credential can use a separate listener instead:
 
 ```yaml
 server:
   metrics_listen: "127.0.0.1:9090"
 ```
 
-With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or the admin token.
+With that set, `/metrics` is served on `127.0.0.1:9090` without authentication and is not mounted on the main listener. Bind it to loopback or a firewalled interface: it is unauthenticated by design so a local scraper needs no secret. Restart after changing the address or a password.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -644,28 +647,36 @@ rumil mod approve 3df15f48 --rule-text "the JWT validator's 60s clock skew toler
 rumil mod reject 3df15f48 --moderator alice
 ```
 
-Or from the moderation page, which needs no JavaScript and no session. It answers only when at least one admin credential is set — `moderation.admin_token`, or `moderation.admin_tokens` — and takes the value as a bearer credential or as the password of a basic-auth credential (any username):
+Or from the moderation page, which needs no JavaScript. Browse to `/ui/any-page`; the deck redirects to a sign-in form and returns to the page after a successful login:
 
 ```text
 https://<your-rumil-host>/ui/moderation
 ```
 
-The same decisions are available as JSON for scripting: `POST /api/moderation/<id>/approve` and `POST /api/moderation/<id>/reject`, with form fields `rule_text`, `path_glob`, `scope`, `authority` and `moderator`.
+The same decisions are available as JSON for scripting: `POST /api/moderation/<id>/approve` and `POST /api/moderation/<id>/reject`, with form fields `rule_text`, `path_glob`, `scope`, `authority` and `moderator`. A script presents the same user and password over HTTP Basic.
 
-### Named admin credentials
+### Deck sign-in
 
-One shared token cannot say who decided, and revoking one person means changing it for everybody. `moderation.admin_tokens` names each holder:
+One shared credential cannot say who decided, and revoking one person means changing it for everybody. `moderation.admin_users` names each holder and stores a bcrypt hash, never the password:
 
 ```yaml
 moderation:
-  admin_tokens:
+  admin_users:
     - name: alice
-      token: ${ALICE_ADMIN_TOKEN}
+      password_hash: "${ALICE_ADMIN_PASSWORD_HASH}"
     - name: ci-bot
-      token: ${CI_ADMIN_TOKEN}
+      password_hash: "${CI_ADMIN_PASSWORD_HASH}"
 ```
 
-Every configured token is compared on every request, and the matching name is what the audit trail records: `reviewed_by` on a moderation decision, `requested_by` on a continuation, and the log line when a session stream opens. A form may still name somebody with `moderator` or `requested_by`, which an API client uses when the credential is a service account. To rotate, add the new entry and restart, move the holder to it, then remove the old entry and restart; removing an entry stops its header and its cookie on the next request. A lone `moderation.admin_token` keeps working as an entry named `legacy`.
+`rumil init` asks for a username and password and writes the hash for you. To hash a password for an existing file, use Apache's `htpasswd`:
+
+```bash
+htpasswd -bnBC 10 "" 'the password' | tr -d ':\n'
+```
+
+Every page, including `/metrics` when it shares the listener, needs this user. The sign-in form has a **Remember me for 30 days** option; without it the session ends when the browser closes or after 12 hours. A signed session is a cookie signed with a key derived from the configured names and hashes, so changing a password or removing a user signs that person out on the next request. The name is what the audit trail records: `reviewed_by` on a moderation decision, `requested_by` on a continuation, and the log line when a session stream opens. A form may still name somebody with `moderator` or `requested_by`, which an API client uses when the credential is a service account.
+
+The old `moderation.admin_token` and `moderation.admin_tokens` fields are removed. There is no compatibility path: a configuration that still carries either one fails to load, and `rumil serve` refuses to start without at least one `admin_users` entry.
 
 Approving can also narrow a rule: an organization-wide proposal can be recorded for the repository it was proposed in with `--scope REPO`. The other direction is refused, because one decision on a page should not push a rule that reaches a single repository out to every repository in the organization.
 
@@ -752,7 +763,7 @@ It prints the effective non-secret settings and one line per check, then exits n
 | `chat` | One small completion, with its latency and the usage the provider reported | The provider does not answer, or answers without a completion |
 | `embedding` | One call to the embedding provider, and the vector width it returned | The provider is configured and returns another width or no vector |
 | `snapshot` | With `--snapshot owner/name`: the default branch's archive is downloaded, extracted into a temporary directory, and removed | The archive or the extraction fails, or the configured directory is unusable |
-| `server` | `github.webhook_secret` and an admin credential (`moderation.admin_token` or an entry of `moderation.admin_tokens`) are set when `database.dsn` configures `rumil serve` | A missing webhook secret; a missing admin credential is a warning |
+| `server` | `github.webhook_secret` and at least one `moderation.admin_users` entry are set when `database.dsn` configures `rumil serve` | A missing webhook secret or a missing deck user |
 
 `--json` writes the same report as an object with `config_path`, `settings` and `checks` (each with `name`, `status` and `detail`), for a script or a monitoring probe. A provider that answers without reporting usage is a warning: reviews still run, but the token and cost budgets cannot count that provider.
 
@@ -770,7 +781,7 @@ It prints the effective non-secret settings and one line per check, then exits n
 
 **Every webhook delivery is rejected.** `github.webhook_secret` must match the App's webhook secret exactly, and the endpoint GitHub reaches is `POST /webhooks/github` on whatever host you configured.
 
-**`/ui/moderation` answers "the moderation surface needs an admin token".** Set `moderation.admin_token`, or add an entry to `moderation.admin_tokens` — the example config takes the single token from `${RUMIL_ADMIN_TOKEN}` — and restart. Until then the page, the deck and `/metrics` refuse every request rather than standing open.
+**`rumil serve` stops with "moderation.admin_users is required".** Add at least one user to `moderation.admin_users`; the example config reads the bcrypt hash from `${RUMIL_ADMIN_PASSWORD_HASH}`. A file that still has `moderation.admin_token` or `moderation.admin_tokens` is refused as well, because the token format is gone.
 
 **The container will not start on this machine.** The published image is `linux/amd64`. Use `docker compose up`, which compiles Rumil for the host architecture.
 

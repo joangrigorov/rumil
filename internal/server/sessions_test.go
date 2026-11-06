@@ -26,8 +26,9 @@ const homeSessionLimitForTest = 5
 func sessionsHandler(t *testing.T, h *harness) (http.Handler, *server.SessionsUI) {
 	t.Helper()
 
-	deck := server.NewSessionsUI(h.db, credentialsFor(adminToken), h.logger)
-	return server.Handler(h.webhook(), h.db, nil, deck), deck
+	auth := server.NewAdminAuth(credentialsFor(adminToken), h.logger)
+	deck := server.NewSessionsUI(h.db, nil, h.logger, server.WithSessionsAuth(auth))
+	return server.WithLogin(server.Handler(h.webhook(), h.db, nil, deck), auth), deck
 }
 
 func newReviewSession(t *testing.T, h *harness, repo string, number int, title, summary string, status string) store.ReviewSession {
@@ -79,7 +80,7 @@ func TestRootOpensHome(t *testing.T) {
 	}
 }
 
-func TestObservationDeckNeedsTheToken(t *testing.T) {
+func TestObservationDeckNeedsASession(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -88,11 +89,11 @@ func TestObservationDeckNeedsTheToken(t *testing.T) {
 
 	for _, path := range []string{"/ui/home", "/ui/sessions", "/ui/sessions/00000000-0000-0000-0000-000000000000"} {
 		response := moderatedRequest(t, handler, http.MethodGet, path, "", nil, "text/html")
-		if response.Code != http.StatusUnauthorized {
-			t.Errorf("GET %s without a token = %d, want 401", path, response.Code)
+		if response.Code != http.StatusSeeOther {
+			t.Errorf("GET %s without a session = %d, want 303", path, response.Code)
 		}
-		if header := response.Header().Get("WWW-Authenticate"); !strings.Contains(header, `realm="rumil sessions"`) {
-			t.Errorf("GET %s WWW-Authenticate = %q, want the sessions realm", path, header)
+		if location := response.Header().Get("Location"); !strings.HasPrefix(location, "/ui/login?next=") {
+			t.Errorf("GET %s redirects to %q, want the login page", path, location)
 		}
 	}
 }

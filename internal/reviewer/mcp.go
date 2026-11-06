@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -140,6 +141,7 @@ func connectMCP(ctx context.Context, server config.MCPServer, baseEnv []string) 
 		mcpClient, err = client.NewStdioMCPClient(server.Command, env, server.Args...)
 	case "http":
 		options := []transport.StreamableHTTPCOption{
+			transport.WithHTTPBasicClient(mcpHTTPClient()),
 			transport.WithHTTPTimeout(server.TimeoutOrDefault()),
 		}
 		if len(server.Headers) > 0 {
@@ -164,6 +166,17 @@ func connectMCP(ctx context.Context, server config.MCPServer, baseEnv []string) 
 		return nil, fmt.Errorf("initializing the session: %w", err)
 	}
 	return mcpClient, nil
+}
+
+// mcpHTTPClient refuses redirects. A server that answers with a 3xx could
+// otherwise send the configured headers, including credentials, to a host the
+// operator never configured.
+func mcpHTTPClient() *http.Client {
+	return &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // mcpEnvironment is what a stdio server sees about the session. The commit and

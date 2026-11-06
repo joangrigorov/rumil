@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 )
 
@@ -47,7 +47,10 @@ type Answers struct {
 	// a width, and the provider has to agree with it at every call.
 	EmbeddingDimensions string
 	DatabaseDSN         string
-	AdminToken          string
+	AdminUsername       string
+	// AdminPassword is hashed before it reaches the file. The plaintext is
+	// never written.
+	AdminPassword string
 }
 
 // envName is the shape of a name a secret is written as, rather than in full:
@@ -157,9 +160,27 @@ func Render(a Answers) ([]byte, error) {
 
 	if dsn := strings.TrimSpace(a.DatabaseDSN); dsn != "" {
 		doc.Database = &databaseSection{DSN: secretOrLiteral(dsn), AutoMigrate: true}
+		if strings.TrimSpace(a.WebhookSecret) != "" && strings.TrimSpace(a.AdminUsername) == "" {
+			return nil, fmt.Errorf("the deck username and password are required when the webhook server is configured")
+		}
 	}
-	if token := strings.TrimSpace(a.AdminToken); token != "" {
-		doc.Moderation = &moderationSection{AdminToken: secretOrLiteral(token)}
+	username := strings.TrimSpace(a.AdminUsername)
+	password := a.AdminPassword
+	if username != "" || password != "" {
+		if username == "" {
+			return nil, fmt.Errorf("the deck username is required when a deck password is set")
+		}
+		if password == "" {
+			return nil, fmt.Errorf("the deck password is required when a deck username is set")
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("hashing the deck password: %w", err)
+		}
+		doc.Moderation = &moderationSection{AdminUsers: []adminUserSection{{
+			Name:         username,
+			PasswordHash: string(hash),
+		}}}
 	}
 
 	// Two-space indentation, because that is what rumil.example.yaml uses and
@@ -179,7 +200,10 @@ func Render(a Answers) ([]byte, error) {
 	// validation sees a stand-in for every placeholder. What it still catches
 	// is everything that does not depend on the environment: a key that is not
 	// part of the schema, a value the loader refuses, a required value missing.
-	if _, err := Parse([]byte(os.Expand(string(raw), func(string) string { return Placeholder })), "the configuration being written"); err != nil {
+	// Parse itself expands only ${NAME}; replace those with the stand-in so
+	// validation does not depend on the operator's environment.
+	validation := envPlaceholder.ReplaceAllString(string(raw), Placeholder)
+	if _, err := Parse([]byte(validation), "the configuration being written"); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -255,5 +279,10 @@ type databaseSection struct {
 }
 
 type moderationSection struct {
-	AdminToken string `yaml:"admin_token"`
+	AdminUsers []adminUserSection `yaml:"admin_users"`
+}
+
+type adminUserSection struct {
+	Name         string `yaml:"name"`
+	PasswordHash string `yaml:"password_hash"`
 }

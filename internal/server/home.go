@@ -17,6 +17,7 @@ type homePage struct {
 	Section string
 	Refresh string
 	Fixed   bool
+	User    string
 	Running []store.ReviewSession
 	Recent  []store.ReviewSession
 	Stats   *store.MemoryStats
@@ -58,6 +59,7 @@ func (s *SessionsUI) home(w http.ResponseWriter, r *http.Request) {
 	page := homePage{
 		Title:   "Home",
 		Section: "home",
+		User:    adminIdentity(r),
 		Running: running,
 		Recent:  recent,
 		Stats:   stats,
