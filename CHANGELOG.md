@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.34](https://github.com/joangrigorov/rumil/compare/v0.0.33...v0.0.34) (2026-11-06)
+
+
+### Bug Fixes
+
+* **deps:** bump the go-dependencies group across 1 directory with 3 updates ([#123](https://github.com/joangrigorov/rumil/issues/123)) ([637ee6c](https://github.com/joangrigorov/rumil/commit/637ee6cf73842ba667d216006fabd95c1567061d))
+* **memory:** rewrite confirmation comments after moderation ([#127](https://github.com/joangrigorov/rumil/issues/127)) ([7b414f6](https://github.com/joangrigorov/rumil/commit/7b414f627545f7728e9759786d13045554cdc268))
+
 ## [0.0.33](https://github.com/joangrigorov/rumil/compare/v0.0.32...v0.0.33) (2026-11-06)
 
 
