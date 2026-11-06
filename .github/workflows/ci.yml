@@ -81,15 +81,9 @@ jobs:
           version: v2.14.0
 
       - name: Vulnerability check
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          # The action defaults go-version-input to "stable" and passes it as
-          # go-version; setup-go then ignores go-version-file. An explicit empty
-          # value leaves the version to go.mod.
-          go-version-input: ""
-          go-version-file: go.mod
-          go-package: ./...
-          repo-checkout: false
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          bash scripts/govulncheck.sh
 
       - name: Validate GoReleaser configuration
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0

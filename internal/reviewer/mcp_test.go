@@ -3,6 +3,7 @@ package reviewer
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -42,6 +43,39 @@ func startMCPServer(t *testing.T, tools ...mcp.Tool) string {
 
 func mcpTool(name string) mcp.Tool {
 	return mcp.NewTool(name, mcp.WithDescription("A tool the operator allowed for the review."))
+}
+
+// A server that redirects must not be able to forward the headers configured
+// for it, such as an Authorization token, to another host.
+func TestMCPHTTPClientRefusesRedirects(t *testing.T) {
+	var reachedTarget bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		reachedTarget = true
+	}))
+	t.Cleanup(target.Close)
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	req, err := http.NewRequest(http.MethodPost, source.URL, strings.NewReader(`{"jsonrpc":"2.0"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret")
+	resp, err := mcpHTTPClient().Do(req)
+	if err != nil {
+		t.Fatalf("the request to the configured server failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTemporaryRedirect)
+	}
+	if reachedTarget {
+		t.Fatal("the client followed a redirect and sent the configured headers to another host")
+	}
 }
 
 // An allowed tool is offered to the model, its call reaches the server, and its
