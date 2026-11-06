@@ -30,6 +30,25 @@ func (c *Client) CreateIssueComment(ctx context.Context, body string) error {
 	return nil
 }
 
+// EditReviewComment replaces the body of one review comment. It is how a
+// confirmation that a rule is PENDING is corrected once a maintainer decides.
+func (c *Client) EditReviewComment(ctx context.Context, commentID int64, body string) error {
+	if _, _, err := c.gh.PullRequests.EditComment(ctx, c.owner, c.repo, commentID,
+		&github.PullRequestComment{Body: github.Ptr(body)}); err != nil {
+		return fmt.Errorf("editing review comment %d on %s/%s#%d: %w", commentID, c.owner, c.repo, c.number, err)
+	}
+	return nil
+}
+
+// EditIssueComment replaces the body of one conversation comment.
+func (c *Client) EditIssueComment(ctx context.Context, commentID int64, body string) error {
+	if _, _, err := c.gh.Issues.EditComment(ctx, c.owner, c.repo, commentID,
+		&github.IssueComment{Body: github.Ptr(body)}); err != nil {
+		return fmt.Errorf("editing conversation comment %d on %s/%s#%d: %w", commentID, c.owner, c.repo, c.number, err)
+	}
+	return nil
+}
+
 // ConversationCommentBodies returns the bodies of the conversation comments
 // login has posted on the pull request. It is how a retry tells whether it
 // already answered a top-level command: an interrupted job runs again, and the

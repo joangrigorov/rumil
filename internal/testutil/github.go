@@ -116,6 +116,14 @@ type SubmittedReview struct {
 	} `json:"comments"`
 }
 
+// EditedComment is one PATCH to a comment body, as the API received it.
+type EditedComment struct {
+	// Target is "review_comment" or "issue_comment".
+	Target string
+	ID     int64
+	Body   string
+}
+
 // Reaction is one acknowledgement, as the API received it.
 type Reaction struct {
 	// Target is "pull_request", "issue_comment" or "review_comment".
@@ -201,6 +209,11 @@ type FakeGitHub struct {
 	// Posted collects the comments Rumil posted through the reply and
 	// conversation endpoints.
 	Posted []PostedComment
+	// Edits collects the comment bodies Rumil replaced, in order.
+	Edits []EditedComment
+	// EditStatus, when non-zero, is returned by the comment edit endpoints
+	// instead of the edited comment.
+	EditStatus int
 	// Reactions collects the reactions Rumil added, in order, so a test can
 	// assert what a request was acknowledged with and where.
 	Reactions []Reaction
@@ -429,6 +442,10 @@ func (f *FakeGitHub) handle(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, http.StatusOK, f.IssueComments)
 	case r.Method == http.MethodPost && r.URL.Path == f.issuePath()+"/comments":
 		f.handlePostIssueComment(w, r)
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, f.repoPath()+"/pulls/comments/"):
+		f.handleEditComment(w, r, "review_comment", f.repoPath()+"/pulls/comments/")
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, f.repoPath()+"/issues/comments/"):
+		f.handleEditComment(w, r, "issue_comment", f.repoPath()+"/issues/comments/")
 	case r.Method == http.MethodPost && r.URL.Path == f.issuePath()+"/reactions":
 		f.handleReaction(w, r, "pull_request", 0)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/reactions") &&
@@ -755,6 +772,60 @@ func (f *FakeGitHub) handlePostIssueComment(w http.ResponseWriter, r *http.Reque
 	f.mu.Unlock()
 
 	f.writeJSON(w, http.StatusCreated, map[string]any{"id": entry.ID, "body": post.Body})
+}
+
+// handleEditComment answers the two comment edit endpoints, which share a body
+// shape and both replace the stored comment.
+func (f *FakeGitHub) handleEditComment(w http.ResponseWriter, r *http.Request, target, prefix string) {
+	id := f.commentID(r.URL.Path, prefix)
+	var edit struct {
+		Body string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&edit); err != nil {
+		f.writeJSON(w, http.StatusBadRequest, map[string]string{"message": "malformed comment"})
+		return
+	}
+
+	f.mu.Lock()
+	status := f.EditStatus
+	found := false
+	if status == 0 {
+		comments := f.Comments
+		if target == "issue_comment" {
+			comments = f.IssueComments
+		}
+		for i := range comments {
+			if comments[i].ID == id {
+				comments[i].Body = edit.Body
+				found = true
+			}
+		}
+		if target == "issue_comment" {
+			f.IssueComments = comments
+		} else {
+			f.Comments = comments
+		}
+		if found {
+			f.Edits = append(f.Edits, EditedComment{Target: target, ID: id, Body: edit.Body})
+		}
+	}
+	f.mu.Unlock()
+
+	switch {
+	case status != 0:
+		f.writeJSON(w, status, map[string]string{"message": "Not Found"})
+	case !found:
+		f.writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not Found"})
+	default:
+		f.writeJSON(w, http.StatusOK, map[string]any{"id": id, "body": edit.Body})
+	}
+}
+
+// EditedComments returns a copy of the comment bodies the fake replaced.
+func (f *FakeGitHub) EditedComments() []EditedComment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]EditedComment(nil), f.Edits...)
 }
 
 // botLogin is the login a recorded post is attributed to.

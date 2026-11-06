@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/joangrigorov/rumil/internal/store"
 )
@@ -21,6 +22,19 @@ import (
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
+
+// CommentEditor rewrites Rumil's confirmation comments for a rule, so the
+// outcome of a decision replaces the status the comment was posted with. It is
+// separate from the store because a failed edit must not undo a decision that
+// is already recorded.
+type CommentEditor interface {
+	RewriteMemoryComments(ctx context.Context, installationID int64, owner, repo string, number int, shortID, body string) (int, error)
+}
+
+// commentRewriteTimeout bounds the GitHub round trip a decision makes after
+// the store has committed it. The decision is already durable, so this is the
+// time spent telling the pull request about it.
+const commentRewriteTimeout = 15 * time.Second
 
 // ErrNoEmbedder reports an edit that cannot be made searchable. Memory is
 // opt-in, so an operator can run a moderation surface with no embedding
@@ -59,17 +73,32 @@ var ErrScopeWidened = errors.New("a decision narrows a rule: ORG can be recorded
 type Service struct {
 	store          *store.DB
 	embedder       Embedder
+	comments       CommentEditor
 	installationID int64
 	logger         *slog.Logger
 }
 
+// Option configures the surface a decision is made through.
+type Option func(*Service)
+
+// WithCommentEditor lets a decision rewrite the confirmation comments on the
+// pull request. It is left unset when no GitHub App is configured, which keeps
+// a database-only moderation surface usable.
+func WithCommentEditor(editor CommentEditor) Option {
+	return func(s *Service) { s.comments = editor }
+}
+
 // NewService scopes the decisions to the installation Rumil serves. embedder
 // may be nil, and only an edit needs it.
-func NewService(db *store.DB, embedder Embedder, installationID int64, logger *slog.Logger) *Service {
+func NewService(db *store.DB, embedder Embedder, installationID int64, logger *slog.Logger, options ...Option) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{store: db, embedder: embedder, installationID: installationID, logger: logger}
+	service := &Service{store: db, embedder: embedder, installationID: installationID, logger: logger}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 // List returns the rules a moderator is looking at. The status filter is
@@ -214,6 +243,7 @@ func (s *Service) Approve(ctx context.Context, id string, decision Decision) (st
 		"edited", edited,
 		"path_glob", approved.PathGlob,
 	)
+	s.syncMemoryComment(ctx, approved)
 	return approved, nil
 }
 
@@ -273,5 +303,60 @@ func (s *Service) Reject(ctx context.Context, id, moderator string) (store.Memor
 		"repo", rejected.OrgName+"/"+rejected.RepoName,
 		"moderator", moderator,
 	)
+	s.syncMemoryComment(ctx, rejected)
 	return rejected, nil
+}
+
+// syncMemoryComment replaces the confirmation comment's PENDING status with the
+// outcome of the decision. A failure is logged and does not fail the decision:
+// the rule is already stored and searchable, while a stale comment is a
+// separate problem the next decision can correct.
+func (s *Service) syncMemoryComment(ctx context.Context, memory store.Memory) {
+	if s.comments == nil || memory.SourcePR <= 0 || memory.OrgName == "" || memory.RepoName == "" {
+		return
+	}
+
+	// The decision is durable, so a client that disconnected while the request
+	// was in flight must not stop the comment from being corrected.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commentRewriteTimeout)
+	defer cancel()
+
+	edited, err := s.comments.RewriteMemoryComments(ctx, s.installationID,
+		memory.OrgName, memory.RepoName, memory.SourcePR, memory.ShortID(), memoryOutcomeBody(memory))
+	if err != nil {
+		s.logger.Warn("rewriting a rule's confirmation comments failed",
+			"memory", memory.ID,
+			"short_id", memory.ShortID(),
+			"repo", memory.OrgName+"/"+memory.RepoName,
+			"pr", memory.SourcePR,
+			"edited", edited,
+			"error", err,
+		)
+		return
+	}
+	if edited > 0 {
+		s.logger.Info("rewrote a rule's confirmation comments",
+			"memory", memory.ID,
+			"short_id", memory.ShortID(),
+			"repo", memory.OrgName+"/"+memory.RepoName,
+			"pr", memory.SourcePR,
+			"edited", edited,
+		)
+	}
+}
+
+// memoryOutcomeBody is what a confirmation comment says after a decision. It
+// keeps the short id, which is how a maintainer finds the rule in the
+// moderation surface, and states what the status now means for a review.
+func memoryOutcomeBody(memory store.Memory) string {
+	short := "#" + memory.ShortID()
+	if memory.Status == store.MemoryRejected {
+		return fmt.Sprintf("Memory `%s` rejected (`status: %s`). It stays on record and is not used in reviews.", short, memory.Status)
+	}
+
+	details := "scope: " + memory.Scope
+	if memory.Authority == store.AuthorityDirective {
+		details += ", directive"
+	}
+	return fmt.Sprintf("Memory `%s` approved (`status: %s`, %s). It is available to reviews.", short, memory.Status, details)
 }
