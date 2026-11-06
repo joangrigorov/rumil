@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.33](https://github.com/joangrigorov/rumil/compare/v0.0.32...v0.0.33) (2026-11-06)
+
+
+### Bug Fixes
+
+* **deck:** simplify the theme control and live tool counts ([#124](https://github.com/joangrigorov/rumil/issues/124)) ([d0bc834](https://github.com/joangrigorov/rumil/commit/d0bc8342e5dcd7c214d4737303d7e908f0bbc2ac))
+
 ## [0.0.32](https://github.com/joangrigorov/rumil/compare/v0.0.31...v0.0.32) (2026-11-06)
 
 
