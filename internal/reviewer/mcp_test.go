@@ -68,7 +68,7 @@ func TestMCPHTTPClientRefusesRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the request to the configured server failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusTemporaryRedirect {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusTemporaryRedirect)
