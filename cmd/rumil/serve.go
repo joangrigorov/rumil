@@ -48,6 +48,9 @@ func newServeCmd(configPath *string) *cobra.Command {
 			logger, logLevelVar := newLevelLogger(cfg.App.LogLevel)
 			logger.Info("configuration loaded", "path", path)
 			warnAboutModeration(cfg, logger, true)
+			if len(cfg.Moderation.Users()) == 0 {
+				return errors.New("moderation.admin_users is required to run the webhook server: the deck has no other way to sign in")
+			}
 
 			if cfg.GitHub.WebhookSecret == "" {
 				return fmt.Errorf("github.webhook_secret is required to run the webhook server")
@@ -97,20 +100,21 @@ func newServeCmd(configPath *string) *cobra.Command {
 			liveConfig.Store(cfg)
 			var liveEngine atomic.Pointer[reviewer.Engine]
 			liveEngine.Store(engine)
-			credentials := func() []config.AdminCredential {
-				return liveConfig.Load().Moderation.AdminCredentials()
+			users := func() []config.AdminUser {
+				return liveConfig.Load().Moderation.Users()
 			}
+			auth := server.NewAdminAuthSource(users, logger)
 
 			meter := metrics.New()
 			meter.CollectDatabase(db, logger)
 
 			installations := cfg.GitHub.InstallationIDs()
-			// The observation deck shares the moderation credential. Its
-			// recorder is attached to every pool before the workers start, so a
-			// review that begins immediately is still recorded.
-			sessionsUI := server.NewSessionsUI(db, cfg.Moderation.AdminCredentials(), logger,
+			// The observation deck shares the sign-in guard with the moderation
+			// surface. Its recorder is attached to every pool before the workers
+			// start, so a review that begins immediately is still recorded.
+			sessionsUI := server.NewSessionsUI(db, nil, logger,
+				server.WithSessionsAuth(auth),
 				server.WithSessionsMetrics(meter),
-				server.WithSessionsCredentials(credentials),
 				server.WithSessionsRuleStats(func(ctx context.Context) (store.MemoryStats, error) {
 					return db.MemoryStats(ctx, cfg.GitHub.PrimaryInstallationID())
 				}))
@@ -154,15 +158,15 @@ func newServeCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.PrimaryInstallationID(), logger)
-			moderationUI := server.NewModerationUI(moderationService, cfg.Moderation.AdminCredentials(), logger,
-				server.WithModerationCredentials(credentials))
+			moderationUI := server.NewModerationUI(moderationService, nil, logger,
+				server.WithModerationAuth(auth))
 
-			handler := server.Handler(webhook, db, moderationUI, sessionsUI)
+			handler := server.WithLogin(server.Handler(webhook, db, moderationUI, sessionsUI), auth)
 			var metricsServer *http.Server
 			if cfg.Server.MetricsListen == "" {
 				// No separate listener: the endpoint shares the main one and
 				// needs the admin credential like every other operator surface.
-				handler = server.WithMetricsEndpoint(handler, server.MetricsHandlerSource(meter, credentials, logger))
+				handler = server.WithMetricsEndpoint(handler, server.MetricsHandlerSource(meter, users, logger))
 			} else {
 				// A separate address is what makes it reachable: the operator
 				// binds it to loopback or a firewalled interface and the

@@ -27,10 +27,11 @@ func chatConfig(baseURL, apiKey string) *config.Config {
 	}
 }
 
-// The server check accepts either form of admin credential: the legacy single
-// token and the named list are the same authorization, and a deployment that
-// rotated to named credentials is not warned about a missing token.
-func TestServerCheckAcceptsNamedAdminCredentials(t *testing.T) {
+const testPasswordHash = "$2a$10$HEbCK2/.V0nBjO/13L3Mu.OnAoDOLDZdUZEg0irk5uO0jTZhw0Rba"
+
+// The server check accepts a configured deck user and fails without one, which
+// is what `rumil serve` does.
+func TestServerCheckRequiresADeckUser(t *testing.T) {
 	base := func() *config.Config {
 		return &config.Config{
 			Database: config.Database{DSN: "postgres://rumil@localhost/rumil"},
@@ -38,32 +39,23 @@ func TestServerCheckAcceptsNamedAdminCredentials(t *testing.T) {
 		}
 	}
 
-	t.Run("the legacy token passes", func(t *testing.T) {
+	t.Run("a configured user passes", func(t *testing.T) {
 		cfg := base()
-		cfg.Moderation.AdminToken = "legacy-token"
+		cfg.Moderation.AdminUsers = []config.AdminUser{{Name: "ana", PasswordHash: testPasswordHash}}
 		check := serverCheck(cfg, newRedactor(cfg))
 		if check.Status != Pass {
 			t.Fatalf("status = %s (%s), want pass", check.Status, check.Detail)
 		}
 	})
 
-	t.Run("a named credential passes", func(t *testing.T) {
-		cfg := base()
-		cfg.Moderation.AdminTokens = []config.AdminCredential{{Name: "ana", Token: "named-token"}}
-		check := serverCheck(cfg, newRedactor(cfg))
-		if check.Status != Pass {
-			t.Fatalf("status = %s (%s), want pass", check.Status, check.Detail)
-		}
-	})
-
-	t.Run("no credential warns", func(t *testing.T) {
+	t.Run("no user fails", func(t *testing.T) {
 		cfg := base()
 		check := serverCheck(cfg, newRedactor(cfg))
-		if check.Status != Warn {
-			t.Fatalf("status = %s (%s), want warn", check.Status, check.Detail)
+		if check.Status != Fail {
+			t.Fatalf("status = %s (%s), want fail", check.Status, check.Detail)
 		}
-		if !strings.Contains(check.Detail, "admin credential") {
-			t.Errorf("detail = %q, want it to name the missing credential", check.Detail)
+		if !strings.Contains(check.Detail, "admin_users") {
+			t.Errorf("detail = %q, want it to name moderation.admin_users", check.Detail)
 		}
 	})
 
@@ -86,7 +78,7 @@ func TestRedactorRemovesEveryConfiguredSecret(t *testing.T) {
 			{APIKey: "sk-live-abcdef"},
 			{APIKey: "sk-live-abcdef-extra"},
 		}},
-		Moderation: config.Moderation{AdminToken: "admin-token-value"},
+		Moderation: config.Moderation{AdminUsers: []config.AdminUser{{Name: "ana", PasswordHash: testPasswordHash}}},
 		GitHub: config.GitHub{
 			WebhookSecret: "webhook-secret-value",
 			PrivateKeyPEM: "pem-secret-value",
@@ -97,13 +89,13 @@ func TestRedactorRemovesEveryConfiguredSecret(t *testing.T) {
 	red := newRedactor(cfg)
 	got := red.text(strings.Join([]string{
 		"key sk-live-abcdef-extra", "key sk-live-abcdef",
-		"token admin-token-value", "hook webhook-secret-value",
+		"hash " + testPasswordHash, "hook webhook-secret-value",
 		"pem pem-secret-value", "dsn postgres://user:db-password@localhost:5432/rumil",
 		"password db-password",
 	}, " "))
 
 	for _, secret := range []string{
-		"sk-live-abcdef-extra", "sk-live-abcdef", "admin-token-value",
+		"sk-live-abcdef-extra", "sk-live-abcdef", testPasswordHash,
 		"webhook-secret-value", "pem-secret-value",
 		"postgres://user:db-password@localhost:5432/rumil", "db-password",
 	} {

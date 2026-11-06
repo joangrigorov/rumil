@@ -26,7 +26,8 @@ const initAnswers = "acme-rumil\n" +
 	"OPENAI_API_KEY\n" +
 	"a-webhook-secret-value\n" +
 	"DATABASE_URL\n" +
-	"RUMIL_ADMIN_TOKEN\n" +
+	"alice\n" +
+	"a-strong-password\n" +
 	"y\n"
 
 // initEmbeddingWidth is the width of the vectors a local embeddings model
@@ -76,7 +77,7 @@ func TestInitWritesTheFileDiscoveryFinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init did not write %s: %v (output: %s)", path, err, out)
 	}
-	// The file can hold a webhook secret and a moderation token.
+	// The file can hold a webhook secret and a password hash.
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("%s has mode %o, want 600", path, perm)
 	}
@@ -98,7 +99,6 @@ func TestInitWritesTheFileDiscoveryFinds(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-deepseek")
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("DATABASE_URL", "postgres://rumil:rumil@db:5432/rumil?sslmode=disable")
-	t.Setenv("RUMIL_ADMIN_TOKEN", "a-token")
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -109,6 +109,9 @@ func TestInitWritesTheFileDiscoveryFinds(t *testing.T) {
 	}
 	if cfg.GitHub.WebhookSecret != "a-webhook-secret-value" {
 		t.Errorf("webhook_secret = %q", cfg.GitHub.WebhookSecret)
+	}
+	if users := cfg.Moderation.Users(); len(users) != 1 || users[0].Name != "alice" {
+		t.Errorf("moderation users = %+v, want alice", users)
 	}
 	if len(cfg.Models.Providers) != 2 {
 		t.Fatalf("providers = %d, want the chat and embedding providers", len(cfg.Models.Providers))
@@ -122,7 +125,7 @@ func TestInitWritesTheFileDiscoveryFinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the file back: %v", err)
 	}
-	for _, placeholder := range []string{"${DEEPSEEK_API_KEY}", "${OPENAI_API_KEY}", "${DATABASE_URL}", "${RUMIL_ADMIN_TOKEN}"} {
+	for _, placeholder := range []string{"${DEEPSEEK_API_KEY}", "${OPENAI_API_KEY}", "${DATABASE_URL}"} {
 		if !strings.Contains(string(raw), placeholder) {
 			t.Errorf("the file does not carry %s:\n%s", placeholder, raw)
 		}

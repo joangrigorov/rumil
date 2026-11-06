@@ -217,8 +217,10 @@ func newRedactor(cfg *config.Config) *redactor {
 	for _, provider := range cfg.Models.Providers {
 		secrets = append(secrets, provider.APIKey)
 	}
+	for _, user := range cfg.Moderation.Users() {
+		secrets = append(secrets, user.PasswordHash)
+	}
 	secrets = append(secrets,
-		cfg.Moderation.AdminToken,
 		cfg.GitHub.WebhookSecret,
 		cfg.GitHub.PrivateKeyPEM,
 		cfg.Database.DSN,

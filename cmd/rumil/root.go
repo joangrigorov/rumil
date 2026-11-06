@@ -66,16 +66,16 @@ func loadConfigWithRaw(flag string) (*config.Config, string, []byte, error) {
 // reading it, so it is said out loud rather than left in a file. Every command
 // that can record or resolve a rule says it: `review` neither records one nor
 // resolves one, so it has nothing to report.
-// serve also reports a missing admin token, because that is what decides
-// whether the moderation surface is reachable at all.
+// serve also refuses a missing admin user, because that is what decides whether
+// the moderation surface and the deck are reachable at all.
 func warnAboutModeration(cfg *config.Config, logger *slog.Logger, serve bool) {
 	if cfg.Moderation.AcceptAll {
 		logger.Warn("moderation.accept_all is on: a rule written in a comment reaches the review prompt without a maintainer approving it",
 			"hint", "set moderation.accept_all to false and approve rules with `rumil mod approve`")
 	}
-	if serve && len(cfg.Moderation.AdminCredentials()) == 0 {
-		logger.Warn("no admin credential is set: the moderation UI, the deck and /metrics refuse every request",
-			"hint", "set moderation.admin_token, or moderation.admin_tokens, to reach /ui/moderation and the deck")
+	if serve && len(cfg.Moderation.Users()) == 0 {
+		logger.Warn("no admin user is set: the moderation UI, the deck and /metrics would refuse every request",
+			"hint", "set moderation.admin_users so the deck can be reached")
 	}
 }
 

@@ -19,7 +19,7 @@ func TestExampleConfigIsValid(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "deepseek-key")
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 	t.Setenv("DATABASE_URL", "postgres://rumil:rumil@localhost:5432/rumil?sslmode=disable")
-	t.Setenv("RUMIL_ADMIN_TOKEN", "admin-token")
+	t.Setenv("RUMIL_ADMIN_PASSWORD_HASH", testPasswordHash)
 
 	path := filepath.Join("..", "..", "rumil.example.yaml")
 	cfg, err := Load(path)

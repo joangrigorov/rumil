@@ -14,7 +14,6 @@
 
   var scroll = document.getElementById("console-scroll");
   var sessionId = timeline.dataset.sessionId;
-  var live = timeline.dataset.live === "true";
   var startedAt = Date.parse(timeline.dataset.startedAt) || Date.now();
 
   var statusBadge = document.getElementById("session-status");
@@ -47,16 +46,11 @@
   var source = new EventSource("/api/sessions/" + encodeURIComponent(sessionId) + "/events");
 
   source.onopen = function () {
-    if (!ended && live) {
-      setBadge("live");
-    }
     follow();
   };
 
   source.onerror = function () {
-    if (!ended && live) {
-      setBadge("reconnecting");
-    }
+    // The browser retries on its own; the transcript keeps what it has.
   };
 
   source.onmessage = function (message) {
@@ -321,13 +315,6 @@
       if (statusBadge) {
         statusBadge.textContent = payload.status;
         statusBadge.className = "pill status-" + payload.status.toLowerCase();
-      }
-      if (live) {
-        live = false;
-        var badge = document.querySelector(".live-badge");
-        if (badge) {
-          badge.hidden = true;
-        }
       }
     }
 
@@ -662,7 +649,9 @@
     thinkingToggle.title = thinkingOn ? "Hide the model's thinking" : "Show the model's thinking";
     var badge = thinkingToggle.querySelector(".badge");
     if (badge) {
-      badge.textContent = thinkingOn ? "SHOW" : "HIDE";
+      // The badge says what the next click does, so a hidden transcript offers
+      // SHOW and a visible one offers HIDE.
+      badge.textContent = thinkingOn ? "HIDE" : "SHOW";
     }
   }
 
@@ -723,18 +712,6 @@
   function setClock(elapsed) {
     if (clock) {
       clock.textContent = duration(elapsed);
-    }
-  }
-
-  function setBadge(text) {
-    var badge = document.querySelector(".live-badge");
-    if (!badge) {
-      return;
-    }
-    badge.dataset.state = text;
-    var label = badge.querySelector(".live-label");
-    if (label) {
-      label.textContent = text;
     }
   }
 

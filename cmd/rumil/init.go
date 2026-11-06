@@ -275,10 +275,16 @@ func initForm(a *answers, target string, interactive, printOnly bool) *huh.Form 
 				Placeholder("DATABASE_URL").
 				Value(&a.DatabaseDSN).
 				Validate(databaseURL),
+			huh.NewInput().
+				Title("Deck username").
+				Description("Optional, and needs the database above: the name that signs in to the deck.").
+				Placeholder("admin").
+				Value(&a.AdminUsername),
 			secretInput(interactive).
-				Title("Moderation token").
-				Description("Optional, and needs the database above: the password for the moderation page and API.").
-				Value(&a.AdminToken),
+				Title("Deck password").
+				Description("The password for that user. It is hashed before the file is written.").
+				Value(&a.AdminPassword).
+				Validate(requiredTogether(&a.AdminUsername, "the deck password")),
 		).Title("Webhook server"),
 	}
 
@@ -350,6 +356,17 @@ func generatedSecret() string {
 		return ""
 	}
 	return hex.EncodeToString(buf)
+}
+
+// requiredTogether makes a paired answer required when its partner is set, so a
+// half-filled deck user never reaches Render.
+func requiredTogether(partner *string, what string) func(string) error {
+	return func(value string) error {
+		if strings.TrimSpace(*partner) != "" && strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required when the deck username is set", what)
+		}
+		return nil
+	}
 }
 
 func required(what string) func(string) error {

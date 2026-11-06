@@ -1,9 +1,10 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // fullAnswers is a configuration that answers every question, with the secrets
@@ -22,7 +23,8 @@ func fullAnswers() Answers {
 		EmbeddingBaseURL: "https://api.openai.com/v1",
 		EmbeddingAPIKey:  "OPENAI_API_KEY",
 		DatabaseDSN:      "DATABASE_URL",
-		AdminToken:       "RUMIL_ADMIN_TOKEN",
+		AdminUsername:    "alice",
+		AdminPassword:    "a-strong-password",
 	}
 }
 
@@ -40,9 +42,10 @@ func TestRenderProducesAFileTheLoaderAccepts(t *testing.T) {
 		"DEEPSEEK_API_KEY":            "sk-deepseek",
 		"OPENAI_API_KEY":              "sk-openai",
 		"DATABASE_URL":                "postgres://rumil:rumil@db:5432/rumil?sslmode=disable",
-		"RUMIL_ADMIN_TOKEN":           "a-token",
 	}
-	expanded := os.Expand(string(raw), func(name string) string { return environment[name] })
+	expanded := envPlaceholder.ReplaceAllStringFunc(string(raw), func(match string) string {
+		return environment[match[2:len(match)-1]]
+	})
 
 	cfg, err := Parse([]byte(expanded), "the rendered file")
 	if err != nil {
@@ -64,8 +67,12 @@ func TestRenderProducesAFileTheLoaderAccepts(t *testing.T) {
 	if cfg.Database.DSN != "postgres://rumil:rumil@db:5432/rumil?sslmode=disable" || !cfg.Database.AutoMigrate {
 		t.Errorf("database = %+v, want the expanded DSN and auto_migrate on", cfg.Database)
 	}
-	if cfg.Moderation.AdminToken != "a-token" {
-		t.Errorf("moderation.admin_token = %q", cfg.Moderation.AdminToken)
+	users := cfg.Moderation.Users()
+	if len(users) != 1 || users[0].Name != "alice" {
+		t.Fatalf("moderation users = %+v, want alice", users)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(users[0].PasswordHash), []byte("a-strong-password")); err != nil {
+		t.Errorf("the rendered hash does not match the password: %v", err)
 	}
 
 	if len(cfg.Models.Providers) != 2 {
@@ -100,7 +107,8 @@ func TestRenderLeavesTheOptionalSectionsOut(t *testing.T) {
 	answers.EmbeddingBaseURL = ""
 	answers.EmbeddingAPIKey = ""
 	answers.DatabaseDSN = ""
-	answers.AdminToken = ""
+	answers.AdminUsername = ""
+	answers.AdminPassword = ""
 	answers.WebhookSecret = ""
 
 	raw, err := Render(answers)
@@ -109,13 +117,25 @@ func TestRenderLeavesTheOptionalSectionsOut(t *testing.T) {
 	}
 	rendered := string(raw)
 
-	for _, key := range []string{"default_embedding", "database", "auto_migrate", "admin_token", "webhook_secret", "dimensions"} {
+	for _, key := range []string{"default_embedding", "database", "auto_migrate", "admin_users", "webhook_secret", "dimensions"} {
 		if strings.Contains(rendered, key) {
 			t.Errorf("the file carries %s although nothing asked for it:\n%s", key, rendered)
 		}
 	}
 	if strings.Count(rendered, "- id:") != 1 {
 		t.Errorf("the file carries more than the chat provider:\n%s", rendered)
+	}
+}
+
+// A webhook server without a deck user would be a file the loader accepts and
+// the server refuses, so it is refused while the file is being written.
+func TestRenderRequiresADeckUserForTheServer(t *testing.T) {
+	answers := fullAnswers()
+	answers.AdminUsername = ""
+	answers.AdminPassword = ""
+
+	if _, err := Render(answers); err == nil {
+		t.Fatal("Render wrote a server configuration with no deck user")
 	}
 }
 
@@ -132,13 +152,13 @@ func TestRenderFallsBackToTheChatProviderForEmbeddings(t *testing.T) {
 		t.Fatalf("Render() error = %v", err)
 	}
 
-	expanded := os.Expand(string(raw), func(name string) string {
-		return map[string]string{
-			"GITHUB_APP_PRIVATE_KEY_PATH": "/run/secrets/github_app.pem",
-			"DEEPSEEK_API_KEY":            "sk-deepseek",
-			"DATABASE_URL":                "postgres://rumil:rumil@db:5432/rumil?sslmode=disable",
-			"RUMIL_ADMIN_TOKEN":           "a-token",
-		}[name]
+	environment := map[string]string{
+		"GITHUB_APP_PRIVATE_KEY_PATH": "/run/secrets/github_app.pem",
+		"DEEPSEEK_API_KEY":            "sk-deepseek",
+		"DATABASE_URL":                "postgres://rumil:rumil@db:5432/rumil?sslmode=disable",
+	}
+	expanded := envPlaceholder.ReplaceAllStringFunc(string(raw), func(match string) string {
+		return environment[match[2:len(match)-1]]
 	})
 	cfg, err := Parse([]byte(expanded), "the rendered file")
 	if err != nil {
@@ -162,7 +182,7 @@ func TestRenderWritesANamedSecretAsAPlaceholder(t *testing.T) {
 
 	for _, placeholder := range []string{
 		"${GITHUB_APP_PRIVATE_KEY_PATH}", "${DEEPSEEK_API_KEY}", "${OPENAI_API_KEY}",
-		"${DATABASE_URL}", "${RUMIL_ADMIN_TOKEN}",
+		"${DATABASE_URL}",
 	} {
 		if !strings.Contains(rendered, placeholder) {
 			t.Errorf("the file does not carry %s:\n%s", placeholder, rendered)

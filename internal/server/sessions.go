@@ -26,7 +26,7 @@ import (
 // credential and has no login of its own.
 type SessionsUI struct {
 	db     *store.DB
-	auth   *adminAuth
+	auth   *AdminAuth
 	broker *broker
 	meter  *metrics.Metrics
 	logger *slog.Logger
@@ -44,11 +44,16 @@ func WithSessionsMetrics(meter *metrics.Metrics) SessionsOption {
 	return func(s *SessionsUI) { s.meter = meter }
 }
 
-// WithSessionsCredentials reads the admin credentials on each request, so a
-// reloaded set takes effect without rebuilding the deck.
-func WithSessionsCredentials(source func() []config.AdminCredential) SessionsOption {
+// WithSessionsAuth shares one sign-in guard with the other deck surfaces.
+func WithSessionsAuth(auth *AdminAuth) SessionsOption {
+	return func(s *SessionsUI) { s.auth = auth }
+}
+
+// WithSessionsUsers reads the admin users on each request, so a reloaded set
+// takes effect without rebuilding the deck.
+func WithSessionsUsers(source func() []config.AdminUser) SessionsOption {
 	return func(s *SessionsUI) {
-		s.auth = newAdminAuthSource(source, "rumil sessions", s.logger)
+		s.auth = NewAdminAuthSource(source, s.logger)
 	}
 }
 
@@ -60,13 +65,13 @@ func WithSessionsRuleStats(source func(context.Context) (store.MemoryStats, erro
 
 // NewSessionsUI builds the deck. The broker is owned here so the recorder the
 // worker pool uses and the streams the browser reads are the same fan-out.
-func NewSessionsUI(db *store.DB, credentials []config.AdminCredential, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {
+func NewSessionsUI(db *store.DB, users []config.AdminUser, logger *slog.Logger, opts ...SessionsOption) *SessionsUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	ui := &SessionsUI{
 		db:     db,
-		auth:   newAdminAuth(credentials, "rumil sessions", logger),
+		auth:   NewAdminAuth(users, logger),
 		broker: newBroker(),
 		logger: logger,
 	}
@@ -105,6 +110,7 @@ type reviewSessionsPage struct {
 	Section  string
 	Refresh  string
 	Fixed    bool
+	User     string
 	Sessions []store.ReviewSession
 	// Total is every session the filter matches, not only this page.
 	Total  int
@@ -137,6 +143,7 @@ type reviewSessionPage struct {
 	Section string
 	Refresh string
 	Fixed   bool
+	User    string
 	Session store.ReviewSession
 	Live    bool
 	// Parent and Continuation are the two attempts of the same review, when
@@ -246,6 +253,7 @@ func (s *SessionsUI) list(w http.ResponseWriter, r *http.Request) {
 	page := reviewSessionsPage{
 		Title:          "Review sessions",
 		Section:        "sessions",
+		User:           adminIdentity(r),
 		Sessions:       sessions,
 		Total:          total,
 		Status:         filter.Status,
@@ -316,6 +324,7 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		Title:   fmt.Sprintf("%s/%s#%d", session.OrgName, session.RepoName, session.PRNumber),
 		Section: "sessions",
 		Fixed:   true,
+		User:    adminIdentity(r),
 		Session: session,
 		Live:    session.Status == store.ReviewRunning,
 	}
@@ -458,8 +467,7 @@ func continuationTurns(r *http.Request) (int, error) {
 }
 
 // requestedByOf names the person asking. An API client may still name somebody
-// with requested_by; otherwise the default is the configured credential that
-// authorized the request, which is what the surface actually knows.
+// with requested_by; otherwise the default is the signed-in user.
 func requestedByOf(r *http.Request) string {
 	if name := strings.TrimSpace(r.PostFormValue("requested_by")); name != "" {
 		return name
@@ -467,7 +475,7 @@ func requestedByOf(r *http.Request) string {
 	if name := adminIdentity(r); name != "" {
 		return name
 	}
-	return "admin-token"
+	return "admin"
 }
 
 // writePage renders one operator page with the shared headers.

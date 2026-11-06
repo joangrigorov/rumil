@@ -4,8 +4,8 @@
 #   docker compose up
 #
 # Copy rumil.example.yaml to rumil.yaml first, and point github.webhook_secret
-# at the same secret you configure on the GitHub App. RUMIL_ADMIN_TOKEN is
-# optional and turns the moderation page and API on when it is set.
+# at the same secret you configure on the GitHub App. RUMIL_ADMIN_PASSWORD_HASH
+# is the bcrypt hash of the deck password; the server will not start without it.
 services:
   rumil:
     build: .
@@ -20,10 +20,10 @@ services:
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
-      # Optional: set it to turn on the moderation page and API. Left out, the
-      # example config expands moderation.admin_token to "" and both refuse
-      # every request.
-      RUMIL_ADMIN_TOKEN: ${RUMIL_ADMIN_TOKEN:-}
+      # The bcrypt hash of the deck password for the "admin" user in the
+      # example config. Generate it with
+      #   htpasswd -bnBC 10 "" 'the password' | tr -d ':\n'
+      RUMIL_ADMIN_PASSWORD_HASH: ${RUMIL_ADMIN_PASSWORD_HASH:?set RUMIL_ADMIN_PASSWORD_HASH}
     volumes:
       - ./rumil.yaml:/etc/rumil/rumil.yaml:ro
       - ${GITHUB_APP_PRIVATE_KEY_PATH:?set GITHUB_APP_PRIVATE_KEY_PATH}:/run/secrets/github_app.pem:ro

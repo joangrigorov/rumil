@@ -19,18 +19,18 @@ func WithMetricsEndpoint(next http.Handler, scrape http.Handler) http.Handler {
 	return mux
 }
 
-// MetricsHandler guards the scrape endpoint with the same admin credential as
-// the observation deck. It is used when metrics share the main listener; a
-// separate metrics listener serves the unguarded handler, because its address
-// is what makes it reachable.
-func MetricsHandler(m *metrics.Metrics, credentials []config.AdminCredential, logger *slog.Logger) http.Handler {
-	return MetricsHandlerSource(m, func() []config.AdminCredential { return credentials }, logger)
+// MetricsHandler guards the scrape endpoint with the same admin users as the
+// observation deck; a scraper uses HTTP Basic. It is used when metrics share
+// the main listener; a separate metrics listener serves the unguarded handler,
+// because its address is what makes it reachable.
+func MetricsHandler(m *metrics.Metrics, users []config.AdminUser, logger *slog.Logger) http.Handler {
+	return MetricsHandlerSource(m, func() []config.AdminUser { return users }, logger)
 }
 
-// MetricsHandlerSource is MetricsHandler with a credential set that may change
+// MetricsHandlerSource is MetricsHandler with a user list that may change
 // between requests.
-func MetricsHandlerSource(m *metrics.Metrics, credentials func() []config.AdminCredential, logger *slog.Logger) http.Handler {
-	return newAdminAuthSource(credentials, "rumil admin", logger).authorize(m.Handler().ServeHTTP)
+func MetricsHandlerSource(m *metrics.Metrics, users func() []config.AdminUser, logger *slog.Logger) http.Handler {
+	return NewAdminAuthSource(users, logger).authorize(m.Handler().ServeHTTP)
 }
 
 // metricEvent keeps the event label bounded: GitHub sends a fixed set of event

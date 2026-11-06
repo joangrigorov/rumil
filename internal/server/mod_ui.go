@@ -25,31 +25,37 @@ import (
 // and has no login page and no session of its own.
 type ModerationUI struct {
 	service *moderation.Service
-	auth    *adminAuth
+	auth    *AdminAuth
 	logger  *slog.Logger
 }
 
 // ModerationOption tunes the moderation surface at construction.
 type ModerationOption func(*ModerationUI)
 
-// WithModerationCredentials reads the admin credentials on each request, so a
-// reloaded set takes effect without rebuilding the surface.
-func WithModerationCredentials(source func() []config.AdminCredential) ModerationOption {
+// WithModerationAuth shares one sign-in guard with the other deck surfaces, so
+// a session obtained from the login form works on all of them.
+func WithModerationAuth(auth *AdminAuth) ModerationOption {
+	return func(m *ModerationUI) { m.auth = auth }
+}
+
+// WithModerationUsers reads the admin users on each request, so a reloaded set
+// takes effect without rebuilding the surface.
+func WithModerationUsers(source func() []config.AdminUser) ModerationOption {
 	return func(m *ModerationUI) {
-		m.auth = newAdminAuthSource(source, "rumil moderation", m.logger)
+		m.auth = NewAdminAuthSource(source, m.logger)
 	}
 }
 
-// NewModerationUI builds the surface. An empty credential list disables it
-// rather than opening it: with no token there is no way to tell an operator
-// from a stranger, so every request is refused.
-func NewModerationUI(service *moderation.Service, credentials []config.AdminCredential, logger *slog.Logger, opts ...ModerationOption) *ModerationUI {
+// NewModerationUI builds the surface. An empty user list disables it rather
+// than opening it: with no user there is no way to tell an operator from a
+// stranger, so every request is refused.
+func NewModerationUI(service *moderation.Service, users []config.AdminUser, logger *slog.Logger, opts ...ModerationOption) *ModerationUI {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	ui := &ModerationUI{
 		service: service,
-		auth:    newAdminAuth(credentials, "rumil moderation", logger),
+		auth:    NewAdminAuth(users, logger),
 		logger:  logger,
 	}
 	for _, opt := range opts {
@@ -123,6 +129,7 @@ func (m *ModerationUI) list(w http.ResponseWriter, r *http.Request) {
 	m.render(w, moderationTemplates, moderationPage{
 		Title:        "Recorded rules",
 		Section:      "rules",
+		User:         adminIdentity(r),
 		Rules:        memories,
 		Count:        len(memories),
 		Stats:        stats,
@@ -144,6 +151,7 @@ func (m *ModerationUI) detail(w http.ResponseWriter, r *http.Request) {
 	m.render(w, moderationDetailTemplates, moderationDetailPage{
 		Title:   "Rule " + rule.ShortID(),
 		Section: "rules",
+		User:    adminIdentity(r),
 		Rule:    rule,
 		Pending: rule.Status == store.MemoryPending,
 		Decided: r.URL.Query().Get("decided"),
@@ -331,12 +339,11 @@ func moderatorOf(r *http.Request) string {
 	if name := strings.TrimSpace(r.PostFormValue("moderator")); name != "" {
 		return name
 	}
-	// The credential that authorized the request is what the surface knows
-	// about the holder; a shared token used to leave only "admin-token" here.
+	// The signed-in user is what the surface knows about the holder.
 	if name := adminIdentity(r); name != "" {
 		return name
 	}
-	return "admin-token"
+	return "admin"
 }
 
 // moderationPage is what the rules table renders. Stats is nil when the counts
@@ -346,6 +353,7 @@ type moderationPage struct {
 	Section      string
 	Refresh      string
 	Fixed        bool
+	User         string
 	Rules        []store.Memory
 	Count        int
 	Stats        *store.MemoryStats
@@ -364,6 +372,7 @@ type moderationDetailPage struct {
 	Section string
 	Refresh string
 	Fixed   bool
+	User    string
 	Rule    store.Memory
 	Pending bool
 	Decided string

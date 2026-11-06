@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/base64"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,11 +26,11 @@ func scrapeMetrics(t *testing.T, m *metrics.Metrics) string {
 }
 
 // On the main listener the endpoint is an operator surface, so it needs the
-// admin credential like the deck and the moderation page.
-func TestMetricsOnTheMainListenerNeedsTheAdminToken(t *testing.T) {
+// admin user like the deck and the moderation page. A scraper uses Basic.
+func TestMetricsOnTheMainListenerNeedsTheAdminUser(t *testing.T) {
 	m := metrics.New()
 	handler := server.WithMetricsEndpoint(http.NotFoundHandler(),
-		server.MetricsHandler(m, credentialsFor("secret-token"), slog.New(slog.DiscardHandler)))
+		server.MetricsHandler(m, credentialsFor(adminPassword), slog.New(slog.DiscardHandler)))
 
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	recorder := httptest.NewRecorder()
@@ -39,11 +40,12 @@ func TestMetricsOnTheMainListenerNeedsTheAdminToken(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	request.Header.Set("Authorization", "Bearer secret-token")
+	request.Header.Set("Authorization", "Basic "+
+		base64.StdEncoding.EncodeToString([]byte(adminUser+":"+adminPassword)))
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("status with the token = %d, want 200 (body: %s)", recorder.Code, recorder.Body.String())
+		t.Fatalf("status with the user = %d, want 200 (body: %s)", recorder.Code, recorder.Body.String())
 	}
 	if !strings.Contains(recorder.Body.String(), "# HELP rumil_") {
 		t.Errorf("the answer is not a Prometheus exposition:\n%s", recorder.Body.String())
@@ -52,7 +54,7 @@ func TestMetricsOnTheMainListenerNeedsTheAdminToken(t *testing.T) {
 
 // An unset admin token closes the endpoint rather than opening it, which is
 // the rule every other admin surface follows.
-func TestMetricsOnTheMainListenerRefusesWithoutAConfiguredToken(t *testing.T) {
+func TestMetricsOnTheMainListenerRefusesWithoutAConfiguredUser(t *testing.T) {
 	m := metrics.New()
 	handler := server.WithMetricsEndpoint(http.NotFoundHandler(),
 		server.MetricsHandler(m, nil, slog.New(slog.DiscardHandler)))
@@ -60,7 +62,7 @@ func TestMetricsOnTheMainListenerRefusesWithoutAConfiguredToken(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if recorder.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 when no admin token is configured", recorder.Code)
+		t.Errorf("status = %d, want 503 when no admin user is configured", recorder.Code)
 	}
 }
 

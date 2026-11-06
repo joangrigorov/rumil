@@ -12,7 +12,6 @@
   <div class="session-banner-main">
     <div class="session-banner-flags">
       <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
-      {{if .Live}}<span class="live-badge live-flag" data-state="live"><span class="live-dot" aria-hidden="true"></span><span class="live-label">live</span></span>{{end}}
       <span class="session-clock"><span class="icon" aria-hidden="true">timer</span><span id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span></span>
     </div>
     <h1>{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</h1>
@@ -118,7 +117,7 @@
 <section class="transcript-panel" aria-label="Session transcript">
   <div class="transcript-head">
     <h2 class="transcript-title"><span class="icon" aria-hidden="true">terminal</span>{{if .Live}}Live execution transcript{{else}}Execution transcript{{end}}</h2>
-    <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="false" title="Show the model's thinking"><span class="icon" aria-hidden="true">psychology</span><span>Thinking blocks</span><span class="badge">HIDE</span></button>
+    <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="false" title="Show the model's thinking"><span class="icon" aria-hidden="true">psychology</span><span>Thinking blocks</span><span class="badge">SHOW</span></button>
   </div>
   <div class="console-window">
     <div class="console-scroll" id="console-scroll">

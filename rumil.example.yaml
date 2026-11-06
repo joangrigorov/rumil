@@ -120,9 +120,9 @@ database:                         # Required from v0.0.3
 moderation:                       # Used from v0.0.4, surface from v0.0.5
   accept_all: false               # MUST stay false from v0.0.4 on: the bypass for the memory approval gate
   auto_approve_associations: []   # Optional: commenters with these GitHub author_associations record rules APPROVED, for example ["OWNER", "MEMBER"]
-  admin_token: "${RUMIL_ADMIN_TOKEN}" # Single credential, accepted as an entry named "legacy"; unset with no admin_tokens disables the operator surfaces
-  # admin_tokens:                   # Optional: named credentials, each accepted and recorded in the audit trail
+  admin_users:                    # The people who may sign in to the operator deck; empty means `rumil serve` will not start
+    - name: "admin"               # Recorded in the audit trail of every decision
+      password_hash: "${RUMIL_ADMIN_PASSWORD_HASH}" # A bcrypt hash, never the password itself
+  # admin_users:                    # Add one entry per person; a changed hash signs that person out
   #   - name: "alice"
-  #     token: "${ALICE_ADMIN_TOKEN}"
-  #   - name: "ci-bot"
-  #     token: "${CI_ADMIN_TOKEN}"
+  #     password_hash: "${ALICE_ADMIN_PASSWORD_HASH}"

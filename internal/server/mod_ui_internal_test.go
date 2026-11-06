@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,12 +14,14 @@ import (
 	"github.com/joangrigorov/rumil/internal/store"
 )
 
-// testCredentials wraps one token in the named shape the surfaces take.
-func testCredentials(token string) []config.AdminCredential {
-	if token == "" {
+const testUserPassword = "s3cret-password"
+
+// testCredentials wraps one login in the shape the surfaces take.
+func testCredentials(password string) []config.AdminUser {
+	if password == "" {
 		return nil
 	}
-	return []config.AdminCredential{{Name: "legacy", Token: token}}
+	return []config.AdminUser{{Name: "alice", PasswordHash: "$2a$10$yO8AHQwK8iEkulVSnESG.uTPV7DNCrR/8YGCPM0X4qFuIGXT0TKEe"}}
 }
 
 // Every refusal the surface can make has to reach the caller as a status they
@@ -182,22 +185,25 @@ func TestPathGlobOfTellsAnAbsentFieldFromAnEmptyOne(t *testing.T) {
 	}
 }
 
-// The credential is compared whole, and the scheme is the RFC's to define.
-func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
-	ui := NewModerationUI(nil, testCredentials("s3cret-token"), nil)
+// Basic authentication compares both fields, and a bearer token is gone.
+func TestBasicAuthAcceptsOnlyTheConfiguredPassword(t *testing.T) {
+	ui := NewModerationUI(nil, testCredentials(testUserPassword), nil)
+	basic := func(user, password string) string {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
+	}
 	cases := []struct {
 		name   string
 		header string
 		want   bool
 	}{
-		{"a bearer token", "Bearer s3cret-token", true},
-		{"a lowercase scheme", "bearer s3cret-token", true},
-		{"another token", "Bearer nope", false},
-		{"a prefix of the token", "Bearer s3cret", false},
-		{"a token with a prefix", "Bearer xs3cret-token", false},
-		{"the token with a trailing space", "Bearer s3cret-token ", false},
+		{"the configured user", basic("alice", testUserPassword), true},
+		{"a lowercase scheme", "basic " + base64.StdEncoding.EncodeToString([]byte("alice:"+testUserPassword)), true},
+		{"another password", basic("alice", "nope"), false},
+		{"another user", basic("bob", testUserPassword), false},
+		{"a prefix of the password", basic("alice", "s3cret"), false},
+		{"a bearer token", "Bearer s3cret-password", false},
 		{"no credential", "", false},
-		{"a scheme with nothing after it", "Bearer", false},
+		{"a scheme with nothing after it", "Basic", false},
 	}
 
 	for _, tc := range cases {
@@ -206,12 +212,9 @@ func TestAuthorizedAcceptsWhatTheRFCAllows(t *testing.T) {
 			if tc.header != "" {
 				request.Header.Set("Authorization", tc.header)
 			}
-			got := false
-			if presented, ok := ui.auth.presented(request); ok {
-				_, got = ui.auth.identify(ui.auth.credentials(), presented)
-			}
+			_, got := ui.auth.basicUser(request, ui.auth.users())
 			if got != tc.want {
-				t.Errorf("authorized(%q) = %v, want %v", tc.header, got, tc.want)
+				t.Errorf("basicUser(%q) = %v, want %v", tc.header, got, tc.want)
 			}
 		})
 	}
