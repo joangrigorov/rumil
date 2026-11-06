@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/store"
+	"github.com/joangrigorov/rumil/internal/testutil"
 )
 
 func TestBrokerFansOutAndUnsubscribes(t *testing.T) {
@@ -74,6 +77,49 @@ func TestIsDeltaEvent(t *testing.T) {
 			t.Errorf("isDeltaEvent(%q) = true, want false", eventType)
 		}
 	}
+}
+
+// A running session's count is written as tool_start events arrive, so the
+// list and Home show progress instead of zero until the review ends.
+func TestObserverRecordsRunningToolCalls(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, testutil.TestDatabaseURL(t, "observer_tool_calls"), true, 0)
+	if err != nil {
+		t.Fatalf("opening the test database: %v", err)
+	}
+	t.Cleanup(db.Close)
+
+	recorder := NewSessionRecorder(db, newBroker(), nil, nil)
+	observer, err := recorder.Start(ctx, store.NewReviewSession{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+	})
+	if err != nil {
+		t.Fatalf("starting the recorder: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		observer.Observe(ctx, reviewer.Event{Type: "tool_start", Payload: map[string]any{"id": i}})
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		session, err := db.ReviewSessionByID(ctx, observer.sessionID)
+		if err != nil {
+			t.Fatalf("reading the session: %v", err)
+		}
+		if session.ToolCalls == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("running tool_calls = %d, want 2", session.ToolCalls)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	observer.Finish(ctx, store.ReviewOutcome{Status: store.ReviewSucceeded, ToolCalls: 2})
 }
 
 func TestLastEventIDPrefersTheHeader(t *testing.T) {

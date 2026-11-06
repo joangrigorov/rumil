@@ -3,15 +3,21 @@
  *
  * The script runs in the head so the resolved theme is on <html> before the
  * first paint. The stored value is the user's choice; data-theme is always the
- * resolved dark or light value.
+ * resolved dark or light value, and data-theme-mode is the choice itself.
+ *
+ * There is one button. Clicking it moves to the next mode in the cycle, and the
+ * icon it shows is the mode that is currently active.
  */
 (function () {
   "use strict";
 
   var KEY = "rumil.theme";
+  var MODES = ["dark", "light", "system"];
+  var LABELS = { dark: "dark", light: "light", system: "auto" };
   var root = document.documentElement;
   var media = window.matchMedia("(prefers-color-scheme: dark)");
-  var buttons = [];
+  var button = null;
+  var current = stored();
 
   function stored() {
     try {
@@ -29,20 +35,27 @@
     return media.matches ? "dark" : "light";
   }
 
+  function nextMode(mode) {
+    var index = MODES.indexOf(mode);
+    return MODES[(index + 1) % MODES.length];
+  }
+
   function apply(mode) {
+    current = mode;
     root.setAttribute("data-theme", resolved(mode));
     root.setAttribute("data-theme-mode", mode);
 
-    for (var i = 0; i < buttons.length; i++) {
-      var selected = buttons[i].getAttribute("data-theme-mode") === mode;
-      buttons[i].setAttribute("aria-pressed", selected ? "true" : "false");
+    if (button) {
+      var following = nextMode(mode);
+      button.setAttribute("aria-label", "Color theme: " + LABELS[mode] + ". Change to " + LABELS[following] + ".");
+      button.setAttribute("title", "Theme: " + LABELS[mode] + " (click for " + LABELS[following] + ")");
     }
   }
 
-  apply(stored());
+  apply(current);
 
   function onSystemChange() {
-    if (stored() === "system") {
+    if (current === "system") {
       apply("system");
     }
   }
@@ -60,19 +73,19 @@
   });
 
   document.addEventListener("DOMContentLoaded", function () {
-    buttons = Array.prototype.slice.call(document.querySelectorAll("button[data-theme-mode]"));
+    button = document.getElementById("theme-toggle");
     apply(stored());
 
-    buttons.forEach(function (button) {
+    if (button) {
       button.addEventListener("click", function () {
-        var mode = button.getAttribute("data-theme-mode");
+        var following = nextMode(current);
         try {
-          window.localStorage.setItem(KEY, mode);
+          window.localStorage.setItem(KEY, following);
         } catch (error) {
           // A browser that blocks storage still gets the theme for this page.
         }
-        apply(mode);
+        apply(following);
       });
-    });
+    }
   });
 })();

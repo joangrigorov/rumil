@@ -231,6 +231,10 @@ func TestHomeShowsRunningRecentAndRuleStats(t *testing.T) {
 	if !strings.Contains(body, running[len(running)-1].ID) || !strings.Contains(body, finished[len(finished)-1].ID) {
 		t.Error("Home does not list the newest sessions")
 	}
+	// Home must stay still while it is being read, even when a review runs.
+	if strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("Home must not refresh itself while a review is running")
+	}
 }
 
 // The repository filter is a dropdown of the repositories the deck has
@@ -390,10 +394,16 @@ func TestObservationDeckShowsOneSession(t *testing.T) {
 		`id="theme-toggle"`,
 		`id="thinking-toggle"`,
 		`aria-pressed="false"`,
+		`class="topbar-user"`,
+		`class="topbar-divider"`,
+		`class="icon-button theme-button"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the detail page does not contain %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, `class="theme-option"`) {
+		t.Error("the theme control should be one cycling button, not three options")
 	}
 
 	missing := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/00000000-0000-0000-0000-000000000000", adminToken, nil, "text/html")

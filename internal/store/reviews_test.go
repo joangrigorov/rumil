@@ -40,6 +40,19 @@ func TestReviewSessionLifecycle(t *testing.T) {
 		t.Fatalf("UpdateReviewSessionMetadata returned error: %v", err)
 	}
 
+	// A running session shows the calls it has executed so far, not only the
+	// count written when it finishes.
+	if err := db.UpdateReviewSessionToolCalls(ctx, session.ID, 3); err != nil {
+		t.Fatalf("UpdateReviewSessionToolCalls returned error: %v", err)
+	}
+	running, err := db.ReviewSessionByID(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionByID returned error: %v", err)
+	}
+	if running.ToolCalls != 3 {
+		t.Errorf("running tool_calls = %d, want 3", running.ToolCalls)
+	}
+
 	events := []NewReviewEvent{
 		{Seq: 1, At: time.Now().Add(-2 * time.Second), Type: "step_start", Payload: json.RawMessage(`{"step":1}`)},
 		{Seq: 2, At: time.Now().Add(-time.Second), Type: "tool_call", Payload: json.RawMessage(`{"name":"read_file"}`)},

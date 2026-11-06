@@ -127,6 +127,9 @@ type sessionObserver struct {
 
 	seq   atomic.Int64
 	drops atomic.Int64
+	// toolCalls is owned by the writer goroutine, which increments it as
+	// tool_start events are stored. Finish writes the authoritative count.
+	toolCalls int
 	// mu and closed make the queue's one close safe against a straggler event
 	// from a tool goroutine.
 	mu     sync.Mutex
@@ -222,14 +225,21 @@ func (o *sessionObserver) write() {
 		if err := o.db.AppendReviewEvents(ctx, o.sessionID, newEvents(batch)); err != nil {
 			o.logger.Warn("recording review session events failed", "session_id", o.sessionID, "error", err)
 		} else {
+			addedToolCalls := false
 			for _, event := range batch {
 				switch event.Type {
 				case "session_metadata":
 					o.updateMetadata(ctx, event)
 				case "repository_settings", "provider_fallback":
 					o.updateSessionModel(ctx, event)
+				case "tool_start":
+					o.toolCalls++
+					addedToolCalls = true
 				}
 				o.broker.publish(o.sessionID, event)
+			}
+			if addedToolCalls {
+				o.updateToolCalls(ctx, o.toolCalls)
 			}
 		}
 		batch = batch[:0]
@@ -249,6 +259,14 @@ func (o *sessionObserver) write() {
 		case <-ticker.C:
 			flush()
 		}
+	}
+}
+
+// updateToolCalls makes the running session's count visible on the list and
+// Home. The terminal outcome overwrites it with the engine's own total.
+func (o *sessionObserver) updateToolCalls(ctx context.Context, count int) {
+	if err := o.db.UpdateReviewSessionToolCalls(ctx, o.sessionID, count); err != nil {
+		o.logger.Warn("recording the session's tool calls failed", "session_id", o.sessionID, "error", err)
 	}
 }
 
