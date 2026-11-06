@@ -251,6 +251,23 @@ func (d *DB) UpdateReviewSessionModel(ctx context.Context, id, model string) err
 	return nil
 }
 
+// UpdateReviewSessionToolCalls records how many tool calls a running session
+// has executed so far. The outcome writes the final count when the session
+// ends; this is what makes the count live on the list and Home while it runs.
+func (d *DB) UpdateReviewSessionToolCalls(ctx context.Context, id string, count int) error {
+	tag, err := d.pool.Exec(ctx, `
+		UPDATE review_sessions
+		SET tool_calls = $2
+		WHERE id = $1`, id, count)
+	if err != nil {
+		return fmt.Errorf("updating review session %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReviewSessionNotFound
+	}
+	return nil
+}
+
 // FinishReviewSession records the outcome. It is safe to call once; a second
 // call moves the finish time, which a restart should not do, so the caller
 // owns the one call.

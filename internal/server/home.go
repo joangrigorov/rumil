@@ -64,11 +64,9 @@ func (s *SessionsUI) home(w http.ResponseWriter, r *http.Request) {
 		Recent:  recent,
 		Stats:   stats,
 	}
-	if len(running) > 0 {
-		// A running review changes the page on its own, so a parked tab keeps
-		// up without a line of JavaScript.
-		page.Refresh = "15"
-	}
+	// Home never reloads itself. A refresh while the operator is reading is
+	// worse than a list that waits for the next visit; the Sessions page and a
+	// session's own transcript are where live progress belongs.
 	s.writePage(w, r, homeTemplates, "home.html", page)
 }
 

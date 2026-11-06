@@ -356,83 +356,101 @@ pre {
   color: var(--ink);
 }
 
-.env {
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-high);
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.theme-toggle {
+/* The identity and the appearance control are two groups. The divider is what
+ * keeps them from reading as one row of unrelated buttons. */
+.topbar-user {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
+  min-width: 0;
   padding: 2px;
-  border: 0;
   border-radius: var(--radius);
   background: var(--surface-container);
 }
 
-.theme-option {
-  padding: 2px 4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
+.user-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--surface-high);
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
-  line-height: 14px;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
-.theme-option:hover {
-  color: var(--ink);
+.user-name {
+  max-width: 12ch;
+  overflow: hidden;
+  padding: 0 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.theme-option[aria-pressed="true"] {
-  background: var(--surface-high);
-  color: var(--ink);
-}
-
-.topbar-user {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.topbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
 }
 
 .logout-form {
+  display: inline-flex;
   margin: 0;
 }
 
-.logout-button {
+.icon-button {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 14px;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
 
-.logout-button:hover {
+.icon-button:hover {
   background: var(--surface-high);
   color: var(--ink);
 }
 
-.logout-button .icon {
-  font-size: 15px;
+.icon-button .icon {
+  font-size: 16px;
+}
+
+.theme-button {
+  background: var(--surface-container);
+  color: var(--muted);
+}
+
+.theme-button:hover {
+  background: var(--surface-high);
+  color: var(--ink);
+}
+
+/* The button holds one icon per mode. The resolved mode picks which is visible,
+ * so the right icon is painted before the script runs. */
+.theme-icon {
+  display: none;
+}
+
+html[data-theme-mode="dark"] .theme-icon[data-mode="dark"],
+html[data-theme-mode="light"] .theme-icon[data-mode="light"],
+html[data-theme-mode="system"] .theme-icon[data-mode="system"] {
+  display: inline;
 }
 
 /* ---- login ------------------------------------------------------------ */
@@ -3780,7 +3798,7 @@ body.console-fixed .session-facts {
     gap: 12px;
   }
 
-  .env {
+  .user-name {
     display: none;
   }
 
@@ -3830,22 +3848,15 @@ body.console-fixed .session-facts {
     font-size: 10px;
   }
 
-  .logout-button {
-    padding: 3px;
-  }
-
-  .logout-label {
-    display: none;
+  .topbar-user {
+    gap: 0;
+    padding: 0;
+    background: transparent;
   }
 
   .brand-logo {
     width: 22px;
     height: 23px;
-  }
-
-  .theme-option {
-    padding: 2px 2px;
-    font-size: 9px;
   }
 
   .page {

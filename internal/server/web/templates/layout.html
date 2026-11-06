@@ -1,5 +1,5 @@
 {{define "layout"}}<!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-theme-mode="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -40,16 +40,20 @@
     </div>
     <div class="topbar-right">
       {{if .User}}
-      <span class="env">{{.User}}</span>
-      <form class="logout-form" method="post" action="/ui/logout">
-        <button class="logout-button" type="submit" aria-label="Log out"><span class="icon" aria-hidden="true">logout</span><span class="logout-label">Log out</span></button>
-      </form>
-      {{end}}
-      <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Theme">
-        <button type="button" class="theme-option" data-theme-mode="light">Light</button>
-        <button type="button" class="theme-option" data-theme-mode="dark">Dark</button>
-        <button type="button" class="theme-option" data-theme-mode="system">Auto</button>
+      <div class="topbar-user">
+        <span class="user-avatar" aria-hidden="true">{{printf "%.1s" .User}}</span>
+        <span class="user-name" title="{{.User}}">{{.User}}</span>
+        <form class="logout-form" method="post" action="/ui/logout">
+          <button class="icon-button" type="submit" aria-label="Log out" title="Log out"><span class="icon" aria-hidden="true">logout</span></button>
+        </form>
       </div>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      {{end}}
+      <button class="icon-button theme-button" id="theme-toggle" type="button" aria-label="Change color theme" title="Change color theme">
+        <span class="icon theme-icon" data-mode="dark" aria-hidden="true">dark_mode</span>
+        <span class="icon theme-icon" data-mode="light" aria-hidden="true">light_mode</span>
+        <span class="icon theme-icon" data-mode="system" aria-hidden="true">brightness_auto</span>
+      </button>
     </div>
   </div>
 </header>
