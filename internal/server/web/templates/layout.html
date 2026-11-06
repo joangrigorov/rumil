@@ -43,10 +43,10 @@
       <div class="topbar-user">
         <span class="user-avatar" aria-hidden="true">{{printf "%.1s" .User}}</span>
         <span class="user-name" title="{{.User}}">{{.User}}</span>
-        <form class="logout-form" method="post" action="/ui/logout">
-          <button class="icon-button" type="submit" aria-label="Log out" title="Log out"><span class="icon" aria-hidden="true">logout</span></button>
-        </form>
       </div>
+      <form class="logout-form" method="post" action="/ui/logout">
+        <button class="icon-button" type="submit" aria-label="Log out" title="Log out"><span class="icon" aria-hidden="true">logout</span></button>
+      </form>
       <span class="topbar-divider" aria-hidden="true"></span>
       {{end}}
       <button class="icon-button theme-button" id="theme-toggle" type="button" aria-label="Change color theme" title="Change color theme">

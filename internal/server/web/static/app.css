@@ -356,16 +356,13 @@ pre {
   color: var(--ink);
 }
 
-/* The identity and the appearance control are two groups. The divider is what
- * keeps them from reading as one row of unrelated buttons. */
+/* Identity is a label, not a control. Log out and the theme button are separate
+ * buttons, and the divider separates the account from the appearance choice. */
 .topbar-user {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
-  padding: 2px;
-  border-radius: var(--radius);
-  background: var(--surface-container);
 }
 
 .user-avatar {
@@ -3850,8 +3847,6 @@ body.console-fixed .session-facts {
 
   .topbar-user {
     gap: 0;
-    padding: 0;
-    background: transparent;
   }
 
   .brand-logo {
