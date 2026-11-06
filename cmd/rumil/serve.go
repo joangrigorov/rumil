@@ -157,7 +157,8 @@ func newServeCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.PrimaryInstallationID(), logger)
+			moderationService := moderation.NewService(db, embedderClient, cfg.GitHub.PrimaryInstallationID(), logger,
+				moderation.WithCommentEditor(memoryCommentEditor(cfg, logger)))
 			moderationUI := server.NewModerationUI(moderationService, nil, logger,
 				server.WithModerationAuth(auth))
 

@@ -254,7 +254,8 @@ func openModeration(configPath string) (*moderation.Service, *slog.Logger, func(
 		return nil, nil, nil, err
 	}
 
-	service := moderation.NewService(db, client, primary, logger)
+	service := moderation.NewService(db, client, primary, logger,
+		moderation.WithCommentEditor(memoryCommentEditor(cfg, logger)))
 	return service, logger, db.Close, nil
 }
 
