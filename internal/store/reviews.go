@@ -22,6 +22,14 @@ const (
 	ReviewCancelled = "CANCELLED"
 )
 
+// Review session kinds. A subagent is a child session of one review; the kind
+// is what keeps it out of the session list, the token totals, and the
+// continuation lookup.
+const (
+	ReviewSessionKindReview   = "REVIEW"
+	ReviewSessionKindSubagent = "SUBAGENT"
+)
+
 // Bounds on the observation deck's reads. A session list is a page, and a
 // replay is a batch: both are bounded so a long session cannot pull the whole
 // table into one response.
@@ -105,6 +113,15 @@ type ReviewSession struct {
 	// ParentSessionID is the attempt this session continues, empty for a first
 	// attempt at a pull request.
 	ParentSessionID string
+	// Kind is REVIEW or SUBAGENT. A subagent's parent is the review that
+	// spawned it, not an earlier attempt at the same review.
+	Kind string
+	// Label, Task, Paths and Ordinal describe a subagent's assignment. They
+	// are empty on a review.
+	Label   string
+	Task    string
+	Paths   []string
+	Ordinal int
 	// TurnLimitReached records that the session spent its whole step budget
 	// without submitting a review, which is the failure a continuation fixes.
 	TurnLimitReached bool
@@ -126,10 +143,22 @@ type NewReviewSession struct {
 	RepoName       string
 	PRNumber       int
 	Model          string
+	// PRTitle, HeadSHA and BaseSHA are known when a subagent is recorded and
+	// empty for a review, whose engine fills them after the row exists.
+	PRTitle string
+	HeadSHA string
+	BaseSHA string
 	// ParentSessionID, RequestedBy and RequestedAt are set on a continuation.
 	ParentSessionID string
 	RequestedBy     string
 	RequestedAt     *time.Time
+	// Kind is REVIEW when empty. Label, Task, Paths and Ordinal describe a
+	// SUBAGENT's assignment.
+	Kind    string
+	Label   string
+	Task    string
+	Paths   []string
+	Ordinal int
 }
 
 // ReviewOutcome is how a review ended.
@@ -166,7 +195,10 @@ type ReviewSessionFilter struct {
 	OrgName  string
 	RepoName string
 	Status   string
-	Limit    int
+	// Kind selects the session kind. Empty means REVIEW, so the deck's list,
+	// Home and the token totals never count a subagent as a review.
+	Kind  string
+	Limit int
 	// Offset skips that many matching sessions, which is how the deck reaches
 	// a page after the first. It is ignored when negative.
 	Offset int
@@ -192,19 +224,38 @@ const reviewSessionColumns = `id, coalesce(job_id::text, ''), installation_id, o
 	pr_number, coalesce(pr_title, ''), coalesce(head_sha, ''), coalesce(base_sha, ''), coalesce(model, ''),
 	status, coalesce(summary, ''), coalesce(review_event, ''), tool_calls, coalesce(error, ''),
 	coalesce(parent_session_id::text, ''), turn_limit_reached, coalesce(requested_by, ''), requested_at,
+	kind, coalesce(label, ''), coalesce(task, ''), paths, ordinal,
 	input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd,
 	started_at, finished_at`
 
 // CreateReviewSession records the start of a review and returns the row.
 func (d *DB) CreateReviewSession(ctx context.Context, session NewReviewSession) (ReviewSession, error) {
+	paths := session.Paths
+	if paths == nil {
+		paths = []string{}
+	}
+	encodedPaths, err := json.Marshal(paths)
+	if err != nil {
+		return ReviewSession{}, fmt.Errorf("encoding the subagent paths: %w", err)
+	}
+	kind := session.Kind
+	if kind == "" {
+		kind = ReviewSessionKindReview
+	}
 	row := d.pool.QueryRow(ctx, `
 		INSERT INTO review_sessions (job_id, installation_id, org_name, repo_name, pr_number, model,
-			parent_session_id, requested_by, requested_at)
+			pr_title, head_sha, base_sha,
+			parent_session_id, requested_by, requested_at,
+			kind, label, task, paths, ordinal)
 		VALUES (nullif($1, '')::uuid, $2, $3, $4, $5, nullif($6, ''),
-			nullif($7, '')::uuid, nullif($8, ''), $9)
+			nullif($7, ''), nullif($8, ''), nullif($9, ''),
+			nullif($10, '')::uuid, nullif($11, ''), $12,
+			$13, $14, $15, $16::jsonb, $17)
 		RETURNING `+reviewSessionColumns,
 		session.JobID, session.InstallationID, session.OrgName, session.RepoName, session.PRNumber, session.Model,
-		session.ParentSessionID, session.RequestedBy, session.RequestedAt)
+		session.PRTitle, session.HeadSHA, session.BaseSHA,
+		session.ParentSessionID, session.RequestedBy, session.RequestedAt,
+		kind, session.Label, session.Task, encodedPaths, session.Ordinal)
 
 	record, err := scanReviewSession(row)
 	if err != nil {
@@ -354,6 +405,10 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 	if offset < 0 {
 		offset = 0
 	}
+	kind := filter.Kind
+	if kind == "" {
+		kind = ReviewSessionKindReview
+	}
 
 	rows, err := d.pool.Query(ctx, `
 		SELECT `+reviewSessionColumns+`
@@ -361,8 +416,9 @@ func (d *DB) ListReviewSessions(ctx context.Context, filter ReviewSessionFilter)
 		WHERE ($1 = '' OR status::text = $1)
 		  AND ($2 = '' OR org_name = $2)
 		  AND ($3 = '' OR repo_name = $3)
+		  AND kind = $4
 		ORDER BY started_at DESC, id DESC
-		LIMIT $4 OFFSET $5`, filter.Status, filter.OrgName, filter.RepoName, limit, offset)
+		LIMIT $5 OFFSET $6`, filter.Status, filter.OrgName, filter.RepoName, kind, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing review sessions: %w", err)
 	}
@@ -389,8 +445,8 @@ func (d *DB) ReviewSessionRepositories(ctx context.Context) ([]string, error) {
 	rows, err := d.pool.Query(ctx, `
 		SELECT DISTINCT org_name, repo_name
 		FROM review_sessions
-		WHERE coalesce(org_name, '') <> '' AND coalesce(repo_name, '') <> ''
-		ORDER BY org_name, repo_name`)
+		WHERE kind = $1 AND coalesce(org_name, '') <> '' AND coalesce(repo_name, '') <> ''
+		ORDER BY org_name, repo_name`, ReviewSessionKindReview)
 	if err != nil {
 		return nil, fmt.Errorf("listing review session repositories: %w", err)
 	}
@@ -424,9 +480,9 @@ func (d *DB) RecentCompletedReviewSessions(ctx context.Context, limit int) ([]Re
 	rows, err := d.pool.Query(ctx, `
 		SELECT `+reviewSessionColumns+`
 		FROM review_sessions
-		WHERE status <> $1
+		WHERE status <> $1 AND kind = $2
 		ORDER BY coalesce(finished_at, started_at) DESC, id DESC
-		LIMIT $2`, ReviewRunning, limit)
+		LIMIT $3`, ReviewRunning, ReviewSessionKindReview, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing completed review sessions: %w", err)
 	}
@@ -450,6 +506,10 @@ func (d *DB) RecentCompletedReviewSessions(ctx context.Context, limit int) ([]Re
 // the list's header totals. It is a full scan of the filter, not of the page
 // the list happens to show.
 func (d *DB) ReviewSessionUsage(ctx context.Context, filter ReviewSessionFilter) (UsageTotals, error) {
+	kind := filter.Kind
+	if kind == "" {
+		kind = ReviewSessionKindReview
+	}
 	var totals UsageTotals
 	err := d.pool.QueryRow(ctx, `
 		SELECT count(*), count(input_tokens),
@@ -461,8 +521,9 @@ func (d *DB) ReviewSessionUsage(ctx context.Context, filter ReviewSessionFilter)
 		FROM review_sessions
 		WHERE ($1 = '' OR status::text = $1)
 		  AND ($2 = '' OR org_name = $2)
-		  AND ($3 = '' OR repo_name = $3)`,
-		filter.Status, filter.OrgName, filter.RepoName).Scan(
+		  AND ($3 = '' OR repo_name = $3)
+		  AND kind = $4`,
+		filter.Status, filter.OrgName, filter.RepoName, kind).Scan(
 		&totals.Sessions, &totals.Reported,
 		&totals.InputTokens, &totals.OutputTokens, &totals.CacheReadTokens, &totals.CacheCreationTokens,
 		&totals.CostUSD, &totals.CostReported)
@@ -494,9 +555,9 @@ func (d *DB) ReviewSessionContinuation(ctx context.Context, parentID string) (*R
 	row := d.pool.QueryRow(ctx, `
 		SELECT `+reviewSessionColumns+`
 		FROM review_sessions
-		WHERE parent_session_id = $1
+		WHERE parent_session_id = $1 AND kind = $2
 		ORDER BY started_at DESC, id DESC
-		LIMIT 1`, parentID)
+		LIMIT 1`, parentID, ReviewSessionKindReview)
 
 	session, err := scanReviewSession(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -506,6 +567,34 @@ func (d *DB) ReviewSessionContinuation(ctx context.Context, parentID string) (*R
 		return nil, fmt.Errorf("reading the continuation of session %s: %w", parentID, err)
 	}
 	return &session, nil
+}
+
+// ListSubagentSessions returns the children one review spawned, in the order
+// the fleet assigned them. They are what the parent page's panel shows and what
+// the child pages link back to.
+func (d *DB) ListSubagentSessions(ctx context.Context, parentID string) ([]ReviewSession, error) {
+	rows, err := d.pool.Query(ctx, `
+		SELECT `+reviewSessionColumns+`
+		FROM review_sessions
+		WHERE parent_session_id = $1 AND kind = $2
+		ORDER BY ordinal, started_at, id`, parentID, ReviewSessionKindSubagent)
+	if err != nil {
+		return nil, fmt.Errorf("listing the subagents of session %s: %w", parentID, err)
+	}
+	defer rows.Close()
+
+	sessions := make([]ReviewSession, 0, 4)
+	for rows.Next() {
+		session, err := scanReviewSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning a subagent session: %w", err)
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing the subagents of session %s: %w", parentID, err)
+	}
+	return sessions, nil
 }
 
 // AppendReviewEvents stores a batch in one transaction. A repeated seq is
@@ -628,16 +717,23 @@ func scanReviewSession(row rowScanner) (ReviewSession, error) {
 		cacheReadTokens     *int64
 		cacheCreationTokens *int64
 		costUSD             *float64
+		paths               []byte
 	)
 	if err := row.Scan(
 		&session.ID, &session.JobID, &session.InstallationID, &session.OrgName, &session.RepoName,
 		&session.PRNumber, &session.PRTitle, &session.HeadSHA, &session.BaseSHA, &session.Model,
 		&session.Status, &session.Summary, &session.ReviewEvent, &session.ToolCalls, &session.Error,
 		&session.ParentSessionID, &session.TurnLimitReached, &session.RequestedBy, &session.RequestedAt,
+		&session.Kind, &session.Label, &session.Task, &paths, &session.Ordinal,
 		&inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, &costUSD,
 		&session.StartedAt, &session.FinishedAt,
 	); err != nil {
 		return ReviewSession{}, err
+	}
+	if len(paths) > 0 {
+		if err := json.Unmarshal(paths, &session.Paths); err != nil {
+			return ReviewSession{}, fmt.Errorf("decoding the subagent paths of session %s: %w", session.ID, err)
+		}
 	}
 	if inputTokens != nil {
 		session.Usage = &TokenUsage{

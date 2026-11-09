@@ -437,3 +437,41 @@ func TestAnswerPromptWithoutAQuestionExplainsTheFinding(t *testing.T) {
 		t.Errorf("the bare why prompt does not ask for the finding's reasoning:\n%s", prompt)
 	}
 }
+
+func TestSystemPromptNamesTheFleetAndTheDelta(t *testing.T) {
+	history := "<prior_reviews>\nLast reviewed commit: aaaa111. Use it as the since argument of get_pr_diff to read only the new delta.\n</prior_reviews>"
+	prompt := SystemPrompt(SessionContext{
+		PriorHistory:   history,
+		ResolveThreads: true,
+		Fleet: &FleetContext{
+			ChangedFiles:    42,
+			MinChangedFiles: 20,
+			MaxRuns:         8,
+			MaxConcurrency:  3,
+			Verify:          true,
+			Coverage:        true,
+		},
+	})
+
+	for _, want := range []string{
+		"spawn_reviewer",
+		"skip_changed_paths",
+		"verify_review",
+		"since set to the last reviewed commit",
+		"read-only subagent fleet",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the fleet prompt lost %q:\n%s", want, prompt)
+		}
+	}
+
+	withoutFleet := SystemPrompt(SessionContext{PriorHistory: history, ResolveThreads: true})
+	for _, unwanted := range []string{"spawn_reviewer", "skip_changed_paths", "verify_review"} {
+		if strings.Contains(withoutFleet, unwanted) {
+			t.Errorf("a review without the fleet is told about %q:\n%s", unwanted, withoutFleet)
+		}
+	}
+	if !strings.Contains(withoutFleet, "since set to the last reviewed commit") {
+		t.Error("a re-review without the fleet lost the delta rule")
+	}
+}

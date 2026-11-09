@@ -63,7 +63,7 @@
         <a class="session-row" href="/ui/sessions/{{.ID}}">
           <span class="session-row-top">
             <span class="session-row-lead">
-              <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+              <span class="pill status-{{lower .Status}}" title="{{.Status}}"><span class="visually-hidden">{{.Status}}</span></span>
               <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
               <span class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}No title recorded{{end}}</span>
             </span>
@@ -98,7 +98,7 @@
         <a class="session-row" href="/ui/sessions/{{.ID}}">
           <span class="session-row-top">
             <span class="session-row-lead">
-              <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+              <span class="pill status-{{lower .Status}}" title="{{.Status}}"><span class="visually-hidden">{{.Status}}</span></span>
               <span class="session-repo">{{.OrgName}}/{{.RepoName}}#{{.PRNumber}}</span>
               <span class="session-title">{{if .PRTitle}}{{.PRTitle}}{{else}}No title recorded{{end}}</span>
             </span>

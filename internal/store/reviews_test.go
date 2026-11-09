@@ -607,3 +607,98 @@ func TestReviewSessionUsage(t *testing.T) {
 		t.Errorf("cost = %v over %d sessions, want %v over one", totals.CostUSD, totals.CostReported, cost)
 	}
 }
+
+func TestSubagentSessionsAreRecordedAndKeptOutOfTheReviewList(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	parent, err := db.CreateReviewSession(ctx, NewReviewSession{
+		InstallationID: 98765432,
+		OrgName:        "acme",
+		RepoName:       "payments",
+		PRNumber:       42,
+		Model:          "test-model",
+	})
+	if err != nil {
+		t.Fatalf("CreateReviewSession(parent) returned error: %v", err)
+	}
+
+	child, err := db.CreateReviewSession(ctx, NewReviewSession{
+		InstallationID:  98765432,
+		OrgName:         "acme",
+		RepoName:        "payments",
+		PRNumber:        42,
+		Model:           "test-model",
+		PRTitle:         "Fix the flap",
+		HeadSHA:         "headsha1",
+		BaseSHA:         "basesha1",
+		ParentSessionID: parent.ID,
+		Kind:            ReviewSessionKindSubagent,
+		Label:           "api handlers",
+		Task:            "read the handlers",
+		Paths:           []string{"a.go", "b.go"},
+		Ordinal:         1,
+	})
+	if err != nil {
+		t.Fatalf("CreateReviewSession(child) returned error: %v", err)
+	}
+	if child.Kind != ReviewSessionKindSubagent {
+		t.Errorf("kind = %q, want %q", child.Kind, ReviewSessionKindSubagent)
+	}
+	if child.ParentSessionID != parent.ID {
+		t.Errorf("parent = %q, want %q", child.ParentSessionID, parent.ID)
+	}
+
+	got, err := db.ReviewSessionByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionByID returned error: %v", err)
+	}
+	if got.Label != "api handlers" || got.Task != "read the handlers" || got.Ordinal != 1 {
+		t.Errorf("child round-trip = %+v, want the assignment fields", got)
+	}
+	if !slices.Equal(got.Paths, []string{"a.go", "b.go"}) {
+		t.Errorf("paths = %v, want the two assigned files", got.Paths)
+	}
+	if got.PRTitle != "Fix the flap" || got.HeadSHA != "headsha1" || got.BaseSHA != "basesha1" {
+		t.Errorf("child metadata = %+v, want the pull request fields", got)
+	}
+
+	// The list, its totals and the repository picker are about reviews.
+	list, err := db.ListReviewSessions(ctx, ReviewSessionFilter{})
+	if err != nil {
+		t.Fatalf("ListReviewSessions returned error: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != parent.ID {
+		t.Errorf("list = %+v, want only the parent review", list)
+	}
+	usage, err := db.ReviewSessionUsage(ctx, ReviewSessionFilter{})
+	if err != nil {
+		t.Fatalf("ReviewSessionUsage returned error: %v", err)
+	}
+	if usage.Sessions != 1 {
+		t.Errorf("usage sessions = %d, want 1", usage.Sessions)
+	}
+
+	// A child is not a continuation of its parent.
+	continuation, err := db.ReviewSessionContinuation(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ReviewSessionContinuation returned error: %v", err)
+	}
+	if continuation != nil {
+		t.Errorf("continuation = %+v, want nil for a subagent child", continuation)
+	}
+
+	children, err := db.ListSubagentSessions(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListSubagentSessions returned error: %v", err)
+	}
+	if len(children) != 1 || children[0].ID != child.ID {
+		t.Errorf("children = %+v, want the child", children)
+	}
+
+	// The default kind is a review, so a row written without one keeps the old
+	// meaning.
+	if parent.Kind != ReviewSessionKindReview {
+		t.Errorf("parent kind = %q, want %q", parent.Kind, ReviewSessionKindReview)
+	}
+}

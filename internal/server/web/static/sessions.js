@@ -14,6 +14,7 @@
 
   var scroll = document.getElementById("console-scroll");
   var sessionId = timeline.dataset.sessionId;
+  var sessionKind = timeline.dataset.sessionKind || "REVIEW";
   var startedAt = Date.parse(timeline.dataset.startedAt) || Date.now();
 
   var statusBadge = document.getElementById("session-status");
@@ -220,6 +221,22 @@
         }
         break;
 
+      case "subagent_start":
+        upsertFleetChip(payload, false);
+        renderSubagentMarker(payload, false);
+        setActivity("Subagent: " + (payload.label || "reviewer"));
+        break;
+
+      case "subagent_finish":
+        upsertFleetChip(payload, true);
+        renderSubagentMarker(payload, true);
+        setActivity("Thinking…");
+        break;
+
+      case "subagent_task":
+        renderSubagentTask(payload);
+        break;
+
       case "session_metadata":
         marker("info", "Reviewing “" + (payload.title || "the pull request") + "”", metadataDetail(payload));
         break;
@@ -313,8 +330,15 @@
 
     if (payload.status) {
       if (statusBadge) {
-        statusBadge.textContent = payload.status;
         statusBadge.className = "pill status-" + payload.status.toLowerCase();
+        statusBadge.title = payload.status;
+        var statusLabel = statusBadge.querySelector(".visually-hidden");
+        if (!statusLabel) {
+          statusLabel = document.createElement("span");
+          statusLabel.className = "visually-hidden";
+          statusBadge.append(statusLabel);
+        }
+        statusLabel.textContent = payload.status;
       }
     }
 
@@ -326,10 +350,10 @@
       updateToolCount();
     }
     if (payload.error && !document.querySelector(".notice-bad") && !timeline.querySelector(".event-error")) {
-      marker("error", "The review failed", payload.error);
+      marker("error", sessionKind === "SUBAGENT" ? "The subagent failed" : "The review failed", payload.error);
     }
     if (payload.status !== "FAILED") {
-      marker("review", "Session complete", payload.status || "");
+      marker("review", sessionKind === "SUBAGENT" ? "Subagent finished" : "Session complete", payload.status || "");
     }
     if (!timeline.querySelector(".event, .tool, .thinking, .output, .usage-line")) {
       // A session that failed before its first event still deserves a
@@ -629,6 +653,191 @@
     if (placeholder) {
       placeholder.remove();
     }
+  }
+
+  // subagentKey identifies one child across the start and finish events. The
+  // session id is the stable key; the label and ordinal are the fallback when
+  // the review ran without a recorder attached.
+  function subagentKey(payload) {
+    if (payload.session_id) {
+      return String(payload.session_id);
+    }
+    return String(payload.label || "subagent") + "-" + String(payload.ordinal || "");
+  }
+
+  function findSubagentElement(root, key, attribute) {
+    var nodes = root.querySelectorAll("[" + attribute + "]");
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].getAttribute(attribute) === key) {
+        return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  // sortFleetChips keeps running agents at the front of the pinned strip and
+  // falls back to assignment order, so a running child is always visible.
+  function sortFleetChips(list) {
+    var nodes = Array.prototype.slice.call(list.querySelectorAll(".fleet-chip"));
+    nodes.sort(function(a, b) {
+      var aRunning = a.getAttribute("data-fleet-status") === "RUNNING" ? 0 : 1;
+      var bRunning = b.getAttribute("data-fleet-status") === "RUNNING" ? 0 : 1;
+      if (aRunning !== bRunning) {
+        return aRunning - bRunning;
+      }
+      return (Number(a.getAttribute("data-fleet-ordinal")) || 0) -
+        (Number(b.getAttribute("data-fleet-ordinal")) || 0);
+    });
+    for (var i = 0; i < nodes.length; i++) {
+      list.append(nodes[i]);
+    }
+  }
+
+  // upsertFleetChip pins one compact status chip above the transcript. The
+  // strip stays in place while the log scrolls, so a running child is always
+  // visible.
+  function upsertFleetChip(payload, finished) {
+    var strip = document.getElementById("fleet-strip");
+    var list = document.getElementById("fleet-list");
+    if (!strip || !list) {
+      return;
+    }
+    var key = subagentKey(payload);
+    var chip = findSubagentElement(list, key, "data-fleet-key");
+    if (!chip) {
+      chip = document.createElement(payload.session_id ? "a" : "div");
+      chip.className = "fleet-chip fleet-running";
+      chip.setAttribute("data-fleet-key", key);
+      chip.setAttribute("data-fleet-ordinal", String(payload.ordinal || 0));
+      if (payload.session_id) {
+        chip.href = "/ui/sessions/" + encodeURIComponent(payload.session_id);
+      }
+      if (payload.task) {
+        chip.setAttribute("data-fleet-task", payload.task);
+      }
+
+      var dot = span("fleet-dot", "");
+      dot.setAttribute("aria-hidden", "true");
+      var label = span("fleet-label", payload.label || "subagent");
+      chip.append(dot, label);
+      list.append(chip);
+    }
+
+    var status = finished ? (payload.status || "SUCCEEDED") : "RUNNING";
+    chip.className = "fleet-chip fleet-" + status.toLowerCase();
+    chip.setAttribute("data-fleet-status", status);
+    sortFleetChips(list);
+    if (payload.session_id) {
+      chip.setAttribute("aria-label", (payload.label || "subagent") + ", " + status);
+    }
+    var chipLabel = chip.querySelector(".fleet-label").textContent || "subagent";
+    var chipTask = chip.getAttribute("data-fleet-task") || "";
+    chip.title = chipLabel + " · " + status + (chipTask ? " — " + chipTask : "");
+    strip.hidden = false;
+
+    var counter = document.getElementById("fleet-count");
+    if (counter) {
+      counter.textContent = String(list.querySelectorAll(".fleet-chip").length);
+    }
+  }
+
+  // renderSubagentMarker keeps one compact row per child in the transcript.
+  // The row itself opens the child's transcript, and its height stays fixed as
+  // the review streams.
+  function renderSubagentMarker(payload, finished) {
+    var key = subagentKey(payload);
+    var row = findSubagentElement(timeline, key, "data-subagent-key");
+    if (!row) {
+      row = document.createElement(payload.session_id ? "a" : "div");
+      row.className = "event event-subagent event-subagent-row";
+      row.setAttribute("data-subagent-key", key);
+      if (payload.session_id) {
+        row.href = "/ui/sessions/" + encodeURIComponent(payload.session_id);
+        row.setAttribute("aria-label", "Open transcript for subagent " + (payload.label || "reviewer"));
+      }
+      if (payload.task) {
+        row.title = payload.task;
+      }
+
+      var glyph = span("event-glyph", "groups");
+      glyph.setAttribute("aria-hidden", "true");
+
+      var body = document.createElement("span");
+      body.className = "event-body";
+      body.append(span("event-kind", "Subagent"));
+
+      var label = span("subagent-row-label", payload.label || "subagent");
+      label.setAttribute("dir", "auto");
+      body.append(label);
+
+      var state = span("subagent-row-status", "RUNNING");
+      state.setAttribute("data-subagent-status", "");
+      body.append(state);
+
+      var meta = span("subagent-row-meta", "");
+      meta.setAttribute("data-subagent-meta", "");
+      body.append(meta);
+
+      if (payload.session_id) {
+        var open = span("icon subagent-row-open", "chevron_right");
+        open.setAttribute("aria-hidden", "true");
+        body.append(open);
+      }
+
+      row.append(glyph, body);
+      timeline.append(row);
+    }
+
+    var status = finished ? (payload.status || "SUCCEEDED") : "RUNNING";
+    var state = row.querySelector("[data-subagent-status]");
+    if (state) {
+      state.textContent = status;
+      state.className = "subagent-row-status status-" + status.toLowerCase();
+    }
+    row.setAttribute("data-subagent-status", status);
+
+    var meta = row.querySelector("[data-subagent-meta]");
+    if (meta) {
+      if (finished) {
+        var parts = [count(Number(payload.tool_calls) || 0, "tool")];
+        if (Number(payload.findings) > 0) {
+          parts.push(count(payload.findings, "finding"));
+        }
+        meta.textContent = parts.join(" · ");
+      } else {
+        meta.textContent = "";
+      }
+    }
+    if (payload.error) {
+      row.title = (payload.task ? payload.task + "\n" : "") + String(payload.error).slice(0, 300);
+    }
+  }
+
+  // renderSubagentTask is the child page's first block: what this reviewer was
+  // asked to do and which files it owns.
+  function renderSubagentTask(payload) {
+    var item = document.createElement("div");
+    item.className = "event event-subagent-task";
+    var glyph = span("event-glyph", "groups");
+    glyph.setAttribute("aria-hidden", "true");
+    var body = document.createElement("div");
+    body.className = "event-body";
+    var line = document.createElement("div");
+    line.className = "event-line";
+    line.append(span("event-kind", "Assigned task"), span("event-text", payload.label || "subagent"));
+    body.append(line);
+    if (payload.task) {
+      var task = span("event-detail", payload.task);
+      task.setAttribute("dir", "auto");
+      body.append(task);
+    }
+    if (Array.isArray(payload.paths) && payload.paths.length > 0) {
+      var detail = span("event-detail", payload.paths.join(", "));
+      detail.setAttribute("dir", "auto");
+      body.append(detail);
+    }
+    item.append(glyph, body);
+    timeline.append(item);
   }
 
   function storedThinking() {
@@ -972,6 +1181,8 @@
         return "Event / Warning";
       case "error":
         return "Event / Error";
+      case "subagent":
+        return "Subagent";
       default:
         return "Event / Info";
     }
@@ -987,6 +1198,8 @@
         return "warning";
       case "error":
         return "error";
+      case "subagent":
+        return "groups";
       default:
         return "info";
     }

@@ -67,6 +67,12 @@ type GithubTools struct {
 	resolutionsMu sync.Mutex
 	resolutions   int
 
+	// diffMu guards the full diff. A fleet child reads its own slice with
+	// get_pr_diff, and without this every child would download the whole diff
+	// for the same head SHA. The diff is immutable for the session's commit.
+	diffMu     sync.Mutex
+	cachedDiff *ghapp.Diff
+
 	// Repository settings narrow what a review may post. They are enforced
 	// here as well as described in the prompt, so a model that ignores the
 	// block still produces a review the repository asked for.
@@ -288,13 +294,31 @@ func (t *GithubTools) getDiff(ctx context.Context, args map[string]any) (string,
 // diff is the whole diff, or the part of it that landed after since.
 func (t *GithubTools) diff(ctx context.Context, since string) (*ghapp.Diff, error) {
 	if since == "" {
-		return t.client.Diff(ctx)
+		return t.fullDiff(ctx)
 	}
 	meta, err := t.client.Metadata(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading the pull request metadata: %w", err)
 	}
 	return t.client.DiffSince(ctx, since, meta.HeadSHA)
+}
+
+// fullDiff reads the diff once per session. The reviewed commit is pinned, so
+// the document cannot change under a running review; a fleet of children
+// shares the one download.
+func (t *GithubTools) fullDiff(ctx context.Context) (*ghapp.Diff, error) {
+	t.diffMu.Lock()
+	defer t.diffMu.Unlock()
+
+	if t.cachedDiff != nil {
+		return t.cachedDiff, nil
+	}
+	diff, err := t.client.Diff(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.cachedDiff = diff
+	return diff, nil
 }
 
 func (t *GithubTools) getFileContents(ctx context.Context, args map[string]any) (string, error) {
@@ -512,7 +536,7 @@ func (t *GithubTools) submitReview(ctx context.Context, args map[string]any) (st
 		event = ghapp.EventComment
 	}
 
-	diff, err := t.client.Diff(ctx)
+	diff, err := t.fullDiff(ctx)
 	if err != nil {
 		return "", fmt.Errorf("submit_pr_review failed: %w", err)
 	}

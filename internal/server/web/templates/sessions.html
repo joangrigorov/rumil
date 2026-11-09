@@ -63,7 +63,7 @@
       <tr>
         <td>
           <div class="cell-status">
-            <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+            <span class="pill status-{{lower .Status}}" title="{{.Status}}"><span class="visually-hidden">{{.Status}}</span></span>
             {{if .ParentSessionID}}<span class="pill pill-continued"><span class="icon" aria-hidden="true">history</span>continued</span>{{end}}
           </div>
         </td>

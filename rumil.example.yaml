@@ -33,6 +33,20 @@ review:
   resolve_threads: true           # the reviewer resolves its own review threads once it verifies the finding is gone
   # max_total_tokens: 2000000     # per-session ceiling over input + output + cache tokens; 0 or unset is no limit
   # max_cost_usd: 2.50            # per-session estimated-cost ceiling; needs the chat provider's input and output prices
+  # Subagent reviewers split a large pull request across a bounded fleet. The
+  # leader keeps every GitHub write; each child reads its own files and reports.
+  # Every child is a full model session, so this multiplies token use. It is off
+  # by default and is only offered from min_changed_files changed files upward.
+  # subagents:
+  #   enabled: false
+  #   min_changed_files: 20       # 1 offers the fleet for every review
+  #   max_concurrency: 3          # children running at once
+  #   max_runs: 8                 # children per review, verification included
+  #   max_turns: 12               # model steps per child
+  #   timeout: "5m"               # one child
+  #   model: ""                   # empty inherits the leader's model
+  #   verify: true                # require a verification pass before submitting
+  #   require_coverage: true      # refuse the first submit that leaves changed files unassigned
 
 # Older context is summarized when a session reaches the trigger. The trigger
 # is deliberately high: 256K leaves room for a large pull request before any

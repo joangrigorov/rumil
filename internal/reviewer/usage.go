@@ -19,12 +19,12 @@ var ErrBudgetExceeded = errors.New("the review budget was exceeded")
 // Cache tokens stay separate so an operator can see how much of the input came
 // from a cache.
 type Usage struct {
-	InputTokens         int64
-	OutputTokens        int64
-	CacheReadTokens     int64
-	CacheCreationTokens int64
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 	// CostUSD is the estimated cost, nil when the provider has no prices.
-	CostUSD *float64
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 }
 
 // TotalTokens is the sum every category, which is the context-fill figure kit
@@ -65,6 +65,21 @@ func (t *usageTracker) noteEvent(event kit.Event) {
 	if finish, ok := event.(kit.StepFinishEvent); ok {
 		t.note(finish.Usage)
 	}
+}
+
+// add merges usage the session did not report through a kit event, which is
+// how a subagent's bill joins the review's own.
+func (t *usageTracker) add(usage Usage) {
+	if usage.TotalTokens() == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reported = true
+	t.usage.InputTokens += usage.InputTokens
+	t.usage.OutputTokens += usage.OutputTokens
+	t.usage.CacheReadTokens += usage.CacheReadTokens
+	t.usage.CacheCreationTokens += usage.CacheCreationTokens
 }
 
 // snapshot returns the total and whether any provider reported usage.

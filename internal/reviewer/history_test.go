@@ -61,6 +61,7 @@ func TestRenderHistoryCarriesTheSummariesAndTheOpenThreads(t *testing.T) {
 
 	for _, want := range []string{
 		"<prior_reviews>",
+		"Last reviewed commit: aaaa111",
 		"Round one: the retry loop is unbounded.",
 		"rumil[bot] (you) (CHANGES_REQUESTED, commit aaaa111)",
 		"octocat (COMMENTED, commit bbbb222)",

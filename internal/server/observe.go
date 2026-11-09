@@ -115,6 +115,65 @@ func (r *SessionRecorder) Start(ctx context.Context, request store.NewReviewSess
 	return observer, nil
 }
 
+// StartSubagent records a fleet child under the review that spawned it. The
+// child is a session of its own in the deck, with its own transcript and SSE
+// stream; the parent records only the start and finish markers.
+func (r *SessionRecorder) StartSubagent(ctx context.Context, spec reviewer.SubagentSpec) (reviewer.SubagentRun, error) {
+	observer, err := r.Start(ctx, store.NewReviewSession{
+		InstallationID:  spec.InstallationID,
+		OrgName:         spec.Owner,
+		RepoName:        spec.Repo,
+		PRNumber:        spec.Number,
+		Model:           spec.Model,
+		PRTitle:         spec.PRTitle,
+		HeadSHA:         spec.HeadSHA,
+		BaseSHA:         spec.BaseSHA,
+		ParentSessionID: spec.ParentSessionID,
+		Kind:            store.ReviewSessionKindSubagent,
+		Label:           spec.Label,
+		Task:            spec.Task,
+		Paths:           spec.Paths,
+		Ordinal:         spec.Ordinal,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return subagentRun{observer: observer}, nil
+}
+
+// subagentRun adapts the recorder's observer to the reviewer's child handle.
+type subagentRun struct {
+	observer *sessionObserver
+}
+
+func (r subagentRun) ID() string { return r.observer.sessionID }
+
+func (r subagentRun) Observer() reviewer.Observer { return r.observer }
+
+func (r subagentRun) Finish(ctx context.Context, outcome reviewer.SubagentOutcome) {
+	r.observer.Finish(ctx, store.ReviewOutcome{
+		Status:    outcome.Status,
+		Summary:   outcome.Summary,
+		Error:     outcome.Error,
+		ToolCalls: outcome.ToolCalls,
+		Usage:     subagentTokenUsage(outcome.Usage),
+	})
+}
+
+// subagentTokenUsage converts the reviewer's usage to the store's shape. A
+// provider that reported nothing leaves the columns NULL.
+func subagentTokenUsage(usage *reviewer.Usage) *store.TokenUsage {
+	if usage == nil || usage.TotalTokens() == 0 {
+		return nil
+	}
+	return &store.TokenUsage{
+		InputTokens:         usage.InputTokens,
+		OutputTokens:        usage.OutputTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+	}
+}
+
 // sessionObserver implements reviewer.Observer. It assigns the session's seq,
 // queues the event, and lets one writer flush batches so a burst of deltas
 // never becomes one database round trip per token.

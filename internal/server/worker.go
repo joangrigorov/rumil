@@ -325,6 +325,7 @@ func (r *jobRunner) review(ctx context.Context, logger *slog.Logger, job *store.
 		Focus:          focus,
 		SessionID:      sessionID,
 		Observer:       observer,
+		Subagents:      r.recorder,
 		Cancelled:      watcher.Stopped,
 	})
 	r.observeReview(result, err, started)
@@ -445,6 +446,7 @@ func (r *jobRunner) continuation(ctx context.Context, logger *slog.Logger, job *
 		InstallationID: parent.InstallationID,
 		SessionID:      sessionID,
 		Observer:       observer,
+		Subagents:      r.recorder,
 		Cancelled:      watcher.Stopped,
 		Continuation: &reviewer.Continuation{
 			ParentSessionID: parent.ID,

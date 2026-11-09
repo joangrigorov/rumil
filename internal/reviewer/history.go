@@ -56,6 +56,9 @@ func renderHistory(reviews []ghapp.Review, threads []ghapp.ReviewThread, botLogi
 	)
 	b.WriteString("<prior_reviews>\n")
 	b.WriteString("This pull request has been reviewed before this session. Earlier review summaries, oldest first:\n")
+	if last := ghapp.LastReviewedCommitOf(reviews, botLogin); last != "" {
+		fmt.Fprintf(&b, "Last reviewed commit: %s. Use it as the since argument of get_pr_diff to read only the new delta.\n", shortCommit(last))
+	}
 	for _, review := range reviews {
 		if lines == maxHistoryReviews {
 			b.WriteString("- and more earlier reviews, which list_pr_conversation returns\n")

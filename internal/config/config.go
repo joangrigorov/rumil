@@ -575,6 +575,104 @@ type Review struct {
 	// MaxCostUSD bounds the estimated cost one session may use, from the chat
 	// provider's prices. Zero means no cost budget.
 	MaxCostUSD float64 `yaml:"max_cost_usd"`
+	// Subagents splits a large pull request across a bounded fleet. It is off
+	// by default: every child is a full model session and multiplies the bill.
+	Subagents Subagents `yaml:"subagents"`
+}
+
+// Defaults for review.subagents.
+const (
+	DefaultSubagentMinChangedFiles = 20
+	DefaultSubagentConcurrency     = 3
+	DefaultSubagentMaxRuns         = 8
+	DefaultSubagentMaxTurns        = 12
+	DefaultSubagentTimeout         = 5 * time.Minute
+	// SubagentConcurrencyLimit and SubagentRunsLimit bound the prompt budget,
+	// the provider's rate limit, and the bill one review can create.
+	SubagentConcurrencyLimit = 16
+	SubagentRunsLimit        = 32
+	SubagentTurnsLimit       = 100
+)
+
+// Subagents is the operator's fleet policy for one review.
+type Subagents struct {
+	// Enabled turns the feature on. Below MinChangedFiles the review runs
+	// exactly as it did before the fleet existed.
+	Enabled bool `yaml:"enabled"`
+	// MinChangedFiles is the changed-file count at or above which the fleet is
+	// offered. The default is 20; set 1 to offer it for every review.
+	MinChangedFiles int `yaml:"min_changed_files"`
+	// MaxConcurrency is how many children run at once.
+	MaxConcurrency int `yaml:"max_concurrency"`
+	// MaxRuns bounds the children one review may start, verification included.
+	MaxRuns int `yaml:"max_runs"`
+	// MaxTurns bounds the model steps one child may take. The fleet enforces
+	// it, because kit's in-process subagent has no step option.
+	MaxTurns int `yaml:"max_turns"`
+	// Timeout bounds one child. Empty uses DefaultSubagentTimeout.
+	Timeout string `yaml:"timeout"`
+	// Model overrides the leader's model for children. Empty inherits it; a
+	// bare name is served by the leader's provider.
+	Model string `yaml:"model"`
+	// Verify requires a verification child before the review is submitted. It
+	// is a pointer so that omitted keeps the default while an explicit false
+	// turns it off.
+	Verify *bool `yaml:"verify"`
+	// RequireCoverage refuses the first submit that leaves changed files
+	// unassigned. The second attempt proceeds with the gap named in the
+	// summary.
+	RequireCoverage *bool `yaml:"require_coverage"`
+}
+
+// VerifyEnabled reports whether a verification pass is required.
+func (s Subagents) VerifyEnabled() bool { return s.Verify == nil || *s.Verify }
+
+// CoverageRequired reports whether an uncovered changed file refuses the first
+// submit.
+func (s Subagents) CoverageRequired() bool { return s.RequireCoverage == nil || *s.RequireCoverage }
+
+// TimeoutOrDefault is the per-child budget.
+func (s Subagents) TimeoutOrDefault() time.Duration {
+	if s.Timeout == "" {
+		return DefaultSubagentTimeout
+	}
+	parsed, err := time.ParseDuration(s.Timeout)
+	if err != nil {
+		return DefaultSubagentTimeout
+	}
+	return parsed
+}
+
+// validate checks the ranges that keep one review's fleet bounded.
+func (s Subagents) validate() error {
+	if s.MinChangedFiles < 0 {
+		return fmt.Errorf("review.subagents.min_changed_files must be zero or positive, got %d", s.MinChangedFiles)
+	}
+	if s.MaxConcurrency < 1 || s.MaxConcurrency > SubagentConcurrencyLimit {
+		return fmt.Errorf("review.subagents.max_concurrency must be between 1 and %d, got %d",
+			SubagentConcurrencyLimit, s.MaxConcurrency)
+	}
+	if s.MaxRuns < 1 || s.MaxRuns > SubagentRunsLimit {
+		return fmt.Errorf("review.subagents.max_runs must be between 1 and %d, got %d",
+			SubagentRunsLimit, s.MaxRuns)
+	}
+	if s.MaxTurns < 1 || s.MaxTurns > SubagentTurnsLimit {
+		return fmt.Errorf("review.subagents.max_turns must be between 1 and %d, got %d",
+			SubagentTurnsLimit, s.MaxTurns)
+	}
+	if s.Timeout != "" {
+		timeout, err := time.ParseDuration(s.Timeout)
+		if err != nil {
+			return fmt.Errorf("review.subagents.timeout must be a duration such as \"5m\", got %q: %w", s.Timeout, err)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf("review.subagents.timeout must be positive, got %q", s.Timeout)
+		}
+	}
+	if s.Model != "" && strings.TrimSpace(s.Model) == "" {
+		return fmt.Errorf("review.subagents.model must be a model name or empty to inherit, got %q", s.Model)
+	}
+	return nil
 }
 
 // ThreadsResolvable reports whether the reviewer may resolve its own review
@@ -767,6 +865,18 @@ func (c *Config) applyDefaults() {
 	if c.Review.GuidelinesRef == "" {
 		c.Review.GuidelinesRef = DefaultGuidelinesRef
 	}
+	if c.Review.Subagents.MinChangedFiles == 0 {
+		c.Review.Subagents.MinChangedFiles = DefaultSubagentMinChangedFiles
+	}
+	if c.Review.Subagents.MaxConcurrency == 0 {
+		c.Review.Subagents.MaxConcurrency = DefaultSubagentConcurrency
+	}
+	if c.Review.Subagents.MaxRuns == 0 {
+		c.Review.Subagents.MaxRuns = DefaultSubagentMaxRuns
+	}
+	if c.Review.Subagents.MaxTurns == 0 {
+		c.Review.Subagents.MaxTurns = DefaultSubagentMaxTurns
+	}
 	if c.Worker.Concurrency == 0 {
 		c.Worker.Concurrency = DefaultWorkerConcurrency
 	}
@@ -914,6 +1024,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("review.max_cost_usd needs models.providers[%s].price_input_per_mtok and price_output_per_mtok to estimate a cost",
 				provider.ID)
 		}
+	}
+
+	if err := c.Review.Subagents.validate(); err != nil {
+		return err
 	}
 
 	if c.Worker.Concurrency < 1 {
