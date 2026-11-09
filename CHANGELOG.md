@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.35](https://github.com/joangrigorov/rumil/compare/v0.0.34...v0.0.35) (2026-11-09)
+
+
+### Features
+
+* add an optional subagent review fleet ([#128](https://github.com/joangrigorov/rumil/issues/128)) ([9492fdc](https://github.com/joangrigorov/rumil/commit/9492fdca9043d674bd516800912c2f3d24d7c11c))
+
 ## [0.0.34](https://github.com/joangrigorov/rumil/compare/v0.0.33...v0.0.34) (2026-11-06)
 
 
