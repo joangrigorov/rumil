@@ -14,6 +14,7 @@
 
   var scroll = document.getElementById("console-scroll");
   var sessionId = timeline.dataset.sessionId;
+  var sessionKind = timeline.dataset.sessionKind || "REVIEW";
   var startedAt = Date.parse(timeline.dataset.startedAt) || Date.now();
 
   var statusBadge = document.getElementById("session-status");
@@ -220,6 +221,22 @@
         }
         break;
 
+      case "subagent_start":
+        upsertSubagentCard(payload, false);
+        renderSubagentMarker(payload, false);
+        setActivity("Subagent: " + (payload.label || "reviewer"));
+        break;
+
+      case "subagent_finish":
+        upsertSubagentCard(payload, true);
+        renderSubagentMarker(payload, true);
+        setActivity("Thinking…");
+        break;
+
+      case "subagent_task":
+        renderSubagentTask(payload);
+        break;
+
       case "session_metadata":
         marker("info", "Reviewing “" + (payload.title || "the pull request") + "”", metadataDetail(payload));
         break;
@@ -326,10 +343,10 @@
       updateToolCount();
     }
     if (payload.error && !document.querySelector(".notice-bad") && !timeline.querySelector(".event-error")) {
-      marker("error", "The review failed", payload.error);
+      marker("error", sessionKind === "SUBAGENT" ? "The subagent failed" : "The review failed", payload.error);
     }
     if (payload.status !== "FAILED") {
-      marker("review", "Session complete", payload.status || "");
+      marker("review", sessionKind === "SUBAGENT" ? "Subagent finished" : "Session complete", payload.status || "");
     }
     if (!timeline.querySelector(".event, .tool, .thinking, .output, .usage-line")) {
       // A session that failed before its first event still deserves a
@@ -629,6 +646,213 @@
     if (placeholder) {
       placeholder.remove();
     }
+  }
+
+  // subagentKey identifies one child across the start and finish events. The
+  // session id is the stable key; the label and ordinal are the fallback when
+  // the review ran without a recorder attached.
+  function subagentKey(payload) {
+    if (payload.session_id) {
+      return String(payload.session_id);
+    }
+    return String(payload.label || "subagent") + "-" + String(payload.ordinal || "");
+  }
+
+  function findSubagentElement(root, key, attribute) {
+    var nodes = root.querySelectorAll("[" + attribute + "]");
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].getAttribute(attribute) === key) {
+        return nodes[i];
+      }
+    }
+    return null;
+  }
+
+  // upsertSubagentCard keeps the parent page's panel in step with the stream.
+  // The server renders the cards a page load already knows about; this fills in
+  // the ones that started afterwards.
+  function upsertSubagentCard(payload, finished) {
+    var list = document.getElementById("subagent-list");
+    if (!list) {
+      return;
+    }
+    var key = subagentKey(payload);
+    var status = finished ? (payload.status || "SUCCEEDED") : "RUNNING";
+    var card = findSubagentElement(list, key, "data-subagent-key");
+
+    if (!card) {
+      card = document.createElement(payload.session_id ? "a" : "div");
+      card.className = "subagent-card";
+      card.setAttribute("data-subagent-key", key);
+      card.setAttribute("data-subagent-id", payload.session_id || "");
+      if (payload.session_id) {
+        card.href = "/ui/sessions/" + encodeURIComponent(payload.session_id);
+      }
+
+      var top = document.createElement("span");
+      top.className = "subagent-card-top";
+      var pill = document.createElement("span");
+      pill.className = "pill status-running";
+      pill.textContent = "RUNNING";
+      pill.setAttribute("data-subagent-pill", "");
+      var ordinal = document.createElement("span");
+      ordinal.className = "subagent-ordinal";
+      ordinal.textContent = "#" + String(payload.ordinal || "");
+      top.append(pill, ordinal);
+
+      var label = document.createElement("span");
+      label.className = "subagent-label";
+      label.textContent = payload.label || "Subagent";
+
+      var task = document.createElement("span");
+      task.className = "subagent-task";
+      task.textContent = payload.task || "No task recorded";
+
+      var meta = document.createElement("span");
+      meta.className = "subagent-meta";
+      var paths = document.createElement("span");
+      paths.setAttribute("data-subagent-paths", "");
+      paths.textContent = count(Array.isArray(payload.paths) ? payload.paths.length : 0, "file");
+      var separator = document.createElement("span");
+      separator.className = "sep";
+      separator.setAttribute("aria-hidden", "true");
+      separator.textContent = "·";
+      var tools = document.createElement("span");
+      tools.setAttribute("data-subagent-tools", "");
+      tools.textContent = "0 tools";
+      meta.append(paths, separator, tools);
+
+      card.append(top, label, task, meta);
+      list.append(card);
+    }
+
+    var pill = card.querySelector("[data-subagent-pill]");
+    if (pill) {
+      pill.textContent = status;
+      pill.className = "pill status-" + status.toLowerCase();
+    }
+    card.setAttribute("data-subagent-status", status);
+
+    if (finished) {
+      var tools = card.querySelector("[data-subagent-tools]");
+      if (tools) {
+        tools.textContent = count(Number(payload.tool_calls) || 0, "tool");
+      }
+      if (payload.usage) {
+        var total = (Number(payload.usage.input_tokens) || 0) + (Number(payload.usage.output_tokens) || 0) +
+          (Number(payload.usage.cache_read_tokens || payload.usage.cache_read) || 0) +
+          (Number(payload.usage.cache_creation_tokens || payload.usage.cache_write) || 0);
+        var meta = card.querySelector(".subagent-meta");
+        var tokens = card.querySelector("[data-subagent-tokens]");
+        if (meta && total > 0) {
+          if (!tokens) {
+            var separator = document.createElement("span");
+            separator.className = "sep";
+            separator.setAttribute("aria-hidden", "true");
+            separator.textContent = "·";
+            tokens = document.createElement("span");
+            tokens.setAttribute("data-subagent-tokens", "");
+            meta.append(separator, tokens);
+          }
+          tokens.textContent = formatNumber(total) + " tokens";
+        }
+      }
+    }
+
+    var empty = document.getElementById("subagent-empty");
+    if (empty) {
+      empty.hidden = true;
+    }
+    var counter = document.getElementById("subagent-count");
+    if (counter) {
+      counter.textContent = String(list.querySelectorAll(".subagent-card").length);
+    }
+  }
+
+  // renderSubagentMarker is the timeline's own card for a child, with the link
+  // to its transcript.
+  function renderSubagentMarker(payload, finished) {
+    var key = subagentKey(payload);
+    var card = findSubagentElement(timeline, key, "data-subagent-key");
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "event event-subagent";
+      card.setAttribute("data-subagent-key", key);
+
+      var glyph = span("event-glyph", "groups");
+      glyph.setAttribute("aria-hidden", "true");
+
+      var body = document.createElement("div");
+      body.className = "event-body";
+      var line = document.createElement("div");
+      line.className = "event-line";
+      line.append(span("event-kind", "Subagent"), span("event-text", payload.label || "subagent"));
+      body.append(line);
+
+      var task = span("event-detail", payload.task || "");
+      task.setAttribute("dir", "auto");
+      body.append(task);
+
+      var result = document.createElement("div");
+      result.className = "subagent-marker-result";
+      body.append(result);
+
+      if (payload.session_id) {
+        var link = document.createElement("a");
+        link.className = "link-quiet subagent-link";
+        link.href = "/ui/sessions/" + encodeURIComponent(payload.session_id);
+        link.textContent = "Open transcript";
+        body.append(link);
+      }
+
+      card.append(glyph, body);
+      timeline.append(card);
+    }
+
+    var result = card.querySelector(".subagent-marker-result");
+    if (!result) {
+      return;
+    }
+    var status = finished ? (payload.status || "SUCCEEDED") : "RUNNING";
+    var text = status;
+    if (finished) {
+      text += " · " + (Number(payload.tool_calls) || 0) + " tool calls";
+      if (Number(payload.findings) > 0) {
+        text += " · " + count(payload.findings, "finding");
+      }
+      if (payload.error) {
+        text += " · " + String(payload.error).slice(0, 200);
+      }
+    }
+    result.textContent = text;
+    result.className = "subagent-marker-result status-" + status.toLowerCase();
+  }
+
+  // renderSubagentTask is the child page's first block: what this reviewer was
+  // asked to do and which files it owns.
+  function renderSubagentTask(payload) {
+    var item = document.createElement("div");
+    item.className = "event event-subagent-task";
+    var glyph = span("event-glyph", "groups");
+    glyph.setAttribute("aria-hidden", "true");
+    var body = document.createElement("div");
+    body.className = "event-body";
+    var line = document.createElement("div");
+    line.className = "event-line";
+    line.append(span("event-kind", "Assigned task"), span("event-text", payload.label || "subagent"));
+    body.append(line);
+    if (payload.task) {
+      var task = span("event-detail", payload.task);
+      task.setAttribute("dir", "auto");
+      body.append(task);
+    }
+    if (Array.isArray(payload.paths) && payload.paths.length > 0) {
+      var detail = span("event-detail", payload.paths.join(", "));
+      detail.setAttribute("dir", "auto");
+      body.append(detail);
+    }
+    item.append(glyph, body);
+    timeline.append(item);
   }
 
   function storedThinking() {
@@ -972,6 +1196,8 @@
         return "Event / Warning";
       case "error":
         return "Event / Error";
+      case "subagent":
+        return "Subagent";
       default:
         return "Event / Info";
     }
@@ -987,6 +1213,8 @@
         return "warning";
       case "error":
         return "error";
+      case "subagent":
+        return "groups";
       default:
         return "info";
     }

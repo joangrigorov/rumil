@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/joangrigorov/rumil/internal/continuation"
+	"github.com/joangrigorov/rumil/internal/reviewer"
 	"github.com/joangrigorov/rumil/internal/server"
 	"github.com/joangrigorov/rumil/internal/store"
 	"github.com/joangrigorov/rumil/internal/testutil"
@@ -1004,5 +1006,197 @@ func TestObservationDeckQueueListsAndCancels(t *testing.T) {
 	}
 	if stored.Status != store.StatusCancelled {
 		t.Errorf("status = %q, want CANCELLED", stored.Status)
+	}
+}
+
+// newSubagentSession records a fleet child of parent, in the state the deck
+// renders. It is the fixture for the parent's panel and the child's page.
+func newSubagentSession(t *testing.T, h *harness, parent store.ReviewSession, label, task, status string) store.ReviewSession {
+	t.Helper()
+	ctx := context.Background()
+	child, err := h.db.CreateReviewSession(ctx, store.NewReviewSession{
+		InstallationID:  parent.InstallationID,
+		OrgName:         parent.OrgName,
+		RepoName:        parent.RepoName,
+		PRNumber:        parent.PRNumber,
+		Model:           "test-model",
+		PRTitle:         parent.PRTitle,
+		HeadSHA:         parent.HeadSHA,
+		BaseSHA:         parent.BaseSHA,
+		ParentSessionID: parent.ID,
+		Kind:            store.ReviewSessionKindSubagent,
+		Label:           label,
+		Task:            task,
+		Paths:           []string{"main.go", "service.go"},
+		Ordinal:         1,
+	})
+	if err != nil {
+		t.Fatalf("creating a subagent session: %v", err)
+	}
+	if status != store.ReviewRunning {
+		if err := h.db.FinishReviewSession(ctx, child.ID, store.ReviewOutcome{
+			Status:    status,
+			Summary:   `{"findings":[]}`,
+			ToolCalls: 4,
+			Usage:     &store.TokenUsage{InputTokens: 100, OutputTokens: 20},
+		}); err != nil {
+			t.Fatalf("finishing the subagent session: %v", err)
+		}
+	}
+	finished, err := h.db.ReviewSessionByID(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("reading the subagent session: %v", err)
+	}
+	return finished
+}
+
+func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	parent := newReviewSession(t, h, "payments", 42, "Fix the flap", "The change is sound.", store.ReviewSucceeded)
+	child := newSubagentSession(t, h, parent, "api handlers", "Check the handler error paths.", store.ReviewSucceeded)
+	handler, _ := sessionsHandler(t, h)
+
+	parentResponse := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+parent.ID, adminToken, nil, "text/html")
+	if parentResponse.Code != http.StatusOK {
+		t.Fatalf("parent status = %d, want 200 (body: %s)", parentResponse.Code, parentResponse.Body.String())
+	}
+	parentBody := parentResponse.Body.String()
+	for _, want := range []string{
+		"subagent-panel",
+		"api handlers",
+		`href="/ui/sessions/` + child.ID + `"`,
+		`data-subagent-key="` + child.ID + `"`,
+		"Check the handler error paths.",
+		`id="subagent-list"`,
+		"data-subagent-tokens",
+	} {
+		if !strings.Contains(parentBody, want) {
+			t.Errorf("the parent page does not contain %q:\n%s", want, parentBody)
+		}
+	}
+
+	childResponse := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+child.ID, adminToken, nil, "text/html")
+	if childResponse.Code != http.StatusOK {
+		t.Fatalf("child status = %d, want 200 (body: %s)", childResponse.Code, childResponse.Body.String())
+	}
+	childBody := childResponse.Body.String()
+	for _, want := range []string{
+		"api handlers",
+		"Check the handler error paths.",
+		`href="/ui/sessions/` + parent.ID + `"`,
+		"Back to parent session",
+		"Subagent transcript",
+		"Assigned files",
+		"main.go",
+		`data-session-kind="SUBAGENT"`,
+	} {
+		if !strings.Contains(childBody, want) {
+			t.Errorf("the child page does not contain %q:\n%s", want, childBody)
+		}
+	}
+	for _, banned := range []string{
+		"Continue review",
+		"Review submitted successfully to GitHub",
+		"Active review session in progress",
+	} {
+		if strings.Contains(childBody, banned) {
+			t.Errorf("the child page contains the review-only action %q:\n%s", banned, childBody)
+		}
+	}
+
+	// The list is reviews only; the child is reachable from its parent.
+	list := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions", adminToken, nil, "text/html")
+	listBody := list.Body.String()
+	if !strings.Contains(listBody, parent.ID) {
+		t.Error("the session list does not contain the parent review")
+	}
+	if strings.Contains(listBody, child.ID) {
+		t.Error("the session list contains the subagent child")
+	}
+}
+
+// The recorder is the seam between the fleet and the deck: a child row, its
+// own transcript, and a terminal event with the child's usage.
+func TestRecorderStartsASubagentSession(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+	h := newHarness(t, gh, llm, harnessOpts{})
+	parent := newReviewSession(t, h, "payments", 42, "Fix the flap", "", store.ReviewRunning)
+	_, deck := sessionsHandler(t, h)
+	ctx := context.Background()
+
+	run, err := deck.Recorder().StartSubagent(ctx, reviewer.SubagentSpec{
+		ParentSessionID: parent.ID,
+		InstallationID:  parent.InstallationID,
+		Owner:           parent.OrgName,
+		Repo:            parent.RepoName,
+		Number:          parent.PRNumber,
+		PRTitle:         parent.PRTitle,
+		HeadSHA:         parent.HeadSHA,
+		BaseSHA:         parent.BaseSHA,
+		Model:           "test-model",
+		Label:           "api handlers",
+		Task:            "Check the handler error paths.",
+		Paths:           []string{"main.go"},
+		Ordinal:         2,
+	})
+	if err != nil {
+		t.Fatalf("StartSubagent returned error: %v", err)
+	}
+	if run.ID() == "" {
+		t.Fatal("the subagent has no session id")
+	}
+	run.Observer().Observe(ctx, reviewer.Event{
+		Type: "subagent_task",
+		At:   time.Now(),
+		Payload: map[string]any{
+			"label": "api handlers", "task": "Check the handler error paths.", "paths": []string{"main.go"},
+		},
+	})
+	run.Finish(ctx, reviewer.SubagentOutcome{
+		Status:    store.ReviewSucceeded,
+		Summary:   `{"findings":[]}`,
+		ToolCalls: 2,
+		Usage:     &reviewer.Usage{InputTokens: 100, OutputTokens: 20, CacheReadTokens: 10},
+	})
+
+	child, err := h.db.ReviewSessionByID(ctx, run.ID())
+	if err != nil {
+		t.Fatalf("ReviewSessionByID returned error: %v", err)
+	}
+	if child.Kind != store.ReviewSessionKindSubagent {
+		t.Errorf("kind = %q, want %q", child.Kind, store.ReviewSessionKindSubagent)
+	}
+	if child.ParentSessionID != parent.ID {
+		t.Errorf("parent = %q, want %q", child.ParentSessionID, parent.ID)
+	}
+	if child.Label != "api handlers" || child.Task == "" || child.Ordinal != 2 {
+		t.Errorf("child = %+v, want the assignment fields", child)
+	}
+	if !slices.Equal(child.Paths, []string{"main.go"}) {
+		t.Errorf("paths = %v, want the assigned file", child.Paths)
+	}
+	if child.Status != store.ReviewSucceeded {
+		t.Errorf("status = %q, want %q (error: %s)", child.Status, store.ReviewSucceeded, child.Error)
+	}
+	if child.Usage == nil || child.Usage.InputTokens != 100 || child.Usage.OutputTokens != 20 {
+		t.Errorf("usage = %+v, want the reported tokens", child.Usage)
+	}
+
+	events, err := h.db.ReviewEventsAfter(ctx, child.ID, 0, store.ReviewEventsMax)
+	if err != nil {
+		t.Fatalf("reading the child events: %v", err)
+	}
+	types := make(map[string]bool, len(events))
+	for _, event := range events {
+		types[event.Type] = true
+	}
+	if !types["subagent_task"] {
+		t.Errorf("the child transcript has no subagent_task (types: %v)", types)
+	}
+	if !types["session_end"] {
+		t.Errorf("the child transcript has no session_end (types: %v)", types)
 	}
 }

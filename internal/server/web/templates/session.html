@@ -4,7 +4,12 @@
   <nav class="breadcrumb" aria-label="Breadcrumb">
     <a href="/ui/sessions"><span class="icon" aria-hidden="true">folder_open</span>Sessions</a>
     <span class="sep" aria-hidden="true">/</span>
-    <span class="current">{{short .Session.ID}}</span>
+    {{if .IsSubagent}}
+      {{if .Parent}}<a href="/ui/sessions/{{.Parent.ID}}">{{short .Parent.ID}}</a><span class="sep" aria-hidden="true">/</span>{{end}}
+      <span class="current">{{if .Session.Label}}{{.Session.Label}}{{else}}subagent{{end}}</span>
+    {{else}}
+      <span class="current">{{short .Session.ID}}</span>
+    {{end}}
   </nav>
 </div>
 
@@ -13,12 +18,18 @@
     <div class="session-banner-flags">
       <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
       <span class="session-clock"><span class="icon" aria-hidden="true">timer</span><span id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span></span>
+      {{if .IsSubagent}}<span class="pill pill-subagent"><span class="icon" aria-hidden="true">groups</span>subagent</span>{{end}}
     </div>
-    <h1>{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</h1>
-    <p class="session-banner-sub">{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}</p>
+    <h1>{{if .IsSubagent}}{{if .Session.Label}}{{.Session.Label}}{{else}}Subagent{{end}}{{else}}{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}{{end}}</h1>
+    <p class="session-banner-sub">{{if .IsSubagent}}{{if .Session.Task}}{{.Session.Task}}{{else}}No task was recorded for this subagent.{{end}}{{else}}{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}{{end}}</p>
+    {{if .IsSubagent}}<p class="session-banner-sub session-banner-pr">{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</p>{{end}}
   </div>
   <div class="session-banner-actions">
-    <a class="btn btn-quiet" href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">View PR on GitHub<span class="icon" aria-hidden="true">open_in_new</span></a>
+    {{if .IsSubagent}}
+      {{if .Parent}}<a class="btn btn-primary" href="/ui/sessions/{{.Parent.ID}}"><span class="icon" aria-hidden="true">arrow_back</span>Back to parent session</a>{{end}}
+    {{else}}
+      <a class="btn btn-quiet" href="https://github.com/{{.Session.OrgName}}/{{.Session.RepoName}}/pull/{{.Session.PRNumber}}" target="_blank" rel="noreferrer noopener">View PR on GitHub<span class="icon" aria-hidden="true">open_in_new</span></a>
+    {{end}}
   </div>
 </section>
 
@@ -27,6 +38,16 @@
     <dt>Model</dt>
     <dd>{{if .Session.Model}}{{.Session.Model}}{{else}}—{{end}}</dd>
   </div>
+  {{if .IsSubagent}}
+  <div class="fact">
+    <dt>Role</dt>
+    <dd class="is-primary">Subagent</dd>
+  </div>
+  <div class="fact">
+    <dt>Scope</dt>
+    <dd>{{len .Session.Paths}} {{if eq (len .Session.Paths) 1}}file{{else}}files{{end}}</dd>
+  </div>
+  {{end}}
   <div class="fact">
     <dt>Tool calls</dt>
     <dd class="is-primary" id="session-tool-calls">{{.Session.ToolCalls}} tool {{if eq .Session.ToolCalls 1}}call{{else}}calls{{end}}</dd>
@@ -66,10 +87,44 @@
 
 <div class="session-meta-line">
   <span>Started: {{date .Session.StartedAt}}</span>
-  {{if .Parent}}<span class="sep" aria-hidden="true">•</span><span>Continued from <a href="/ui/sessions/{{.Parent.ID}}">{{short .Parent.ID}}</a></span>{{end}}
+  {{if .Parent}}<span class="sep" aria-hidden="true">•</span><span>{{if .IsSubagent}}Subagent of{{else}}Continued from{{end}} <a href="/ui/sessions/{{.Parent.ID}}">{{short .Parent.ID}}</a></span>{{end}}
   {{if .Continuation}}<span class="sep" aria-hidden="true">•</span><span>Continued as <a href="/ui/sessions/{{.Continuation.ID}}">{{short .Continuation.ID}} ({{.Continuation.Status}})</a></span>{{end}}
   {{if and (not .Session.Usage) (not .Live)}}<span class="sep" aria-hidden="true">•</span><span>usage not reported</span>{{end}}
 </div>
+
+{{if .IsSubagent}}
+{{if .Session.Paths}}
+<details class="subagent-scope">
+  <summary><span class="icon" aria-hidden="true">folder_open</span>Assigned files <span class="badge">{{len .Session.Paths}}</span></summary>
+  <ul class="subagent-paths">
+    {{range .Session.Paths}}<li><code>{{.}}</code></li>{{end}}
+  </ul>
+</details>
+{{end}}
+{{end}}
+
+{{if .ShowSubagents}}
+<section class="subagent-panel" aria-label="Subagents of this review">
+  <div class="subagent-panel-head">
+    <h2><span class="icon" aria-hidden="true">groups</span>Subagents <span class="badge" id="subagent-count">{{.SubagentCount}}</span></h2>
+    <p>Each card is a read-only reviewer with its own transcript. Open one to follow what it read and what it reported.</p>
+  </div>
+  <div class="subagent-grid" id="subagent-list">
+    {{range .Subagents}}
+    <a class="subagent-card" href="/ui/sessions/{{.ID}}" data-subagent-id="{{.ID}}" data-subagent-key="{{.ID}}" data-subagent-status="{{.Status}}">
+      <span class="subagent-card-top">
+        <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+        <span class="subagent-ordinal">#{{.Ordinal}}</span>
+      </span>
+      <span class="subagent-label">{{if .Label}}{{.Label}}{{else}}Subagent{{end}}</span>
+      <span class="subagent-task">{{if .Task}}{{.Task}}{{else}}No task recorded{{end}}</span>
+      <span class="subagent-meta"><span data-subagent-paths>{{len .Paths}} {{if eq (len .Paths) 1}}file{{else}}files{{end}}</span><span class="sep" aria-hidden="true">·</span><span data-subagent-tools>{{.ToolCalls}} {{if eq .ToolCalls 1}}tool{{else}}tools{{end}}</span>{{if .Usage}}<span class="sep" aria-hidden="true">·</span><span data-subagent-tokens>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}</span>
+    </a>
+    {{end}}
+    <p class="subagent-empty" id="subagent-empty"{{if .SubagentCount}} hidden{{end}}>No subagent has started yet.</p>
+  </div>
+</section>
+{{end}}
 
 {{if or .ContinuationQueued .ContinuationFailed}}
 <div class="session-notices">
@@ -90,7 +145,7 @@
 </section>
 {{end}}
 
-{{if eq .Session.Status "SUCCEEDED"}}
+{{if and (eq .Session.Status "SUCCEEDED") (not .IsSubagent)}}
 <section class="actions-bar actions-bar-done">
   <div class="actions-copy actions-copy-inline">
     <span class="icon" aria-hidden="true">check_circle</span>
@@ -116,13 +171,14 @@
 
 <section class="transcript-panel" aria-label="Session transcript">
   <div class="transcript-head">
-    <h2 class="transcript-title"><span class="icon" aria-hidden="true">terminal</span>{{if .Live}}Live execution transcript{{else}}Execution transcript{{end}}</h2>
+    <h2 class="transcript-title"><span class="icon" aria-hidden="true">terminal</span>{{if .IsSubagent}}Subagent transcript{{else if .Live}}Live execution transcript{{else}}Execution transcript{{end}}</h2>
     <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="false" title="Show the model's thinking"><span class="icon" aria-hidden="true">psychology</span><span>Thinking blocks</span><span class="badge">SHOW</span></button>
   </div>
   <div class="console-window">
     <div class="console-scroll" id="console-scroll">
       <div class="timeline console-log" id="timeline" role="log"
           data-session-id="{{.Session.ID}}"
+          data-session-kind="{{.Session.Kind}}"
           data-live="{{if .Live}}true{{else}}false{{end}}"
           data-started-at="{{.Session.StartedAt.Format "2006-01-02T15:04:05Z07:00"}}">
         <div class="timeline-empty" id="timeline-empty"><span class="icon" aria-hidden="true">progress_activity</span> Loading the session…</div>
