@@ -14,7 +14,7 @@ It is read-only in what it does: the review, the replies in the threads it opene
 
 ## The deck
 
-The operator deck is served at `/ui`: a home view, the review sessions, the recorded rules, and the queue. It opens in dark and can be switched to light or follow the system theme. Every page is behind a sign-in form for the users in `moderation.admin_users`, with a remember-me option; the same user and password work over HTTP Basic for scripts and the metrics scraper.
+The operator deck is served at `/ui`: a home view, the review sessions, the recorded rules, and the queue. It opens in dark and can be switched to light or follow the system theme. Every page is behind a sign-in form for the users in `moderation.admin_users`, with a remember-me option; the same user and password work over HTTP Basic for scripts and the metrics scraper. When a review used subagent reviewers, its session page lists them; each opens its own transcript and links back to the review.
 
 |                     Home                      |                       Sessions                        |
 | :-------------------------------------------: | :---------------------------------------------------: |
@@ -270,6 +270,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
 | `review.max_total_tokens` | unset | Per-session token ceiling, counting input, output and cache tokens together. The session stops before its next step once the reported usage passes it. `0` or unset is no limit; see [Token usage and cost](#token-usage-and-cost) |
 | `review.max_cost_usd` | unset | Per-session estimated-cost ceiling. Requires `price_input_per_mtok` and `price_output_per_mtok` on the chat provider. `0` or unset is no limit |
+| `review.subagents` | off | Subagent reviewers for a large pull request. `enabled`, `min_changed_files` (20), `max_concurrency` (3), `max_runs` (8), `max_turns` (12), `timeout` (`5m`), `model` (inherit), `verify` (`true`) and `require_coverage` (`true`). Each child is a full model session, so this multiplies token use; see [Subagent reviewers](#subagent-reviewers) |
 | `compaction.enabled` | `true` | Whether a session summarizes its older context once it reaches `compaction.trigger_tokens`. On by default; set it to `false` to let the model's context window fill |
 | `compaction.trigger_tokens` | `262144` | The estimated context size at which older messages are summarized. Nothing is compacted before this point, so a 256K trigger leaves a large pull request's details in context |
 | `compaction.reserve_tokens` | `16384` | Output budget kept below the trigger, so the session can still answer after the context grows |
@@ -425,6 +426,32 @@ The comment is the trigger, and the only one. A GitHub App cannot be requested a
 Rumil answers a command with a `+1` reaction on the comment as soon as it has taken it, so a request that was picked up looks different from one that was dropped. The review itself follows a minute later. A later push is not reviewed on its own; ask again to review it, and the next round reads what the earlier ones raised.
 
 Each review also opens a **Rumil review** check run on the reviewed commit. It shows as in progress while the session runs and completes as success for an approval, neutral for a comment-only review, and action required for requested changes. A failed session completes it as a failure with the reason. One check run covers a commit, so a continuation updates it rather than adding another. This feature needs the App's **Checks: Read and write** repository permission, accepted on the installation: with Checks on Read only, or off, GitHub refuses the check-run call, Rumil logs the refusal, and the review still posts without a check. Set `server.public_url` to link the check to the session page.
+
+### Subagent reviewers
+
+A pull request that changes a hundred files is a different problem from a review that found another thing to say. The single session spends its context reading the diff before it reasons about it. `review.subagents` splits that work across a bounded fleet:
+
+```yaml
+review:
+  subagents:
+    enabled: true
+    min_changed_files: 20       # below this, the review is unchanged
+    max_concurrency: 3          # children running at once
+    max_runs: 8                 # children per review, verification included
+    max_turns: 12               # model steps per child
+    timeout: "5m"               # one child
+    model: ""                   # empty inherits the leader's model
+    verify: true                # require the verification pass
+    require_coverage: true      # refuse the first submit with unassigned files
+```
+
+The leader keeps every GitHub write: it is the only session that can submit a review, resolve a thread, or post a comment. It splits the changed files into groups by directory, package, or concern and calls `spawn_reviewer` with those groups. Each child gets a read-only tool set — the diff, the file and search reads, and `search_memory` when memory is on — and returns a JSON report of candidate findings. Children cannot post, see the conversation, use MCP tools, or start another generation. Every changed file must be assigned to a group or skipped with `skip_changed_paths` and a reason; the first submit with a gap is refused, and a later one proceeds with the gap named in the summary.
+
+With `verify: true`, the leader calls `verify_review` before submitting. That child checks each candidate finding against the code, drops duplicates and unprovable claims, and reviews any changed files no subagent examined. The verification report is a tool result, so the leader can apply its verdicts; the engine can require the call but cannot prove every rejected finding was dropped, which is why the report stays in the transcript.
+
+The whole fleet shares the review's token and cost budget. Each child's usage is added to the parent's total, and the child is stopped when the combined usage crosses `review.max_total_tokens` or `review.max_cost_usd`. A child on a cheaper `model` makes the estimated cost conservative, because the estimate uses the leader's prices.
+
+The session page shows the fleet: one card per child with its status, assigned files, tool calls, tokens and findings. Opening a card shows that child's own transcript; **Back to parent session** and the breadcrumb return to the review. Subagent pages have no continuation or cancel action of their own.
 
 ### Continuing a failed review
 
