@@ -1065,6 +1065,7 @@ func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
 	parentBody := parentResponse.Body.String()
 	for _, want := range []string{
 		"subagent-panel",
+		`<details class="subagent-panel">`,
 		"api handlers",
 		`href="/ui/sessions/` + child.ID + `"`,
 		`data-subagent-key="` + child.ID + `"`,
@@ -1075,6 +1076,9 @@ func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
 		if !strings.Contains(parentBody, want) {
 			t.Errorf("the parent page does not contain %q:\n%s", want, parentBody)
 		}
+	}
+	if strings.Contains(parentBody, `<details class="subagent-panel" open`) {
+		t.Error("the subagent panel should start collapsed")
 	}
 
 	childResponse := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+child.ID, adminToken, nil, "text/html")

@@ -104,26 +104,29 @@
 {{end}}
 
 {{if .ShowSubagents}}
-<section class="subagent-panel" aria-label="Subagents of this review">
-  <div class="subagent-panel-head">
+<details class="subagent-panel">
+  <summary class="subagent-panel-head">
     <h2><span class="icon" aria-hidden="true">groups</span>Subagents <span class="badge" id="subagent-count">{{.SubagentCount}}</span></h2>
+    <span class="icon subagent-toggle" aria-hidden="true">chevron_right</span>
+  </summary>
+  <div class="subagent-panel-body">
     <p>Each card is a read-only reviewer with its own transcript. Open one to follow what it read and what it reported.</p>
+    <div class="subagent-grid" id="subagent-list">
+      {{range .Subagents}}
+      <a class="subagent-card" href="/ui/sessions/{{.ID}}" data-subagent-id="{{.ID}}" data-subagent-key="{{.ID}}" data-subagent-status="{{.Status}}">
+        <span class="subagent-card-top">
+          <span class="pill status-{{lower .Status}}">{{.Status}}</span>
+          <span class="subagent-ordinal">#{{.Ordinal}}</span>
+        </span>
+        <span class="subagent-label">{{if .Label}}{{.Label}}{{else}}Subagent{{end}}</span>
+        <span class="subagent-task">{{if .Task}}{{.Task}}{{else}}No task recorded{{end}}</span>
+        <span class="subagent-meta"><span data-subagent-paths>{{len .Paths}} {{if eq (len .Paths) 1}}file{{else}}files{{end}}</span><span class="sep" aria-hidden="true">·</span><span data-subagent-tools>{{.ToolCalls}} {{if eq .ToolCalls 1}}tool{{else}}tools{{end}}</span>{{if .Usage}}<span class="sep" aria-hidden="true">·</span><span data-subagent-tokens>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}</span>
+      </a>
+      {{end}}
+      <p class="subagent-empty" id="subagent-empty"{{if .SubagentCount}} hidden{{end}}>No subagent has started yet.</p>
+    </div>
   </div>
-  <div class="subagent-grid" id="subagent-list">
-    {{range .Subagents}}
-    <a class="subagent-card" href="/ui/sessions/{{.ID}}" data-subagent-id="{{.ID}}" data-subagent-key="{{.ID}}" data-subagent-status="{{.Status}}">
-      <span class="subagent-card-top">
-        <span class="pill status-{{lower .Status}}">{{.Status}}</span>
-        <span class="subagent-ordinal">#{{.Ordinal}}</span>
-      </span>
-      <span class="subagent-label">{{if .Label}}{{.Label}}{{else}}Subagent{{end}}</span>
-      <span class="subagent-task">{{if .Task}}{{.Task}}{{else}}No task recorded{{end}}</span>
-      <span class="subagent-meta"><span data-subagent-paths>{{len .Paths}} {{if eq (len .Paths) 1}}file{{else}}files{{end}}</span><span class="sep" aria-hidden="true">·</span><span data-subagent-tools>{{.ToolCalls}} {{if eq .ToolCalls 1}}tool{{else}}tools{{end}}</span>{{if .Usage}}<span class="sep" aria-hidden="true">·</span><span data-subagent-tokens>{{tokens .Usage.TotalTokens}} tokens</span>{{end}}</span>
-    </a>
-    {{end}}
-    <p class="subagent-empty" id="subagent-empty"{{if .SubagentCount}} hidden{{end}}>No subagent has started yet.</p>
-  </div>
-</section>
+</details>
 {{end}}
 
 {{if or .ContinuationQueued .ContinuationFailed}}

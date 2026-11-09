@@ -2480,8 +2480,25 @@ textarea:focus {
 
 .subagent-panel-head {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.subagent-panel-head::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-panel-head::marker {
+  content: "";
+}
+
+.subagent-panel-head:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
 }
 
 .subagent-panel-head h2 {
@@ -2498,7 +2515,22 @@ textarea:focus {
   font-size: 18px;
 }
 
-.subagent-panel-head p {
+.subagent-toggle {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.subagent-panel[open] .subagent-toggle {
+  transform: rotate(90deg);
+}
+
+.subagent-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.subagent-panel-body p {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
