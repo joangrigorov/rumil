@@ -82,6 +82,9 @@ type Request struct {
 	// primary installation, or, when several are configured, the first one
 	// that can read the repository.
 	InstallationID int64
+	// Subagents records the fleet's child sessions for the observation deck.
+	// Nil runs the fleet without Deck rows, which is what the CLI does.
+	Subagents SubagentRecorder
 }
 
 // Result reports what the review produced.
@@ -601,12 +604,20 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 		mu.Unlock()
 	}
 
+	// The tracker sums what the provider reports per step. The budget reads it
+	// between steps, so a session over its limit stops before paying for
+	// another request. The fleet shares both: a child's usage is part of this
+	// session's bill.
+	tracker := &usageTracker{}
+	budget := e.newUsageBudget(provider, reviewConfig)
+
 	specs := githubTools.Specs()
 	mcpSpecs, closeMCP := e.mcpTools(ctx, req, meta.HeadSHA, snap)
 	defer closeMCP()
 	specs = append(specs, mcpSpecs...)
 	memoryBlock := ""
 	memoryOn := e.memory != nil
+	var memorySpecs []mcpservers.Spec
 	if e.memory != nil {
 		// Pre-retrieval is best effort: an embedding provider that is down costs
 		// this review its recorded rules, which is the state an operator who
@@ -614,7 +625,8 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 		// The tools stay registered either way: memory is configured, so the
 		// session can still search, and a session that can search is told what
 		// a recorded rule is.
-		specs = append(specs, e.memory.tools(req)...)
+		memorySpecs = e.memory.tools(req)
+		specs = append(specs, memorySpecs...)
 		block, matches, retrieveErr := e.memory.retrieve(ctx, req, meta, guidelines != "")
 		if retrieveErr != nil {
 			e.logger.Warn("pre-retrieval of recorded rules failed, the review runs without them", "error", retrieveErr)
@@ -631,6 +643,31 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 				}})
 			}
 		}
+	}
+
+	// The fleet is offered only above the configured changed-file threshold.
+	// Below it the review keeps exactly the tool set and prompt it had before
+	// subagents existed.
+	var fleet *fleet
+	if e.cfg.Review.Subagents.Enabled && len(meta.ChangedFiles) >= e.cfg.Review.Subagents.MinChangedFiles {
+		fleet = newFleet(fleetOptions{
+			Engine:       e,
+			Config:       e.cfg.Review.Subagents,
+			Logger:       e.logger,
+			Request:      req,
+			Metadata:     meta,
+			ReadSpecs:    subagentReadSpecs(githubTools.Specs(), memorySpecs),
+			PriorHistory: priorHistory,
+			Ignored:      effective.Ignores,
+			Recorder:     req.Subagents,
+			Observer:     observer,
+			Provider:     provider,
+			Model:        provider.ModelName,
+			Tracker:      tracker,
+			Budget:       budget,
+		})
+		specs = append(specs, fleet.specs()...)
+		specs = fleet.wrapSubmit(specs)
 	}
 
 	// review.resolve_threads off takes the tool away, and the prompt rule that
@@ -650,6 +687,11 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 		return nil, fmt.Errorf("building the review tools: %w", err)
 	}
 
+	var fleetPrompt *FleetContext
+	if fleet != nil {
+		fleetPrompt = fleet.promptContext()
+	}
+
 	session, err := kit.New(ctx, e.sessionOptions(provider, SystemPrompt(SessionContext{
 		Guidelines:         guidelines,
 		ProposedGuidelines: proposedGuidelines,
@@ -661,9 +703,13 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 		LocalFiles:         snap != nil,
 		MCPTools:           len(mcpSpecs) > 0,
 		RepositorySettings: RepositorySettingsBlock(effective, repoFileFound),
+		Fleet:              fleetPrompt,
 	}), sessionTools, maxTurns, observer != nil))
 	if err != nil {
 		return nil, fmt.Errorf("starting the review session: %w", err)
+	}
+	if fleet != nil {
+		fleet.session = session
 	}
 	stopSteps := session.OnPrepareStep(kit.HookPriorityNormal, func(step kit.PrepareStepHook) *kit.PrepareStepResult {
 		mu.Lock()
@@ -675,11 +721,6 @@ func (e *Engine) reviewAttempt(ctx context.Context, req Request) (final *Result,
 	})
 	defer stopSteps()
 
-	// The tracker sums what the provider reports per step. The budget reads it
-	// between steps, so a session over its limit stops before paying for
-	// another request.
-	tracker := &usageTracker{}
-	budget := e.newUsageBudget(provider, reviewConfig)
 	if budget.enabled() {
 		stopBudget := session.OnPrepareStep(kit.HookPriorityHigh, func(kit.PrepareStepHook) *kit.PrepareStepResult {
 			mu.Lock()
