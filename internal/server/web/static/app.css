@@ -2758,6 +2758,93 @@ a.event.event-subagent-row:focus-visible {
   font-size: 20px;
 }
 
+/* The fleet strip is pinned between the transcript header and the scrolling
+   log. One chip per child keeps the status visible without taking the log's
+   space. */
+.fleet-strip {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.fleet-strip-title {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fleet-strip-title .icon {
+  color: var(--primary);
+  font-size: 15px;
+}
+
+.fleet-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 1px;
+  scrollbar-width: thin;
+}
+
+.fleet-chip {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--surface-container);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.fleet-chip:hover {
+  background: var(--surface-high);
+}
+
+a.fleet-chip:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.fleet-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.fleet-chip.fleet-running .fleet-dot {
+  background: var(--primary);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.fleet-chip.fleet-succeeded .fleet-dot {
+  background: var(--secondary);
+}
+
+.fleet-chip.fleet-failed .fleet-dot {
+  background: var(--danger);
+}
+
 .console-window {
   display: flex;
   flex-direction: column;
@@ -4149,8 +4236,20 @@ body.console-fixed .session-facts {
 
 @media (max-width: 720px) {
   .event-subagent-row .event-kind,
-  .event-subagent-row .subagent-row-meta {
+  .event-subagent-row .subagent-row-meta,
+  .fleet-strip-word {
     display: none;
+  }
+
+  .fleet-strip,
+  .fleet-chips {
+    gap: 4px;
+  }
+
+  .fleet-chip {
+    gap: 4px;
+    padding: 0 5px;
+    font-size: 10px;
   }
 
   .session-banner-actions {

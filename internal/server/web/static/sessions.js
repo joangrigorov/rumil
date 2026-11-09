@@ -222,11 +222,13 @@
         break;
 
       case "subagent_start":
+        upsertFleetChip(payload, false);
         renderSubagentMarker(payload, false);
         setActivity("Subagent: " + (payload.label || "reviewer"));
         break;
 
       case "subagent_finish":
+        upsertFleetChip(payload, true);
         renderSubagentMarker(payload, true);
         setActivity("Thinking…");
         break;
@@ -328,8 +330,15 @@
 
     if (payload.status) {
       if (statusBadge) {
-        statusBadge.textContent = payload.status;
         statusBadge.className = "pill status-" + payload.status.toLowerCase();
+        statusBadge.title = payload.status;
+        var statusLabel = statusBadge.querySelector(".visually-hidden");
+        if (!statusLabel) {
+          statusLabel = document.createElement("span");
+          statusLabel.className = "visually-hidden";
+          statusBadge.append(statusLabel);
+        }
+        statusLabel.textContent = payload.status;
       }
     }
 
@@ -664,6 +673,72 @@
       }
     }
     return null;
+  }
+
+  // sortFleetChips keeps running agents at the front of the pinned strip and
+  // falls back to assignment order, so a running child is always visible.
+  function sortFleetChips(list) {
+    var nodes = Array.prototype.slice.call(list.querySelectorAll(".fleet-chip"));
+    nodes.sort(function(a, b) {
+      var aRunning = a.getAttribute("data-fleet-status") === "RUNNING" ? 0 : 1;
+      var bRunning = b.getAttribute("data-fleet-status") === "RUNNING" ? 0 : 1;
+      if (aRunning !== bRunning) {
+        return aRunning - bRunning;
+      }
+      return (Number(a.getAttribute("data-fleet-ordinal")) || 0) -
+        (Number(b.getAttribute("data-fleet-ordinal")) || 0);
+    });
+    for (var i = 0; i < nodes.length; i++) {
+      list.append(nodes[i]);
+    }
+  }
+
+  // upsertFleetChip pins one compact status chip above the transcript. The
+  // strip stays in place while the log scrolls, so a running child is always
+  // visible.
+  function upsertFleetChip(payload, finished) {
+    var strip = document.getElementById("fleet-strip");
+    var list = document.getElementById("fleet-list");
+    if (!strip || !list) {
+      return;
+    }
+    var key = subagentKey(payload);
+    var chip = findSubagentElement(list, key, "data-fleet-key");
+    if (!chip) {
+      chip = document.createElement(payload.session_id ? "a" : "div");
+      chip.className = "fleet-chip fleet-running";
+      chip.setAttribute("data-fleet-key", key);
+      chip.setAttribute("data-fleet-ordinal", String(payload.ordinal || 0));
+      if (payload.session_id) {
+        chip.href = "/ui/sessions/" + encodeURIComponent(payload.session_id);
+      }
+      if (payload.task) {
+        chip.setAttribute("data-fleet-task", payload.task);
+      }
+
+      var dot = span("fleet-dot", "");
+      dot.setAttribute("aria-hidden", "true");
+      var label = span("fleet-label", payload.label || "subagent");
+      chip.append(dot, label);
+      list.append(chip);
+    }
+
+    var status = finished ? (payload.status || "SUCCEEDED") : "RUNNING";
+    chip.className = "fleet-chip fleet-" + status.toLowerCase();
+    chip.setAttribute("data-fleet-status", status);
+    sortFleetChips(list);
+    if (payload.session_id) {
+      chip.setAttribute("aria-label", (payload.label || "subagent") + ", " + status);
+    }
+    var chipLabel = chip.querySelector(".fleet-label").textContent || "subagent";
+    var chipTask = chip.getAttribute("data-fleet-task") || "";
+    chip.title = chipLabel + " · " + status + (chipTask ? " — " + chipTask : "");
+    strip.hidden = false;
+
+    var counter = document.getElementById("fleet-count");
+    if (counter) {
+      counter.textContent = String(list.querySelectorAll(".fleet-chip").length);
+    }
   }
 
   // renderSubagentMarker keeps one compact row per child in the transcript.

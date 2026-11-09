@@ -16,7 +16,7 @@
 <section class="session-banner">
   <div class="session-banner-main">
     <div class="session-banner-flags">
-      <span class="pill status-{{lower .Session.Status}}" id="session-status">{{.Session.Status}}</span>
+      <span class="pill status-{{lower .Session.Status}}" id="session-status" title="{{.Session.Status}}"><span class="visually-hidden">{{.Session.Status}}</span></span>
       <span class="session-clock"><span class="icon" aria-hidden="true">timer</span><span id="session-clock">{{duration .Session.StartedAt .Session.FinishedAt}}</span></span>
       {{if .IsSubagent}}<span class="pill pill-subagent"><span class="icon" aria-hidden="true">groups</span>subagent</span>{{end}}
     </div>
@@ -151,6 +151,19 @@
     <h2 class="transcript-title"><span class="icon" aria-hidden="true">terminal</span>{{if .IsSubagent}}Subagent transcript{{else if .Live}}Live execution transcript{{else}}Execution transcript{{end}}</h2>
     <button type="button" class="thinking-toggle" id="thinking-toggle" aria-pressed="false" title="Show the model's thinking"><span class="icon" aria-hidden="true">psychology</span><span>Thinking blocks</span><span class="badge">SHOW</span></button>
   </div>
+  {{if .ShowFleet}}
+  <section class="fleet-strip" id="fleet-strip" aria-label="Subagents for this review"{{if not .SubagentCount}} hidden{{end}}>
+    <span class="fleet-strip-title"><span class="icon" aria-hidden="true">groups</span><span class="fleet-strip-word">Subagents</span> <span class="badge" id="fleet-count">{{.SubagentCount}}</span></span>
+    <div class="fleet-chips" id="fleet-list">
+      {{range .Subagents}}
+      <a class="fleet-chip fleet-{{lower .Status}}" href="/ui/sessions/{{.ID}}" data-fleet-key="{{.ID}}" data-fleet-status="{{.Status}}" data-fleet-ordinal="{{.Ordinal}}" data-fleet-task="{{.Task}}" title="{{if .Label}}{{.Label}}{{else}}Subagent{{end}} · {{.Status}}{{if .Task}} — {{.Task}}{{end}}" aria-label="{{if .Label}}{{.Label}}{{else}}Subagent{{end}}, {{.Status}}">
+        <span class="fleet-dot" aria-hidden="true"></span>
+        <span class="fleet-label">{{if .Label}}{{.Label}}{{else}}Subagent{{end}}</span>
+      </a>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
   <div class="console-window">
     <div class="console-scroll" id="console-scroll">
       <div class="timeline console-log" id="timeline" role="log"

@@ -451,7 +451,7 @@ With `verify: true`, the leader calls `verify_review` before submitting. That ch
 
 The whole fleet shares the review's token and cost budget. Each child's usage is added to the parent's total, and the child is stopped when the combined usage crosses `review.max_total_tokens` or `review.max_cost_usd`. A child on a cheaper `model` makes the estimated cost conservative, because the estimate uses the leader's prices.
 
-The session transcript shows one compact row per child with its status, tools and findings. The row opens that child's own transcript; **Back to parent session** and the breadcrumb return to the review. Subagent pages have no continuation or cancel action of their own.
+The review transcript mentions each child as it starts, and a compact strip pinned above the log keeps the fleet visible while the log scrolls. Running children come first; a row or chip opens that child's own transcript, and **Back to parent session** plus the breadcrumb return to the review. Subagent pages have no continuation or cancel action of their own.
 
 ### Continuing a failed review
 

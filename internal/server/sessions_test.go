@@ -122,6 +122,7 @@ func TestObservationDeckListsAndFiltersSessions(t *testing.T) {
 		"Add a retry",
 		"SUCCEEDED",
 		"FAILED",
+		"visually-hidden",
 		`href="/ui/sessions/` + succeeded.ID + `"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -1050,7 +1051,7 @@ func newSubagentSession(t *testing.T, h *harness, parent store.ReviewSession, la
 	return finished
 }
 
-func TestObservationDeckKeepsSubagentsOutOfTheReviewList(t *testing.T) {
+func TestObservationDeckPinsTheSubagentFleetAndLinksBack(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -1063,17 +1064,20 @@ func TestObservationDeckKeepsSubagentsOutOfTheReviewList(t *testing.T) {
 		t.Fatalf("parent status = %d, want 200 (body: %s)", parentResponse.Code, parentResponse.Body.String())
 	}
 	parentBody := parentResponse.Body.String()
-	if !strings.Contains(parentBody, `data-session-kind="REVIEW"`) {
-		t.Error("the parent page is not marked as a review transcript")
-	}
-	for _, banned := range []string{
-		"subagent-panel",
-		`id="subagent-list"`,
-		child.ID,
+	for _, want := range []string{
+		`data-session-kind="REVIEW"`,
+		`class="fleet-strip"`,
+		`id="fleet-list"`,
+		`data-fleet-key="` + child.ID + `"`,
+		`href="/ui/sessions/` + child.ID + `"`,
+		"api handlers",
 	} {
-		if strings.Contains(parentBody, banned) {
-			t.Errorf("the parent page still renders the separate subagent list %q:\n%s", banned, parentBody)
+		if !strings.Contains(parentBody, want) {
+			t.Errorf("the parent page does not contain %q:\n%s", want, parentBody)
 		}
+	}
+	if strings.Contains(parentBody, "subagent-panel") {
+		t.Error("the parent page still renders the old subagent panel")
 	}
 
 	childResponse := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+child.ID, adminToken, nil, "text/html")

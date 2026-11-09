@@ -153,6 +153,12 @@ type reviewSessionPage struct {
 	// IsSubagent marks a child session: its parent is the review that spawned
 	// it, not an earlier attempt at the same review.
 	IsSubagent bool
+	// Subagents is the compact fleet index pinned above the transcript. The
+	// rows in the log are the spawn mentions; this strip stays visible while
+	// the log scrolls.
+	Subagents     []store.ReviewSession
+	SubagentCount int
+	ShowFleet     bool
 	// CanContinue is set when the session failed without submitting a review
 	// and has not been continued yet.
 	CanContinue bool
@@ -349,6 +355,32 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		default:
 			s.logger.Warn("reading the parent session failed", "session_id", session.ID, "error", parentErr)
 		}
+	}
+
+	if !page.IsSubagent {
+		subagents, subagentErr := s.db.ListSubagentSessions(r.Context(), session.ID)
+		if subagentErr != nil {
+			s.logger.Warn("listing the session's subagents failed", "session_id", session.ID, "error", subagentErr)
+		} else {
+			// The pinned strip answers "what is running" first, then keeps
+			// the assignment order for the rest.
+			slices.SortStableFunc(subagents, func(a, b store.ReviewSession) int {
+				aRunning := a.Status == store.ReviewRunning
+				bRunning := b.Status == store.ReviewRunning
+				switch {
+				case aRunning && !bRunning:
+					return -1
+				case !aRunning && bRunning:
+					return 1
+				}
+				return a.Ordinal - b.Ordinal
+			})
+			page.Subagents = subagents
+			page.SubagentCount = len(subagents)
+		}
+		// A live review keeps the strip in the page before its first child
+		// starts, so the SSE handler has somewhere to pin the chip.
+		page.ShowFleet = page.SubagentCount > 0 || page.Live
 	}
 
 	if !page.IsSubagent && session.Continuable() == nil {
