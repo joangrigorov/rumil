@@ -1050,7 +1050,7 @@ func newSubagentSession(t *testing.T, h *harness, parent store.ReviewSession, la
 	return finished
 }
 
-func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
+func TestObservationDeckKeepsSubagentsOutOfTheReviewList(t *testing.T) {
 	gh := testutil.NewFakeGitHub(t)
 	llm := testutil.NewFakeLLM(t)
 	h := newHarness(t, gh, llm, harnessOpts{})
@@ -1063,22 +1063,17 @@ func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
 		t.Fatalf("parent status = %d, want 200 (body: %s)", parentResponse.Code, parentResponse.Body.String())
 	}
 	parentBody := parentResponse.Body.String()
-	for _, want := range []string{
-		"subagent-panel",
-		`<details class="subagent-panel">`,
-		"api handlers",
-		`href="/ui/sessions/` + child.ID + `"`,
-		`data-subagent-key="` + child.ID + `"`,
-		"Check the handler error paths.",
-		`id="subagent-list"`,
-		"data-subagent-tokens",
-	} {
-		if !strings.Contains(parentBody, want) {
-			t.Errorf("the parent page does not contain %q:\n%s", want, parentBody)
-		}
+	if !strings.Contains(parentBody, `data-session-kind="REVIEW"`) {
+		t.Error("the parent page is not marked as a review transcript")
 	}
-	if strings.Contains(parentBody, `<details class="subagent-panel" open`) {
-		t.Error("the subagent panel should start collapsed")
+	for _, banned := range []string{
+		"subagent-panel",
+		`id="subagent-list"`,
+		child.ID,
+	} {
+		if strings.Contains(parentBody, banned) {
+			t.Errorf("the parent page still renders the separate subagent list %q:\n%s", banned, parentBody)
+		}
 	}
 
 	childResponse := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions/"+child.ID, adminToken, nil, "text/html")
@@ -1110,7 +1105,8 @@ func TestObservationDeckShowsSubagentsAndLinksBothWays(t *testing.T) {
 		}
 	}
 
-	// The list is reviews only; the child is reachable from its parent.
+	// The list is reviews only; the child is reached from the parent's
+	// transcript stream.
 	list := moderatedRequest(t, handler, http.MethodGet, "/ui/sessions", adminToken, nil, "text/html")
 	listBody := list.Body.String()
 	if !strings.Contains(listBody, parent.ID) {

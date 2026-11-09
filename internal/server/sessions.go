@@ -153,12 +153,6 @@ type reviewSessionPage struct {
 	// IsSubagent marks a child session: its parent is the review that spawned
 	// it, not an earlier attempt at the same review.
 	IsSubagent bool
-	// Subagents is the children a review spawned, newest assignment last.
-	// ShowSubagents keeps the panel in the page while a live review has not
-	// started one yet, so the SSE handler has somewhere to put the first card.
-	Subagents     []store.ReviewSession
-	SubagentCount int
-	ShowSubagents bool
 	// CanContinue is set when the session failed without submitting a review
 	// and has not been continued yet.
 	CanContinue bool
@@ -355,20 +349,6 @@ func (s *SessionsUI) detail(w http.ResponseWriter, r *http.Request) {
 		default:
 			s.logger.Warn("reading the parent session failed", "session_id", session.ID, "error", parentErr)
 		}
-	}
-
-	if !page.IsSubagent {
-		// The panel is the child index. An empty list is still rendered while
-		// the review runs, because a child can start after this page loaded;
-		// the SSE stream fills the cards in.
-		subagents, subagentErr := s.db.ListSubagentSessions(r.Context(), session.ID)
-		if subagentErr != nil {
-			s.logger.Warn("listing the session's subagents failed", "session_id", session.ID, "error", subagentErr)
-		} else {
-			page.Subagents = subagents
-			page.SubagentCount = len(subagents)
-		}
-		page.ShowSubagents = page.SubagentCount > 0 || page.Live
 	}
 
 	if !page.IsSubagent && session.Continuable() == nil {

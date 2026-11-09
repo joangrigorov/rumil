@@ -2466,149 +2466,82 @@ textarea:focus {
   color: var(--faint);
 }
 
-/* ---- subagent panel ---------------------------------------------------- */
+/* ---- subagent transcript rows ----------------------------------------- */
 
-.subagent-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 20px;
-  border-radius: var(--radius-lg);
-  background: var(--surface-low);
-  box-shadow: var(--shadow-sm);
-}
-
-.subagent-panel-head {
-  display: flex;
+.event.event-subagent-row {
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.subagent-panel-head::-webkit-details-marker {
-  display: none;
-}
-
-.subagent-panel-head::marker {
-  content: "";
-}
-
-.subagent-panel-head:focus-visible {
-  border-radius: var(--radius-sm);
-  outline: 2px solid var(--primary);
-  outline-offset: 4px;
-}
-
-.subagent-panel-head h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: 16px;
-  line-height: 22px;
-}
-
-.subagent-panel-head h2 .icon {
-  color: var(--primary);
-  font-size: 18px;
-}
-
-.subagent-toggle {
-  color: var(--muted);
-  transition: transform 0.15s ease;
-}
-
-.subagent-panel[open] .subagent-toggle {
-  transform: rotate(90deg);
-}
-
-.subagent-panel-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.subagent-panel-body p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 17px;
-}
-
-.subagent-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
-}
-
-.subagent-card {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 12px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  background: var(--surface-container);
+  height: 30px;
+  padding: 4px 10px;
   color: inherit;
   text-decoration: none;
-  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-a.subagent-card:hover {
-  border-color: var(--line);
+a.event.event-subagent-row:hover {
   background: var(--surface-high);
 }
 
-a.subagent-card:focus-visible {
+a.event.event-subagent-row:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 
-.subagent-card-top {
-  display: flex;
+.event-subagent .event-glyph,
+.event-subagent-task .event-glyph {
+  color: var(--primary);
+}
+
+.event-subagent-row .event-body {
+  flex: 1;
+  flex-direction: row;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+  height: 20px;
 }
 
-.subagent-ordinal {
-  color: var(--faint);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.subagent-label {
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 19px;
-  overflow-wrap: anywhere;
-}
-
-.subagent-task {
-  display: -webkit-box;
+.subagent-row-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  color: var(--muted);
+  color: var(--ink);
+  font-family: var(--mono);
   font-size: 12px;
   line-height: 16px;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.subagent-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  color: var(--faint);
+.subagent-row-status {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.subagent-row-status.status-running {
+  color: var(--primary);
+}
+
+.subagent-row-status.status-succeeded {
+  color: var(--secondary);
+}
+
+.subagent-row-status.status-failed {
+  color: var(--danger);
+}
+
+.subagent-row-meta {
+  flex: none;
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
+  white-space: nowrap;
 }
 
-.subagent-empty {
-  margin: 0;
+.subagent-row-open {
+  flex: none;
   color: var(--faint);
-  font-size: 12px;
+  font-size: 16px;
 }
 
 .subagent-scope {
@@ -2635,33 +2568,6 @@ a.subagent-card:focus-visible {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
-}
-
-.event-subagent .event-glyph,
-.event-subagent-task .event-glyph {
-  color: var(--primary);
-}
-
-.subagent-marker-result {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.subagent-marker-result.status-running {
-  color: var(--primary);
-}
-
-.subagent-marker-result.status-succeeded {
-  color: var(--secondary);
-}
-
-.subagent-marker-result.status-failed {
-  color: var(--danger);
-}
-
-.subagent-link {
-  font-size: 12px;
 }
 
 .session-state {
@@ -3900,8 +3806,6 @@ body[data-thinking="off"] .thinking {
 :root[data-theme="light"] .session-banner,
 :root[data-theme="light"] .actions-bar,
 :root[data-theme="light"] .transcript-panel,
-:root[data-theme="light"] .subagent-panel,
-:root[data-theme="light"] .subagent-card,
 :root[data-theme="light"] .subagent-scope,
 :root[data-theme="light"] .home-alert,
 :root[data-theme="light"] .home-clear,
@@ -3953,15 +3857,9 @@ body.console-fixed .session-facts,
 body.console-fixed .session-meta-line,
 body.console-fixed .session-notices,
 body.console-fixed .actions-bar,
-body.console-fixed .subagent-panel,
 body.console-fixed .subagent-scope,
 body.console-fixed .notice {
   flex: none;
-}
-
-body.console-fixed .subagent-panel {
-  max-height: 38vh;
-  overflow: auto;
 }
 
 body.console-fixed .transcript-panel {
@@ -4247,15 +4145,12 @@ body.console-fixed .session-facts {
   }
 }
 
-/* ---- subagent panel on small screens ---------------------------------- */
+/* ---- subagent rows on small screens ----------------------------------- */
 
 @media (max-width: 720px) {
-  .subagent-panel {
-    padding: 12px;
-  }
-
-  .subagent-grid {
-    grid-template-columns: 1fr;
+  .event-subagent-row .event-kind,
+  .event-subagent-row .subagent-row-meta {
+    display: none;
   }
 
   .session-banner-actions {
