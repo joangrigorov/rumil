@@ -85,6 +85,30 @@ models:
 	if cfg.Review.GuidelinesRef != DefaultGuidelinesRef {
 		t.Errorf("review.guidelines_ref = %q, want %q", cfg.Review.GuidelinesRef, DefaultGuidelinesRef)
 	}
+	if cfg.Review.Subagents.Enabled {
+		t.Error("review.subagents.enabled = true, want the feature off by default")
+	}
+	if got := cfg.Review.Subagents.MinChangedFiles; got != DefaultSubagentMinChangedFiles {
+		t.Errorf("review.subagents.min_changed_files = %d, want %d", got, DefaultSubagentMinChangedFiles)
+	}
+	if got := cfg.Review.Subagents.MaxConcurrency; got != DefaultSubagentConcurrency {
+		t.Errorf("review.subagents.max_concurrency = %d, want %d", got, DefaultSubagentConcurrency)
+	}
+	if got := cfg.Review.Subagents.MaxRuns; got != DefaultSubagentMaxRuns {
+		t.Errorf("review.subagents.max_runs = %d, want %d", got, DefaultSubagentMaxRuns)
+	}
+	if got := cfg.Review.Subagents.MaxTurns; got != DefaultSubagentMaxTurns {
+		t.Errorf("review.subagents.max_turns = %d, want %d", got, DefaultSubagentMaxTurns)
+	}
+	if got := cfg.Review.Subagents.TimeoutOrDefault(); got != DefaultSubagentTimeout {
+		t.Errorf("review.subagents.timeout = %s, want %s", got, DefaultSubagentTimeout)
+	}
+	if !cfg.Review.Subagents.VerifyEnabled() {
+		t.Error("review.subagents.verify = false, want the verification pass on by default")
+	}
+	if !cfg.Review.Subagents.CoverageRequired() {
+		t.Error("review.subagents.require_coverage = false, want coverage on by default")
+	}
 	if cfg.Worker.Concurrency != DefaultWorkerConcurrency {
 		t.Errorf("worker.concurrency = %d, want %d", cfg.Worker.Concurrency, DefaultWorkerConcurrency)
 	}
@@ -1358,5 +1382,64 @@ models:
 				t.Errorf("Parse = %v, want the error to name public_url", err)
 			}
 		})
+	}
+}
+
+func TestSubagentSettingsValidate(t *testing.T) {
+	cases := []struct {
+		name  string
+		block string
+		want  string
+	}{
+		{"concurrency too high", "    max_concurrency: 17\n", "max_concurrency"},
+		{"runs too high", "    max_runs: 33\n", "max_runs"},
+		{"turns too high", "    max_turns: 101\n", "max_turns"},
+		{"negative threshold", "    min_changed_files: -1\n", "min_changed_files"},
+		{"bad timeout", "    timeout: \"soon\"\n", "timeout"},
+		{"zero timeout", "    timeout: \"0s\"\n", "timeout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := twoChatOneEmbedding + "\nreview:\n  subagents:\n    enabled: true\n" + tc.block
+			_, err := Parse([]byte(doc), "test.yaml")
+			if err == nil {
+				t.Fatal("Parse accepted an invalid subagent setting")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want %q named", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSubagentSettingsAcceptTheDocumentedBounds(t *testing.T) {
+	doc := twoChatOneEmbedding + `
+review:
+  subagents:
+    enabled: true
+    min_changed_files: 1
+    max_concurrency: 16
+    max_runs: 32
+    max_turns: 100
+    timeout: "10m"
+    model: "cheaper-model"
+    verify: false
+    require_coverage: false
+`
+	cfg, err := Parse([]byte(doc), "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.Review.Subagents.Enabled {
+		t.Error("enabled = false, want true")
+	}
+	if cfg.Review.Subagents.VerifyEnabled() {
+		t.Error("verify = true, want the explicit false")
+	}
+	if cfg.Review.Subagents.CoverageRequired() {
+		t.Error("require_coverage = true, want the explicit false")
+	}
+	if got := cfg.Review.Subagents.TimeoutOrDefault(); got != 10*time.Minute {
+		t.Errorf("timeout = %s, want 10m", got)
 	}
 }
