@@ -585,13 +585,12 @@ const (
 	DefaultSubagentMinChangedFiles = 20
 	DefaultSubagentConcurrency     = 3
 	DefaultSubagentMaxRuns         = 8
-	DefaultSubagentMaxTurns        = 12
+	DefaultSubagentMaxTurns        = 50
 	DefaultSubagentTimeout         = 5 * time.Minute
 	// SubagentConcurrencyLimit and SubagentRunsLimit bound the prompt budget,
 	// the provider's rate limit, and the bill one review can create.
 	SubagentConcurrencyLimit = 16
 	SubagentRunsLimit        = 32
-	SubagentTurnsLimit       = 500
 )
 
 // Subagents is the operator's fleet policy for one review.
@@ -656,9 +655,8 @@ func (s Subagents) validate() error {
 		return fmt.Errorf("review.subagents.max_runs must be between 1 and %d, got %d",
 			SubagentRunsLimit, s.MaxRuns)
 	}
-	if s.MaxTurns < 1 || s.MaxTurns > SubagentTurnsLimit {
-		return fmt.Errorf("review.subagents.max_turns must be between 1 and %d, got %d",
-			SubagentTurnsLimit, s.MaxTurns)
+	if s.MaxTurns < 1 {
+		return fmt.Errorf("review.subagents.max_turns must be at least 1, got %d", s.MaxTurns)
 	}
 	if s.Timeout != "" {
 		timeout, err := time.ParseDuration(s.Timeout)
