@@ -591,7 +591,7 @@ const (
 	// the provider's rate limit, and the bill one review can create.
 	SubagentConcurrencyLimit = 16
 	SubagentRunsLimit        = 32
-	SubagentTurnsLimit       = 100
+	SubagentTurnsLimit       = 500
 )
 
 // Subagents is the operator's fleet policy for one review.
