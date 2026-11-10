@@ -39,6 +39,7 @@ review:
   # by default and is only offered from min_changed_files changed files upward.
   # subagents:
   #   enabled: false
+  #   mode: fleet                 # fleet, or verify for verification only
   #   min_changed_files: 20       # 1 offers the fleet for every review
   #   max_concurrency: 3          # children running at once
   #   max_runs: 8                 # children per review, verification included

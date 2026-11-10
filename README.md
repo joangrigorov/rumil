@@ -270,7 +270,7 @@ Rumil refuses to start on an invalid configuration and names the key it did not 
 | `review.resolve_threads` | `true` | Whether Rumil resolves its own review threads once the finding is gone. From the second review of a pull request on, and at most 20 in one review. GitHub refuses the mutation unless the **installation's** Contents permission is Read and write, whatever its Pull requests permission says; `rumil serve` warns at startup when it is not, and the warning also covers an App whose permission was raised but whose installation has not accepted the change yet, and a round then posts the reason into the thread and names it in the summary |
 | `review.max_total_tokens` | unset | Per-session token ceiling, counting input, output and cache tokens together. The session stops before its next step once the reported usage passes it. `0` or unset is no limit; see [Token usage and cost](#token-usage-and-cost) |
 | `review.max_cost_usd` | unset | Per-session estimated-cost ceiling. Requires `price_input_per_mtok` and `price_output_per_mtok` on the chat provider. `0` or unset is no limit |
-| `review.subagents` | off | Subagent reviewers for a large pull request. `enabled`, `min_changed_files` (20), `max_concurrency` (3), `max_runs` (8), `max_turns` (50), `timeout` (`5m`), `model` (inherit), `verify` (`true`) and `require_coverage` (`true`). Each child is a full model session, so this multiplies token use; see [Subagent reviewers](#subagent-reviewers) |
+| `review.subagents` | off | Subagent reviewers for a large pull request. `enabled`, `mode` (`fleet`; `verify` runs only the verification pass), `min_changed_files` (20), `max_concurrency` (3), `max_runs` (8), `max_turns` (50), `timeout` (`5m`), `model` (inherit), `verify` (`true`) and `require_coverage` (`true`). Each child is a full model session, so this multiplies token use; see [Subagent reviewers](#subagent-reviewers) |
 | `compaction.enabled` | `true` | Whether a session summarizes its older context once it reaches `compaction.trigger_tokens`. On by default; set it to `false` to let the model's context window fill |
 | `compaction.trigger_tokens` | `262144` | The estimated context size at which older messages are summarized. Nothing is compacted before this point, so a 256K trigger leaves a large pull request's details in context |
 | `compaction.reserve_tokens` | `16384` | Output budget kept below the trigger, so the session can still answer after the context grows |
@@ -435,6 +435,7 @@ A pull request that changes a hundred files is a different problem from a review
 review:
   subagents:
     enabled: true
+    mode: fleet                 # fleet, or verify for verification only
     min_changed_files: 20       # below this, the review is unchanged
     max_concurrency: 3          # children running at once
     max_runs: 8                 # children per review, verification included
@@ -450,6 +451,8 @@ review:
 The leader keeps every GitHub write: it is the only session that can submit a review, resolve a thread, or post a comment. It splits the changed files into groups by directory, package, or concern and calls `spawn_reviewer` with those groups. Each child gets a read-only tool set — the diff, the file and search reads, and `search_memory` when memory is on — and returns a JSON report of candidate findings. Children cannot post, see the conversation, use MCP tools, or start another generation. Every changed file must be assigned to a group or skipped with `skip_changed_paths` and a reason; the first submit with a gap is refused, and a later one proceeds with the gap named in the summary.
 
 With `verify: true`, the leader calls `verify_review` before submitting. That child checks each candidate finding against the code, drops duplicates and unprovable claims, and reviews any changed files no subagent examined. The verification report is a tool result, so the leader can apply its verdicts; the engine can require the call but cannot prove every rejected finding was dropped, which is why the report stays in the transcript.
+
+Set `mode: verify` to skip the reviewer children. The leader reviews the whole pull request itself, and the only child is the verification pass, which checks the findings and every changed file. Verification is mandatory in that mode, and the coverage gate does not apply because there are no file assignments. The same `min_changed_files` threshold decides whether the verifier is offered.
 
 The whole fleet shares the review's token and cost budget. Each child's usage is added to the parent's total, and the child is stopped when the combined usage crosses `review.max_total_tokens` or `review.max_cost_usd`. A child on a cheaper `model` makes the estimated cost conservative, because the estimate uses the leader's prices.
 

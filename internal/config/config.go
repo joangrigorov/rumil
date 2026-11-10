@@ -587,6 +587,11 @@ const (
 	DefaultSubagentMaxRuns         = 8
 	DefaultSubagentMaxTurns        = 50
 	DefaultSubagentTimeout         = 5 * time.Minute
+	// SubagentModeFleet splits the pull request across reviewer children and
+	// can verify before submitting. SubagentModeVerify leaves the review with
+	// one verification child and no reviewer children.
+	SubagentModeFleet  = "fleet"
+	SubagentModeVerify = "verify"
 	// SubagentConcurrencyLimit and SubagentRunsLimit bound the prompt budget,
 	// the provider's rate limit, and the bill one review can create.
 	SubagentConcurrencyLimit = 16
@@ -598,6 +603,9 @@ type Subagents struct {
 	// Enabled turns the feature on. Below MinChangedFiles the review runs
 	// exactly as it did before the fleet existed.
 	Enabled bool `yaml:"enabled"`
+	// Mode is fleet (the default) for reviewer children plus verification, or
+	// verify for verification only. Empty uses fleet.
+	Mode string `yaml:"mode"`
 	// MinChangedFiles is the changed-file count at or above which the fleet is
 	// offered. The default is 20; set 1 to offer it for every review.
 	MinChangedFiles int `yaml:"min_changed_files"`
@@ -623,12 +631,29 @@ type Subagents struct {
 	RequireCoverage *bool `yaml:"require_coverage"`
 }
 
-// VerifyEnabled reports whether a verification pass is required.
-func (s Subagents) VerifyEnabled() bool { return s.Verify == nil || *s.Verify }
+// ModeOrDefault is the fleet policy, fleet when the operator left it empty.
+func (s Subagents) ModeOrDefault() string {
+	if s.Mode == "" {
+		return SubagentModeFleet
+	}
+	return s.Mode
+}
+
+// VerifyOnly reports whether the review runs without reviewer children.
+func (s Subagents) VerifyOnly() bool { return s.ModeOrDefault() == SubagentModeVerify }
+
+// VerifyEnabled reports whether a verification pass is required. Verification
+// only cannot turn it off.
+func (s Subagents) VerifyEnabled() bool {
+	return s.VerifyOnly() || s.Verify == nil || *s.Verify
+}
 
 // CoverageRequired reports whether an uncovered changed file refuses the first
-// submit.
-func (s Subagents) CoverageRequired() bool { return s.RequireCoverage == nil || *s.RequireCoverage }
+// submit. Verification only has no reviewer children, so the coverage gate does
+// not apply and the verifier checks every changed file instead.
+func (s Subagents) CoverageRequired() bool {
+	return !s.VerifyOnly() && (s.RequireCoverage == nil || *s.RequireCoverage)
+}
 
 // TimeoutOrDefault is the per-child budget.
 func (s Subagents) TimeoutOrDefault() time.Duration {
@@ -644,6 +669,12 @@ func (s Subagents) TimeoutOrDefault() time.Duration {
 
 // validate checks the ranges that keep one review's fleet bounded.
 func (s Subagents) validate() error {
+	switch s.ModeOrDefault() {
+	case SubagentModeFleet, SubagentModeVerify:
+	default:
+		return fmt.Errorf("review.subagents.mode must be %q or %q, got %q",
+			SubagentModeFleet, SubagentModeVerify, s.Mode)
+	}
 	if s.MinChangedFiles < 0 {
 		return fmt.Errorf("review.subagents.min_changed_files must be zero or positive, got %d", s.MinChangedFiles)
 	}
@@ -862,6 +893,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Review.GuidelinesRef == "" {
 		c.Review.GuidelinesRef = DefaultGuidelinesRef
+	}
+	if c.Review.Subagents.Mode == "" {
+		c.Review.Subagents.Mode = SubagentModeFleet
 	}
 	if c.Review.Subagents.MinChangedFiles == 0 {
 		c.Review.Subagents.MinChangedFiles = DefaultSubagentMinChangedFiles

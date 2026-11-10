@@ -60,6 +60,10 @@ Your objective is to identify genuine bugs, security vulnerabilities, race condi
 
 	ruleVerify = `Before submit_pr_review, call verify_review with your candidate findings. Drop what it rejects, apply any revised body it returns, and include an additional finding only after you have checked it yourself. If it mentions changed files no subagent examined, review them or say why they were skipped.`
 
+	// ruleVerifyOnly is present when the operator chose verification without
+	// reviewer children. The leader does the review itself.
+	ruleVerifyOnly = `This pull request changes enough files that a verification subagent is available. Review the whole pull request yourself; there are no reviewer subagents to split it across. Before submit_pr_review, call verify_review with your candidate findings. Drop what it rejects, apply any revised body it returns, include an additional finding only after you have checked it yourself, and use the changed files it names to catch gaps in your own review.`
+
 	// proposedGuidelinesNote frames a RUMIL.md that the pull request itself
 	// adds or changes. The governing copy still comes from the configured ref;
 	// the branch version is material for judging the proposal, never policy.
@@ -112,6 +116,8 @@ type FleetContext struct {
 	MaxConcurrency  int
 	Verify          bool
 	Coverage        bool
+	// VerifyOnly says the operator runs verification without reviewer children.
+	VerifyOnly bool
 }
 
 // reviewerRules is the rule list in order, without the ones the session cannot
@@ -141,9 +147,14 @@ func reviewerRules(memory, resolveThreads, continuation, localFiles, mcpTools, r
 		rules = append(rules, ruleDelta)
 	}
 	if fleet != nil {
-		rules = append(rules, ruleFleet)
-		if fleet.Verify {
-			rules = append(rules, ruleVerify)
+		switch {
+		case fleet.VerifyOnly:
+			rules = append(rules, ruleVerifyOnly)
+		default:
+			rules = append(rules, ruleFleet)
+			if fleet.Verify {
+				rules = append(rules, ruleVerify)
+			}
 		}
 	}
 	rules = append(rules, ruleInline, ruleEvent)
@@ -251,7 +262,7 @@ You cannot post a review, resolve a thread, edit a file, push a commit, or chang
 Every finding must name a path and a line you actually read, and must explain the defect and the invariant it violates. Do not report style preferences, guesses, or a claim you cannot support from the code. Read the diff for each assigned path and the surrounding code before deciding.`
 	if verifier {
 		return base + `
-You are the verification pass. Check each candidate finding against the code, drop what you cannot prove or what an earlier thread already covers, and review the changed files the fleet did not examine. Return only the JSON envelope the task specifies.`
+You are the verification pass. Check each candidate finding against the code, drop what you cannot prove or what an earlier thread already covers, and review the changed files the task names. Return only the JSON envelope the task specifies.`
 	}
 	return base + `
 Return only the JSON envelope the task specifies, with no prose outside it.`

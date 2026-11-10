@@ -88,6 +88,9 @@ models:
 	if cfg.Review.Subagents.Enabled {
 		t.Error("review.subagents.enabled = true, want the feature off by default")
 	}
+	if got := cfg.Review.Subagents.ModeOrDefault(); got != SubagentModeFleet {
+		t.Errorf("review.subagents.mode = %q, want %q", got, SubagentModeFleet)
+	}
 	if got := cfg.Review.Subagents.MinChangedFiles; got != DefaultSubagentMinChangedFiles {
 		t.Errorf("review.subagents.min_changed_files = %d, want %d", got, DefaultSubagentMinChangedFiles)
 	}
@@ -1395,6 +1398,7 @@ func TestSubagentSettingsValidate(t *testing.T) {
 		{"runs too high", "    max_runs: 33\n", "max_runs"},
 		{"negative turns", "    max_turns: -1\n", "max_turns"},
 		{"negative threshold", "    min_changed_files: -1\n", "min_changed_files"},
+		{"unknown mode", "    mode: swarm\n", "mode"},
 		{"bad timeout", "    timeout: \"soon\"\n", "timeout"},
 		{"zero timeout", "    timeout: \"0s\"\n", "timeout"},
 	}
@@ -1444,5 +1448,29 @@ review:
 	}
 	if got := cfg.Review.Subagents.MaxTurns; got != 100000 {
 		t.Errorf("max_turns = %d, want 100000", got)
+	}
+}
+
+func TestVerifyOnlyModeCannotDisableVerificationOrRequireCoverage(t *testing.T) {
+	doc := twoChatOneEmbedding + `
+review:
+  subagents:
+    enabled: true
+    mode: verify
+    verify: false
+    require_coverage: true
+`
+	cfg, err := Parse([]byte(doc), "test.yaml")
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !cfg.Review.Subagents.VerifyOnly() {
+		t.Error("VerifyOnly = false, want true")
+	}
+	if !cfg.Review.Subagents.VerifyEnabled() {
+		t.Error("VerifyEnabled = false, want verification forced on in verify mode")
+	}
+	if cfg.Review.Subagents.CoverageRequired() {
+		t.Error("CoverageRequired = true, want coverage off in verify mode")
 	}
 }
