@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.37](https://github.com/joangrigorov/rumil/compare/v0.0.36...v0.0.37) (2026-11-10)
+
+
+### Features
+
+* **reviewer:** add verification-only subagent mode ([#134](https://github.com/joangrigorov/rumil/issues/134)) ([76f7f96](https://github.com/joangrigorov/rumil/commit/76f7f969ee603428db836ae2a02274613d57e2e2))
+
 ## [0.0.36](https://github.com/joangrigorov/rumil/compare/v0.0.35...v0.0.36) (2026-11-10)
 
 
