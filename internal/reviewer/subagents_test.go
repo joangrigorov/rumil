@@ -2,9 +2,12 @@ package reviewer
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/joangrigorov/rumil/internal/config"
 	"github.com/joangrigorov/rumil/internal/mcpservers"
@@ -184,6 +187,47 @@ func TestFleetRefusesABatchBeyondTheRunCap(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "run budget") {
 		t.Errorf("error = %v, want the run budget named", err)
+	}
+}
+
+func TestFleetRefusesWorkAfterTheReviewIsCancelled(t *testing.T) {
+	f := &fleet{cancelled: func() bool { return true }}
+
+	if _, err := f.spawn(context.Background(), nil); !errors.Is(err, ErrReviewCancelled) {
+		t.Errorf("spawn error = %v, want ErrReviewCancelled", err)
+	}
+	if _, err := f.verify(context.Background(), nil); !errors.Is(err, ErrReviewCancelled) {
+		t.Errorf("verify error = %v, want ErrReviewCancelled", err)
+	}
+}
+
+// A child has to stop on its own because the leader is blocked inside the
+// spawn tool and cannot read the cancel flag between steps.
+func TestChildContextStopsWhenTheReviewIsCancelled(t *testing.T) {
+	var cancelled atomic.Bool
+	ctx, stop := context.WithCancel(context.Background())
+	f := &fleet{cancelled: cancelled.Load}
+	done := f.stopOnCancel(ctx, stop)
+	defer done()
+
+	cancelled.Store(true)
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the child context stayed open after the operator cancelled")
+	}
+}
+
+func TestChildContextStaysOpenWithoutACancellationSource(t *testing.T) {
+	ctx, stop := context.WithCancel(context.Background())
+	f := &fleet{}
+	done := f.stopOnCancel(ctx, stop)
+	defer done()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("the child context was cancelled without a source")
+	case <-time.After(3 * subagentCancelPoll):
 	}
 }
 

@@ -163,6 +163,7 @@ type fleet struct {
 	knownPath     map[string]struct{}
 	ignored       func(string) bool
 	priorHistory  string
+	cancelled     func() bool
 }
 
 // newFleet builds the fleet state. It does not create the parent session; the
@@ -200,8 +201,48 @@ func newFleet(opts fleetOptions) *fleet {
 		knownPath:      known,
 		ignored:        ignored,
 		priorHistory:   opts.PriorHistory,
+		cancelled:      opts.Request.Cancelled,
 		slots:          make(chan struct{}, opts.Config.MaxConcurrency),
 	}
+}
+
+// subagentCancelPoll bounds how long a child keeps working after an operator
+// asks the review to stop. The flag is an atomic read, so polling is cheap.
+const subagentCancelPoll = 250 * time.Millisecond
+
+// stopped reports whether an operator asked the review to stop. A nil
+// cancellation source (the CLI and tests) never stops.
+func (f *fleet) stopped() bool {
+	return f.cancelled != nil && f.cancelled()
+}
+
+// stopOnCancel closes stop as soon as the review is cancelled, which aborts
+// the child's in-flight model and tool calls. The returned function ends the
+// watcher; without it a cancelled fleet would leave one goroutine per child
+// polling until the review ends.
+func (f *fleet) stopOnCancel(ctx context.Context, stop context.CancelFunc) func() {
+	if f.cancelled == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(subagentCancelPoll)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if f.cancelled() {
+					stop()
+					return
+				}
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // promptContext renders the fleet section of the leader prompt.
@@ -323,6 +364,9 @@ type subagentReport struct {
 // reports. A failed child does not fail the batch: the leader sees the error
 // and can retry that group with a narrower task.
 func (f *fleet) spawn(ctx context.Context, args map[string]any) (string, error) {
+	if f.stopped() {
+		return "", ErrReviewCancelled
+	}
 	tasks, err := f.decodeTasks(args)
 	if err != nil {
 		return "", err
@@ -359,6 +403,9 @@ func (f *fleet) spawn(ctx context.Context, args map[string]any) (string, error) 
 	}
 	wg.Wait()
 
+	if f.stopped() {
+		return "", ErrReviewCancelled
+	}
 	return f.encodeOutcomes(outcomes, "subagents")
 }
 
@@ -473,6 +520,9 @@ func (f *fleet) skipPaths(_ context.Context, args map[string]any) (string, error
 
 // verify runs the verification child. It is one run from the same budget.
 func (f *fleet) verify(ctx context.Context, args map[string]any) (string, error) {
+	if f.stopped() {
+		return "", ErrReviewCancelled
+	}
 	findings, err := decodeFindings(args["findings"])
 	if err != nil {
 		return "", err
@@ -628,6 +678,7 @@ func (f *fleet) runChild(parentCtx context.Context, task childTask) childOutcome
 
 	childCtx, stop := context.WithCancel(parentCtx)
 	defer stop()
+	defer f.stopOnCancel(childCtx, stop)()
 
 	childTracker := &usageTracker{}
 	steps := 0
@@ -700,7 +751,10 @@ func (f *fleet) runChild(parentCtx context.Context, task childTask) childOutcome
 	if runErr != nil {
 		status = "FAILED"
 		errorText = runErr.Error()
-		if killReason != "" {
+		switch {
+		case f.stopped():
+			errorText = "the review was cancelled by an operator"
+		case killReason != "":
 			errorText = killReason
 		}
 	}
