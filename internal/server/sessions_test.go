@@ -1088,6 +1088,8 @@ func TestObservationDeckPinsTheSubagentFleetAndLinksBack(t *testing.T) {
 	for _, want := range []string{
 		"api handlers",
 		"Check the handler error paths.",
+		`class="session-banner-sub session-banner-task"`,
+		`title="Check the handler error paths."`,
 		`href="/ui/sessions/` + parent.ID + `"`,
 		"Back to parent session",
 		"Subagent transcript",

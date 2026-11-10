@@ -827,8 +827,9 @@
     line.append(span("event-kind", "Assigned task"), span("event-text", payload.label || "subagent"));
     body.append(line);
     if (payload.task) {
-      var task = span("event-detail", payload.task);
+      var task = span("event-detail subagent-task-prompt", payload.task);
       task.setAttribute("dir", "auto");
+      task.title = payload.task;
       body.append(task);
     }
     if (Array.isArray(payload.paths) && payload.paths.length > 0) {

@@ -21,7 +21,7 @@
       {{if .IsSubagent}}<span class="pill pill-subagent"><span class="icon" aria-hidden="true">groups</span>subagent</span>{{end}}
     </div>
     <h1>{{if .IsSubagent}}{{if .Session.Label}}{{.Session.Label}}{{else}}Subagent{{end}}{{else}}{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}{{end}}</h1>
-    <p class="session-banner-sub">{{if .IsSubagent}}{{if .Session.Task}}{{.Session.Task}}{{else}}No task was recorded for this subagent.{{end}}{{else}}{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}{{end}}</p>
+    <p class="session-banner-sub{{if .IsSubagent}} session-banner-task{{end}}"{{if and .IsSubagent .Session.Task}} title="{{.Session.Task}}"{{end}}>{{if .IsSubagent}}{{if .Session.Task}}{{.Session.Task}}{{else}}No task was recorded for this subagent.{{end}}{{else}}{{if .Session.PRTitle}}{{.Session.PRTitle}}{{else}}No title was recorded for this session.{{end}}{{end}}</p>
     {{if .IsSubagent}}<p class="session-banner-sub session-banner-pr">{{.Session.OrgName}}/{{.Session.RepoName}}#{{.Session.PRNumber}}</p>{{end}}
   </div>
   <div class="session-banner-actions">
