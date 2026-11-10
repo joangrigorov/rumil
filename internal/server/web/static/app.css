@@ -2453,6 +2453,14 @@ textarea:focus {
   line-height: 18px;
 }
 
+/* The assignment can be a full paragraph; the transcript keeps the whole text. */
+.session-banner-task {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
 .session-banner-actions {
   display: flex;
   align-items: center;
@@ -2488,6 +2496,14 @@ a.event.event-subagent-row:focus-visible {
 .event-subagent .event-glyph,
 .event-subagent-task .event-glyph {
   color: var(--primary);
+}
+
+/* A child's assignment can be long; preview it and keep the full text on hover. */
+.subagent-task-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
 }
 
 .event-subagent-row .event-body {
