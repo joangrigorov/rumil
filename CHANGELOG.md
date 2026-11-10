@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.36](https://github.com/joangrigorov/rumil/compare/v0.0.35...v0.0.36) (2026-11-10)
+
+
+### Bug Fixes
+
+* **config:** accept any subagent turn budget ([#130](https://github.com/joangrigorov/rumil/issues/130)) ([e337057](https://github.com/joangrigorov/rumil/commit/e3370573ab23353423294dcea63e8488e14e20ad))
+* **reviewer:** stop subagents when the review is cancelled ([#133](https://github.com/joangrigorov/rumil/issues/133)) ([42292bd](https://github.com/joangrigorov/rumil/commit/42292bdb0f5c40f2afc49ff4939cda28f8c6d648))
+* **server:** trim a subagent's assignment prompt ([#132](https://github.com/joangrigorov/rumil/issues/132)) ([fa2a44c](https://github.com/joangrigorov/rumil/commit/fa2a44c6c6feb06a31a7752cd66c29850f35ea6d))
+
 ## [0.0.35](https://github.com/joangrigorov/rumil/compare/v0.0.34...v0.0.35) (2026-11-09)
 
 
