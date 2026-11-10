@@ -1393,7 +1393,7 @@ func TestSubagentSettingsValidate(t *testing.T) {
 	}{
 		{"concurrency too high", "    max_concurrency: 17\n", "max_concurrency"},
 		{"runs too high", "    max_runs: 33\n", "max_runs"},
-		{"turns too high", "    max_turns: 101\n", "max_turns"},
+		{"negative turns", "    max_turns: -1\n", "max_turns"},
 		{"negative threshold", "    min_changed_files: -1\n", "min_changed_files"},
 		{"bad timeout", "    timeout: \"soon\"\n", "timeout"},
 		{"zero timeout", "    timeout: \"0s\"\n", "timeout"},
@@ -1420,7 +1420,7 @@ review:
     min_changed_files: 1
     max_concurrency: 16
     max_runs: 32
-    max_turns: 100
+    max_turns: 100000
     timeout: "10m"
     model: "cheaper-model"
     verify: false
@@ -1441,5 +1441,8 @@ review:
 	}
 	if got := cfg.Review.Subagents.TimeoutOrDefault(); got != 10*time.Minute {
 		t.Errorf("timeout = %s, want 10m", got)
+	}
+	if got := cfg.Review.Subagents.MaxTurns; got != 100000 {
+		t.Errorf("max_turns = %d, want 100000", got)
 	}
 }

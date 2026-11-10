@@ -42,7 +42,7 @@ review:
   #   min_changed_files: 20       # 1 offers the fleet for every review
   #   max_concurrency: 3          # children running at once
   #   max_runs: 8                 # children per review, verification included
-  #   max_turns: 12               # model steps per child
+  #   max_turns: 50               # model steps per child
   #   timeout: "5m"               # one child
   #   model: ""                   # empty inherits the leader's model
   #   verify: true                # require a verification pass before submitting
