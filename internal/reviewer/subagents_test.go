@@ -124,6 +124,75 @@ func TestFleetSpawnsAReadOnlyChildAndVerifiesBeforeSubmitting(t *testing.T) {
 	}
 }
 
+// Verification-only mode keeps the leader on the whole pull request and offers
+// the verifier alone; unassigned files do not refuse the submit.
+func TestVerifyOnlyModeRunsTheVerificationPassWithoutReviewerChildren(t *testing.T) {
+	gh := testutil.NewFakeGitHub(t)
+	llm := testutil.NewFakeLLM(t)
+
+	verdict := `{"verdicts":[],"additional_findings":[],"coverage_notes":"","notes":""}`
+	llm.QueueToolCall("verify_review", map[string]any{
+		"summary": "the settlement call is unchecked",
+		"findings": []any{map[string]any{
+			"path": "main.go", "line": 13, "side": "RIGHT", "body": "the call is unchecked",
+		}},
+	})
+	llm.QueueText(verdict)
+	llm.QueueToolCall("submit_pr_review", map[string]any{
+		"event": "COMMENT", "summary_body": "The settlement call is unchecked.",
+	})
+
+	h := newHarness(t, gh, llm, harnessOpts{reviewLimits: `  subagents:
+    enabled: true
+    mode: verify
+    min_changed_files: 1
+    max_concurrency: 1
+    max_runs: 1
+    max_turns: 4
+    verify: true
+    require_coverage: true
+`})
+
+	res, err := h.review(t)
+	if err != nil {
+		t.Fatalf("Review returned error: %v\nlogs:\n%s", err, h.logs.String())
+	}
+	if !res.ReviewSubmitted {
+		t.Fatal("ReviewSubmitted = false, want the review to reach GitHub")
+	}
+
+	requests := llm.Requests()
+	if len(requests) < 3 {
+		t.Fatalf("model requests = %d, want at least 3 (leader, verifier, submit)", len(requests))
+	}
+	leader := requests[0]
+	if !strings.Contains(leader.SystemPrompt, "Review the whole pull request yourself") {
+		t.Errorf("leader prompt does not describe verification-only mode:\n%s", leader.SystemPrompt)
+	}
+	tools := make(map[string]bool, len(leader.Tools))
+	for _, name := range leader.Tools {
+		tools[name] = true
+	}
+	for _, banned := range []string{"spawn_reviewer", "skip_changed_paths"} {
+		if tools[banned] {
+			t.Errorf("verification-only leader was advertised %s", banned)
+		}
+	}
+	if !tools["verify_review"] {
+		t.Errorf("verification-only leader tools = %v, want verify_review", leader.Tools)
+	}
+
+	child := requests[1]
+	if !strings.Contains(child.SystemPrompt, "You are the verification pass") {
+		t.Errorf("the second request is not the verification child:\n%s", child.SystemPrompt)
+	}
+	for _, name := range child.Tools {
+		if name == "submit_pr_review" || name == "spawn_reviewer" || name == "verify_review" {
+			t.Errorf("the verifier was advertised %s", name)
+		}
+	}
+}
+
 // The coverage gate refuses the first submit, then lets the review through with
 // the remaining paths named in the summary. Verification is off here so the
 // test isolates one gate.

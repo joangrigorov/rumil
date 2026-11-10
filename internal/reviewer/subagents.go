@@ -254,12 +254,14 @@ func (f *fleet) promptContext() *FleetContext {
 		MaxConcurrency:  f.cfg.MaxConcurrency,
 		Verify:          f.cfg.VerifyEnabled(),
 		Coverage:        f.cfg.CoverageRequired(),
+		VerifyOnly:      f.cfg.VerifyOnly(),
 	}
 }
 
-// specs is the leader's fleet tool set.
+// specs is the leader's fleet tool set. Verification-only mode offers the
+// verification pass and nothing that could start a reviewer child.
 func (f *fleet) specs() []mcpservers.Spec {
-	return []mcpservers.Spec{
+	specs := []mcpservers.Spec{
 		{
 			Name: "spawn_reviewer",
 			Description: "Run one or more read-only subagent reviewers on assigned changed files. " +
@@ -330,6 +332,11 @@ func (f *fleet) specs() []mcpservers.Spec {
 			Handle: f.verify,
 		},
 	}
+	if f.cfg.VerifyOnly() {
+		// The verification spec is last: spawn and skip are the first two.
+		return specs[2:]
+	}
+	return specs
 }
 
 // childTask is one child's assignment.
@@ -366,6 +373,9 @@ type subagentReport struct {
 func (f *fleet) spawn(ctx context.Context, args map[string]any) (string, error) {
 	if f.stopped() {
 		return "", ErrReviewCancelled
+	}
+	if f.cfg.VerifyOnly() {
+		return "", errors.New("this review runs verification only; review the changed files yourself")
 	}
 	tasks, err := f.decodeTasks(args)
 	if err != nil {
@@ -579,12 +589,18 @@ func (f *fleet) verifierTask(findings []json.RawMessage, missing []string) strin
 	b.Write(encoded)
 	b.WriteString("\n\n")
 	if len(missing) > 0 {
-		b.WriteString("Changed files no subagent examined:\n")
+		if f.cfg.VerifyOnly() {
+			b.WriteString("Changed files the leader reviewed; check the findings against them and look for gaps:\n")
+		} else {
+			b.WriteString("Changed files no subagent examined:\n")
+		}
 		for _, path := range limitedPaths(missing) {
 			b.WriteString("- ")
 			b.WriteString(path)
 			b.WriteString("\n")
 		}
+	} else if f.cfg.VerifyOnly() {
+		b.WriteString("No changed files were recorded for this review.\n")
 	} else {
 		b.WriteString("Every changed file was assigned to a subagent.\n")
 	}
@@ -599,8 +615,13 @@ Check each candidate against the code at the reviewed commit:
 - the claimed defect is real and actionable, not a style preference;
 - it is not already covered by an earlier thread or finding.
 
-Then review the changed files no subagent examined and add what they missed. Return only this JSON envelope:
-{"verdicts":[{"index":0,"verdict":"keep|drop","reason":"...","revised_body":"..."}],
+`)
+	if f.cfg.VerifyOnly() {
+		b.WriteString("Then check the changed files above for defects the leader missed. Return only this JSON envelope:\n")
+	} else {
+		b.WriteString("Then review the changed files no subagent examined and add what they missed. Return only this JSON envelope:\n")
+	}
+	b.WriteString(`{"verdicts":[{"index":0,"verdict":"keep|drop","reason":"...","revised_body":"..."}],
  "additional_findings":[{"path":"...","line":12,"side":"RIGHT","severity":"high","title":"...","body":"...","evidence":"..."}],
  "coverage_notes":"...","notes":"..."}`)
 	return b.String()
