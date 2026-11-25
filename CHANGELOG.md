@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.38](https://github.com/joangrigorov/rumil/compare/v0.0.37...v0.0.38) (2026-11-25)
+
+
+### Bug Fixes
+
+* **deps:** bump golang ([#136](https://github.com/joangrigorov/rumil/issues/136)) ([bdfd1a6](https://github.com/joangrigorov/rumil/commit/bdfd1a657bcc3971489b06c22ebc32bbc5fadf49))
+* **deps:** bump the github-actions-dependencies group across 1 directory with 2 updates ([#140](https://github.com/joangrigorov/rumil/issues/140)) ([e59f630](https://github.com/joangrigorov/rumil/commit/e59f630cb23773164390b86008d294f84bcbc895))
+* **deps:** bump the go-dependencies group across 1 directory with 8 updates ([#141](https://github.com/joangrigorov/rumil/issues/141)) ([fe36a36](https://github.com/joangrigorov/rumil/commit/fe36a365c48c710a4bab7c1a7dcfafe2dccc2766))
+
 ## [0.0.37](https://github.com/joangrigorov/rumil/compare/v0.0.36...v0.0.37) (2026-11-10)
 
 
